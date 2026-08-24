@@ -1,0 +1,453 @@
+const FinishedGood = require('../models/finishedGood.model');
+const Category = require('../models/category.model');
+const UOM = require('../models/uom.model');
+const Location = require('../models/location.model');
+
+/**
+ * @desc    Create a new Finished Good
+ * @route   POST /api/finished-goods
+ * @access  Private (INVENTORY:CREATE permission)
+ */
+const createFinishedGood = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        // Always strip currentStock and tenant from body
+        delete req.body.currentStock;
+        delete req.body.tenant;
+
+        const {
+            code,
+            name,
+            category,
+            uom,
+            defaultLocation,
+            fabricGSM,
+            bagShape,
+            dimensions,
+            bagCapacity,
+            pricePerBag,
+            isActive
+        } = req.body;
+
+        // 1. Basic validation
+        if (!code || !name || !category || !uom) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide all required fields: code, name, category, and uom.'
+            });
+        }
+
+        const formattedCode = String(code).trim().toUpperCase();
+        const formattedName = String(name).trim();
+
+        // 2. Validate tenant-ownership of referenced models
+        const categoryDoc = await Category.findOne({ _id: category, tenant: tenantId });
+        if (!categoryDoc) {
+            return res.status(400).json({
+                success: false,
+                message: 'Category does not exist or does not belong to your organization.'
+            });
+        }
+
+        const uomDoc = await UOM.findOne({ _id: uom, tenant: tenantId });
+        if (!uomDoc) {
+            return res.status(400).json({
+                success: false,
+                message: 'UOM does not exist or does not belong to your organization.'
+            });
+        }
+
+        if (defaultLocation) {
+            const locationDoc = await Location.findOne({ _id: defaultLocation, tenant: tenantId });
+            if (!locationDoc) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Default location does not exist or does not belong to your organization.'
+                });
+            }
+        }
+
+        // 3. Duplicate checks
+        const existingCode = await FinishedGood.findOne({ code: formattedCode, tenant: tenantId });
+        if (existingCode) {
+            return res.status(400).json({
+                success: false,
+                message: `A Finished Good with code '${formattedCode}' already exists in your organization.`
+            });
+        }
+
+        const existingName = await FinishedGood.findOne({ name: formattedName, tenant: tenantId });
+        if (existingName) {
+            return res.status(400).json({
+                success: false,
+                message: `A Finished Good with name '${formattedName}' already exists in your organization.`
+            });
+        }
+
+        // 4. Create FinishedGood
+        const finishedGood = new FinishedGood({
+            code: formattedCode,
+            name: formattedName,
+            category,
+            uom,
+            defaultLocation: defaultLocation || null,
+            fabricGSM: fabricGSM !== undefined ? Number(fabricGSM) : undefined,
+            bagShape,
+            dimensions,
+            bagCapacity: bagCapacity !== undefined ? Number(bagCapacity) : undefined,
+            pricePerBag: pricePerBag !== undefined ? Number(pricePerBag) : 0,
+            isActive: isActive !== undefined ? isActive : true,
+            tenant: tenantId
+        });
+
+        await finishedGood.save();
+
+        await finishedGood.populate([
+            { path: 'category', select: 'name type' },
+            { path: 'uom', select: 'name symbol type' },
+            { path: 'defaultLocation', select: 'name code type' }
+        ]);
+
+        return res.status(201).json({
+            success: true,
+            message: 'Finished Good created successfully.',
+            data: finishedGood
+        });
+    } catch (error) {
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({
+                success: false,
+                message: error.message
+            });
+        }
+        console.error('Error in createFinishedGood:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to create Finished Good.',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get all Finished Goods scoped to user's tenant
+ * @route   GET /api/finished-goods
+ * @access  Private (INVENTORY:READ permission)
+ */
+const getFinishedGoods = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const { category, uom, bagShape, isActive, search, page = 1, limit = 20 } = req.query;
+
+        const filter = { tenant: tenantId };
+
+        if (category) {
+            filter.category = category;
+        }
+
+        if (uom) {
+            filter.uom = uom;
+        }
+
+        if (bagShape) {
+            filter.bagShape = bagShape;
+        }
+
+        if (isActive !== undefined) {
+            filter.isActive = isActive === 'true' || isActive === true;
+        }
+
+        if (search) {
+            filter.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { code: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.max(1, parseInt(limit, 10) || 20);
+        const skip = (pageNum - 1) * limitNum;
+
+        const [items, total] = await Promise.all([
+            FinishedGood.find(filter)
+                .populate('category', 'name type')
+                .populate('uom', 'name symbol type')
+                .populate('defaultLocation', 'name code type')
+                .sort({ name: 1 })
+                .skip(skip)
+                .limit(limitNum),
+            FinishedGood.countDocuments(filter)
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            count: items.length,
+            pagination: {
+                total,
+                page: pageNum,
+                limit: limitNum,
+                pages: Math.ceil(total / limitNum) || 1
+            },
+            data: items
+        });
+    } catch (error) {
+        console.error('Error in getFinishedGoods:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch Finished Goods.',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get Finished Good by ID scoped to user's tenant
+ * @route   GET /api/finished-goods/:id
+ * @access  Private (INVENTORY:READ permission)
+ */
+const getFinishedGoodById = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const finishedGood = await FinishedGood.findOne({ _id: req.params.id, tenant: tenantId })
+            .populate('category', 'name type')
+            .populate('uom', 'name symbol type')
+            .populate('defaultLocation', 'name code type');
+
+        if (!finishedGood) {
+            return res.status(404).json({
+                success: false,
+                message: 'Finished Good not found.'
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: finishedGood
+        });
+    } catch (error) {
+        console.error('Error in getFinishedGoodById:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve Finished Good.',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Update Finished Good scoped to user's tenant (currentStock is read-only)
+ * @route   PUT /api/finished-goods/:id
+ * @access  Private (INVENTORY:UPDATE permission)
+ */
+const updateFinishedGood = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const finishedGood = await FinishedGood.findOne({ _id: req.params.id, tenant: tenantId });
+        if (!finishedGood) {
+            return res.status(404).json({
+                success: false,
+                message: 'Finished Good not found.'
+            });
+        }
+
+        // Always strip currentStock and tenant from body
+        delete req.body.currentStock;
+        delete req.body.tenant;
+
+        const {
+            code,
+            name,
+            category,
+            uom,
+            defaultLocation,
+            fabricGSM,
+            bagShape,
+            dimensions,
+            bagCapacity,
+            pricePerBag,
+            isActive
+        } = req.body;
+
+        if (code) {
+            const formattedCode = String(code).trim().toUpperCase();
+            if (formattedCode !== finishedGood.code) {
+                const existingCode = await FinishedGood.findOne({
+                    code: formattedCode,
+                    tenant: tenantId,
+                    _id: { $ne: finishedGood._id }
+                });
+                if (existingCode) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `A Finished Good with code '${formattedCode}' already exists in your organization.`
+                    });
+                }
+                finishedGood.code = formattedCode;
+            }
+        }
+
+        if (name && name.trim() !== finishedGood.name) {
+            const formattedName = name.trim();
+            const existingName = await FinishedGood.findOne({
+                name: formattedName,
+                tenant: tenantId,
+                _id: { $ne: finishedGood._id }
+            });
+            if (existingName) {
+                return res.status(400).json({
+                    success: false,
+                    message: `A Finished Good with name '${formattedName}' already exists in your organization.`
+                });
+            }
+            finishedGood.name = formattedName;
+        }
+
+        if (category && String(category) !== String(finishedGood.category)) {
+            const categoryDoc = await Category.findOne({ _id: category, tenant: tenantId });
+            if (!categoryDoc) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Category does not exist or does not belong to your organization.'
+                });
+            }
+            finishedGood.category = category;
+        }
+
+        if (uom && String(uom) !== String(finishedGood.uom)) {
+            const uomDoc = await UOM.findOne({ _id: uom, tenant: tenantId });
+            if (!uomDoc) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'UOM does not exist or does not belong to your organization.'
+                });
+            }
+            finishedGood.uom = uom;
+        }
+
+        if (defaultLocation !== undefined) {
+            if (defaultLocation) {
+                const locationDoc = await Location.findOne({ _id: defaultLocation, tenant: tenantId });
+                if (!locationDoc) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Default location does not exist or does not belong to your organization.'
+                    });
+                }
+                finishedGood.defaultLocation = defaultLocation;
+            } else {
+                finishedGood.defaultLocation = null;
+            }
+        }
+
+        if (fabricGSM !== undefined) finishedGood.fabricGSM = Number(fabricGSM);
+        if (bagShape !== undefined) finishedGood.bagShape = bagShape;
+        if (dimensions !== undefined) finishedGood.dimensions = dimensions;
+        if (bagCapacity !== undefined) finishedGood.bagCapacity = Number(bagCapacity);
+        if (pricePerBag !== undefined) finishedGood.pricePerBag = Number(pricePerBag);
+        if (isActive !== undefined) finishedGood.isActive = isActive;
+
+        await finishedGood.save();
+
+        await finishedGood.populate([
+            { path: 'category', select: 'name type' },
+            { path: 'uom', select: 'name symbol type' },
+            { path: 'defaultLocation', select: 'name code type' }
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Finished Good updated successfully.',
+            data: finishedGood
+        });
+    } catch (error) {
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({
+                success: false,
+                message: error.message
+            });
+        }
+        console.error('Error in updateFinishedGood:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to update Finished Good.',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Soft delete Finished Good (isActive: false) scoped to user's tenant
+ * @route   DELETE /api/finished-goods/:id
+ * @access  Private (INVENTORY:DELETE permission)
+ */
+const deleteFinishedGood = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const finishedGood = await FinishedGood.findOne({ _id: req.params.id, tenant: tenantId });
+        if (!finishedGood) {
+            return res.status(404).json({
+                success: false,
+                message: 'Finished Good not found.'
+            });
+        }
+
+        finishedGood.isActive = false;
+        await finishedGood.save();
+
+        return res.status(200).json({
+            success: true,
+            message: 'Finished Good deactivated successfully.',
+            data: finishedGood
+        });
+    } catch (error) {
+        console.error('Error in deleteFinishedGood:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to delete Finished Good.',
+            error: error.message
+        });
+    }
+};
+
+module.exports = {
+    createFinishedGood,
+    getFinishedGoods,
+    getFinishedGoodById,
+    updateFinishedGood,
+    deleteFinishedGood
+};
