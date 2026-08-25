@@ -1,4 +1,5 @@
 const Supplier = require('../models/supplier.model');
+const { generateCsv, sendCsvResponse } = require('../utils/csvExport');
 
 /**
  * @desc    Create a new Supplier / Vendor
@@ -15,8 +16,11 @@ const createSupplier = async (req, res) => {
             });
         }
 
+        // Allow companyName or name from frontend body
+        const rawName = req.body.name || req.body.companyName;
+        const rawCode = req.body.code || req.body.supplierCode;
+
         const {
-            name,
             contactPerson,
             phone,
             email,
@@ -29,17 +33,34 @@ const createSupplier = async (req, res) => {
         } = req.body;
 
         // 1. Validation
-        if (!name || !name.trim()) {
+        if (!rawName || !rawName.trim()) {
             return res.status(400).json({
                 success: false,
-                message: 'Supplier company name is required.'
+                message: 'Supplier name is required.'
             });
         }
 
-        const formattedName = name.trim();
+        if (!rawCode || !rawCode.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Supplier code is required.'
+            });
+        }
+
+        const formattedName = rawName.trim();
+        const formattedCode = rawCode.trim().toUpperCase();
         const formattedGstin = gstin && gstin.trim() ? gstin.trim().toUpperCase() : undefined;
 
-        // 2. Check duplicate name per tenant
+        // 2. Check duplicate code per tenant
+        const existingCode = await Supplier.findOne({ code: formattedCode, tenant: tenantId });
+        if (existingCode) {
+            return res.status(400).json({
+                success: false,
+                message: `A supplier with code '${formattedCode}' already exists in your organization.`
+            });
+        }
+
+        // 3. Check duplicate name per tenant
         const existingName = await Supplier.findOne({ name: formattedName, tenant: tenantId });
         if (existingName) {
             return res.status(400).json({
@@ -48,7 +69,7 @@ const createSupplier = async (req, res) => {
             });
         }
 
-        // 3. Check duplicate GSTIN per tenant if provided
+        // 4. Check duplicate GSTIN per tenant if provided
         if (formattedGstin) {
             const existingGstin = await Supplier.findOne({ gstin: formattedGstin, tenant: tenantId });
             if (existingGstin) {
@@ -59,8 +80,9 @@ const createSupplier = async (req, res) => {
             }
         }
 
-        // 4. Create Supplier
+        // 5. Create Supplier
         const supplier = new Supplier({
+            code: formattedCode,
             name: formattedName,
             contactPerson,
             phone,
@@ -122,6 +144,7 @@ const getSuppliers = async (req, res) => {
 
         if (search) {
             filter.$or = [
+                { code: { $regex: search, $options: 'i' } },
                 { name: { $regex: search, $options: 'i' } },
                 { gstin: { $regex: search, $options: 'i' } },
                 { city: { $regex: search, $options: 'i' } },
@@ -134,7 +157,7 @@ const getSuppliers = async (req, res) => {
         const skip = (pageNum - 1) * limitNum;
 
         const [suppliers, total] = await Promise.all([
-            Supplier.find(filter).sort({ name: 1 }).skip(skip).limit(limitNum),
+            Supplier.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
             Supplier.countDocuments(filter)
         ]);
 
@@ -155,6 +178,61 @@ const getSuppliers = async (req, res) => {
             success: false,
             message: 'Failed to fetch suppliers.',
             error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Export suppliers to CSV respecting tenant & query filters
+ * @route   GET /api/suppliers/export
+ * @access  Private (MASTER_DATA:READ permission)
+ */
+const exportSuppliers = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing.'
+            });
+        }
+
+        const { isActive, search } = req.query;
+        const filter = { tenant: tenantId };
+
+        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
+        if (search) {
+            filter.$or = [
+                { code: { $regex: search, $options: 'i' } },
+                { name: { $regex: search, $options: 'i' } },
+                { gstin: { $regex: search, $options: 'i' } },
+                { city: { $regex: search, $options: 'i' } },
+                { contactPerson: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const suppliers = await Supplier.find(filter).sort({ name: 1 });
+
+        const fields = [
+            { label: 'Supplier Code', key: 'code' },
+            { label: 'Supplier Name', key: 'name' },
+            { label: 'Contact Person', key: (s) => s.contactPerson || '' },
+            { label: 'Phone', key: (s) => s.phone || '' },
+            { label: 'Email', key: (s) => s.email || '' },
+            { label: 'GSTIN', key: (s) => s.gstin || '' },
+            { label: 'City', key: (s) => s.city || '' },
+            { label: 'State', key: (s) => s.state || '' },
+            { label: 'Payment Terms', key: (s) => s.paymentTerms || '' },
+            { label: 'Is Active', key: (s) => s.isActive !== false ? 'Active' : 'Inactive' }
+        ];
+
+        const csvContent = generateCsv(suppliers, fields);
+        return sendCsvResponse(res, `suppliers_export_${Date.now()}.csv`, csvContent);
+    } catch (error) {
+        console.error('Error in exportSuppliers:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to export suppliers to CSV.'
         });
     }
 };
@@ -221,8 +299,10 @@ const updateSupplier = async (req, res) => {
             });
         }
 
+        const rawName = req.body.name || req.body.companyName;
+        const rawCode = req.body.code || req.body.supplierCode;
+
         const {
-            name,
             contactPerson,
             phone,
             email,
@@ -237,8 +317,26 @@ const updateSupplier = async (req, res) => {
         // Prevent modifying tenant
         delete req.body.tenant;
 
-        if (name && name.trim() !== supplier.name) {
-            const formattedName = name.trim();
+        if (rawCode) {
+            const formattedCode = String(rawCode).trim().toUpperCase();
+            if (formattedCode !== supplier.code) {
+                const existingCode = await Supplier.findOne({
+                    code: formattedCode,
+                    tenant: tenantId,
+                    _id: { $ne: supplier._id }
+                });
+                if (existingCode) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `A supplier with code '${formattedCode}' already exists in your organization.`
+                    });
+                }
+                supplier.code = formattedCode;
+            }
+        }
+
+        if (rawName && rawName.trim() !== supplier.name) {
+            const formattedName = rawName.trim();
             const existingName = await Supplier.findOne({
                 name: formattedName,
                 tenant: tenantId,
@@ -348,6 +446,7 @@ const deleteSupplier = async (req, res) => {
 module.exports = {
     createSupplier,
     getSuppliers,
+    exportSuppliers,
     getSupplierById,
     updateSupplier,
     deleteSupplier

@@ -2,6 +2,7 @@ const Employee = require('../models/employee.model');
 const Shift = require('../models/shift.model');
 const Location = require('../models/location.model');
 const User = require('../models/user.model');
+const { generateCsv, sendCsvResponse } = require('../utils/csvExport');
 
 /**
  * Helper function to auto-generate unique Employee code per tenant (EMP-0001, EMP-0002...)
@@ -53,13 +54,14 @@ const createEmployee = async (req, res) => {
             shiftAssignment,
             facility,
             linkedUser,
-            monthlySalary
+            monthlySalary,
+            isActive
         } = req.body;
 
         if (!name || !department || !shiftAssignment || !facility) {
             return res.status(400).json({
                 success: false,
-                message: 'Please provide name, department, shiftAssignment, and facility.'
+                message: 'Please provide required fields: name, department, shiftAssignment, and facility.'
             });
         }
 
@@ -105,7 +107,7 @@ const createEmployee = async (req, res) => {
             facility,
             linkedUser: linkedUser || null,
             monthlySalary: monthlySalary !== undefined ? Number(monthlySalary) : 0,
-            isActive: true
+            isActive: isActive !== undefined ? isActive : true
         });
 
         await employee.save();
@@ -116,10 +118,13 @@ const createEmployee = async (req, res) => {
             { path: 'linkedUser', select: 'name email role' }
         ]);
 
+        const responseData = employee.toObject();
+        responseData.code = employeeCode;
+
         return res.status(201).json({
             success: true,
             message: `Employee '${employee.name}' (${employeeCode}) created successfully.`,
-            data: employee
+            data: responseData
         });
     } catch (error) {
         console.error('Error in createEmployee:', error);
@@ -151,12 +156,13 @@ const getEmployees = async (req, res) => {
             });
         }
 
-        const { department, facility, shift, search, page = 1, limit = 20 } = req.query;
-        const filter = { tenant: tenantId, isActive: true };
+        const { department, facility, shift, isActive, search, page = 1, limit = 20 } = req.query;
+        const filter = { tenant: tenantId };
 
         if (department) filter.department = department;
         if (facility) filter.facility = facility;
         if (shift) filter.shiftAssignment = shift;
+        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
 
         if (search) {
             filter.$or = [
@@ -181,16 +187,22 @@ const getEmployees = async (req, res) => {
             Employee.countDocuments(filter)
         ]);
 
+        const formattedList = employees.map((emp) => {
+            const obj = emp.toObject();
+            obj.code = emp.employeeCode;
+            return obj;
+        });
+
         return res.status(200).json({
             success: true,
-            count: employees.length,
+            count: formattedList.length,
             pagination: {
                 total,
                 page: pageNum,
                 limit: limitNum,
                 pages: Math.ceil(total / limitNum) || 1
             },
-            data: employees
+            data: formattedList
         });
     } catch (error) {
         console.error('Error in getEmployees:', error);
@@ -210,7 +222,7 @@ const getEmployees = async (req, res) => {
 
 /**
  * @desc    Export Employees to CSV
- * @route   GET /api/employees/export-csv
+ * @route   GET /api/employees/export or GET /api/employees/export-csv
  * @access  Private (USERS:READ / MASTER_DATA:READ permission)
  */
 const exportEmployeesCsv = async (req, res) => {
@@ -223,12 +235,13 @@ const exportEmployeesCsv = async (req, res) => {
             });
         }
 
-        const { department, facility, shift, search } = req.query;
-        const filter = { tenant: tenantId, isActive: true };
+        const { department, facility, shift, isActive, search } = req.query;
+        const filter = { tenant: tenantId };
 
         if (department) filter.department = department;
         if (facility) filter.facility = facility;
         if (shift) filter.shiftAssignment = shift;
+        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
 
         if (search) {
             filter.$or = [
@@ -243,29 +256,24 @@ const exportEmployeesCsv = async (req, res) => {
             .populate('facility', 'name')
             .sort({ employeeCode: 1 });
 
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', 'attachment; filename="employees-export.csv"');
+        const fields = [
+            { label: 'Employee Code', key: 'employeeCode' },
+            { label: 'Employee Name', key: 'name' },
+            { label: 'Department', key: (e) => e.department || '' },
+            { label: 'Designation', key: (e) => e.designation || '' },
+            { label: 'Shift', key: (e) => (typeof e.shiftAssignment === 'object' ? e.shiftAssignment?.name : '') || '' },
+            { label: 'Facility', key: (e) => (typeof e.facility === 'object' ? e.facility?.name : '') || '' },
+            { label: 'Monthly Salary (INR)', key: (e) => e.monthlySalary || 0 },
+            { label: 'Is Active', key: (e) => e.isActive !== false ? 'Active' : 'Inactive' }
+        ];
 
-        let csv = 'EMP CODE,Name,Department,Designation,Shift,Monthly Salary,Facility,Status\n';
-        for (const emp of employees) {
-            const code = `"${emp.employeeCode || ''}"`;
-            const name = `"${emp.name || ''}"`;
-            const dept = `"${emp.department || ''}"`;
-            const desig = `"${emp.designation || ''}"`;
-            const shiftName = `"${emp.shiftAssignment ? emp.shiftAssignment.name : ''}"`;
-            const salary = emp.monthlySalary || 0;
-            const fac = `"${emp.facility ? emp.facility.name : ''}"`;
-            const status = emp.isActive ? 'Active' : 'Inactive';
-
-            csv += `${code},${name},${dept},${desig},${shiftName},${salary},${fac},${status}\n`;
-        }
-
-        return res.status(200).send(csv);
+        const csvContent = generateCsv(employees, fields);
+        return sendCsvResponse(res, `employees_export_${Date.now()}.csv`, csvContent);
     } catch (error) {
         console.error('Error in exportEmployeesCsv:', error);
         return res.status(500).json({
             success: false,
-            message: 'Failed to export employees CSV.',
+            message: 'Failed to export employees to CSV.',
             error: error.message
         });
     }
@@ -298,9 +306,12 @@ const getEmployeeById = async (req, res) => {
             });
         }
 
+        const responseData = employee.toObject();
+        responseData.code = employee.employeeCode;
+
         return res.status(200).json({
             success: true,
-            data: employee
+            data: responseData
         });
     } catch (error) {
         console.error('Error in getEmployeeById:', error);
@@ -320,7 +331,7 @@ const getEmployeeById = async (req, res) => {
 
 /**
  * @desc    Update Employee details
- * @route   PUT /api/employees/:id
+ * @route   PUT /api/employees/:id or PATCH /api/employees/:id
  * @access  Private (USERS:UPDATE / MASTER_DATA:UPDATE permission)
  */
 const updateEmployee = async (req, res) => {
@@ -352,7 +363,8 @@ const updateEmployee = async (req, res) => {
             shiftAssignment,
             facility,
             linkedUser,
-            monthlySalary
+            monthlySalary,
+            isActive
         } = req.body;
 
         if (name) employee.name = name.trim();
@@ -360,6 +372,7 @@ const updateEmployee = async (req, res) => {
         if (designation !== undefined) employee.designation = designation ? designation.trim() : '';
         if (dateOfJoining) employee.dateOfJoining = new Date(dateOfJoining);
         if (monthlySalary !== undefined) employee.monthlySalary = Number(monthlySalary);
+        if (isActive !== undefined) employee.isActive = isActive;
 
         if (shiftAssignment) {
             const shiftDoc = await Shift.findOne({ _id: shiftAssignment, tenant: tenantId, isActive: true });
@@ -406,10 +419,13 @@ const updateEmployee = async (req, res) => {
             { path: 'linkedUser', select: 'name email role' }
         ]);
 
+        const responseData = employee.toObject();
+        responseData.code = employee.employeeCode;
+
         return res.status(200).json({
             success: true,
             message: `Employee '${employee.name}' updated successfully.`,
-            data: employee
+            data: responseData
         });
     } catch (error) {
         console.error('Error in updateEmployee:', error);
@@ -454,7 +470,8 @@ const deleteEmployee = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: `Employee '${employee.name}' deleted successfully.`
+            message: `Employee '${employee.name}' deactivated successfully.`,
+            data: employee
         });
     } catch (error) {
         console.error('Error in deleteEmployee:', error);

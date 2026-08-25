@@ -3,6 +3,7 @@ const Category = require('../models/category.model');
 const UOM = require('../models/uom.model');
 const Supplier = require('../models/supplier.model');
 const Location = require('../models/location.model');
+const { generateCsv, sendCsvResponse } = require('../utils/csvExport');
 
 /**
  * @desc    Create a new Raw Material
@@ -215,6 +216,61 @@ const getRawMaterials = async (req, res) => {
             success: false,
             message: 'Failed to fetch Raw Materials.',
             error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Export Raw Materials to CSV
+ * @route   GET /api/raw-materials/export
+ * @access  Private (INVENTORY:READ permission)
+ */
+const exportRawMaterials = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing.'
+            });
+        }
+
+        const { category, uom, isActive, search } = req.query;
+        const filter = { tenant: tenantId };
+
+        if (category) filter.category = category;
+        if (uom) filter.uom = uom;
+        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
+        if (search) {
+            filter.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { code: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const items = await RawMaterial.find(filter)
+            .populate('category', 'name')
+            .populate('uom', 'name symbol')
+            .sort({ name: 1 });
+
+        const fields = [
+            { label: 'Item Code', key: 'code' },
+            { label: 'Material Name', key: 'name' },
+            { label: 'Category', key: (r) => (typeof r.category === 'object' ? r.category?.name : r.category) || '' },
+            { label: 'UOM', key: (r) => (typeof r.uom === 'object' ? r.uom?.symbol || r.uom?.name : r.uom) || 'kg' },
+            { label: 'Reorder Level', key: (r) => r.reorderLevel || 0 },
+            { label: 'Current Stock', key: (r) => r.currentStock || 0 },
+            { label: 'Price Per Unit (INR)', key: (r) => r.pricePerUnit || 0 },
+            { label: 'Is Active', key: (r) => r.isActive !== false ? 'Active' : 'Inactive' }
+        ];
+
+        const csvContent = generateCsv(items, fields);
+        return sendCsvResponse(res, `raw_materials_export_${Date.now()}.csv`, csvContent);
+    } catch (error) {
+        console.error('Error in exportRawMaterials:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to export raw materials to CSV.'
         });
     }
 };
@@ -464,6 +520,7 @@ const deleteRawMaterial = async (req, res) => {
 module.exports = {
     createRawMaterial,
     getRawMaterials,
+    exportRawMaterials,
     getRawMaterialById,
     updateRawMaterial,
     deleteRawMaterial

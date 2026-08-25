@@ -3,6 +3,7 @@ const router = express.Router();
 const {
     createSupplier,
     getSuppliers,
+    exportSuppliers,
     getSupplierById,
     updateSupplier,
     deleteSupplier
@@ -22,6 +23,13 @@ router.post('/', authenticate, checkPermission('MASTER_DATA', 'CREATE'), createS
  * @access  Private (MASTER_DATA:READ)
  */
 router.get('/', authenticate, checkPermission('MASTER_DATA', 'READ'), getSuppliers);
+
+/**
+ * @route   GET /api/suppliers/export
+ * @desc    Export Suppliers to CSV
+ * @access  Private (MASTER_DATA:READ)
+ */
+router.get('/export', authenticate, checkPermission('MASTER_DATA', 'READ'), exportSuppliers);
 
 /**
  * @route   GET /api/suppliers/:id

@@ -1,4 +1,5 @@
 const Customer = require('../models/customer.model');
+const { generateCsv, sendCsvResponse } = require('../utils/csvExport');
 
 /**
  * @desc    Create a new Customer
@@ -177,6 +178,63 @@ const getCustomers = async (req, res) => {
             success: false,
             message: 'Failed to fetch customers.',
             error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Export customers to CSV respecting tenant & query filters
+ * @route   GET /api/customers/export
+ * @access  Private (MASTER_DATA:READ permission)
+ */
+const exportCustomers = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing.'
+            });
+        }
+
+        const { status, isActive, search } = req.query;
+        const filter = { tenant: tenantId };
+
+        if (status) filter.status = status;
+        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
+        if (search) {
+            filter.$or = [
+                { companyName: { $regex: search, $options: 'i' } },
+                { code: { $regex: search, $options: 'i' } },
+                { gstin: { $regex: search, $options: 'i' } },
+                { city: { $regex: search, $options: 'i' } },
+                { contactPerson: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const customers = await Customer.find(filter).sort({ companyName: 1 });
+
+        const fields = [
+            { label: 'Customer Code', key: 'code' },
+            { label: 'Company Name', key: 'companyName' },
+            { label: 'Contact Person', key: (c) => c.contactPerson || '' },
+            { label: 'Phone', key: (c) => c.phone || '' },
+            { label: 'Email', key: (c) => c.email || '' },
+            { label: 'GSTIN', key: (c) => c.gstin || '' },
+            { label: 'City', key: (c) => c.city || '' },
+            { label: 'State', key: (c) => c.state || '' },
+            { label: 'Credit Limit (INR)', key: (c) => c.creditLimit || 0 },
+            { label: 'Status', key: (c) => c.status || 'ACTIVE_CUSTOMER' },
+            { label: 'Is Active', key: (c) => c.isActive !== false ? 'Active' : 'Inactive' }
+        ];
+
+        const csvContent = generateCsv(customers, fields);
+        return sendCsvResponse(res, `customers_export_${Date.now()}.csv`, csvContent);
+    } catch (error) {
+        console.error('Error in exportCustomers:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to export customers to CSV.'
         });
     }
 };
@@ -390,6 +448,7 @@ const deleteCustomer = async (req, res) => {
 module.exports = {
     createCustomer,
     getCustomers,
+    exportCustomers,
     getCustomerById,
     updateCustomer,
     deleteCustomer

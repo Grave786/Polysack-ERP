@@ -1,6 +1,7 @@
 const Machine = require('../models/machine.model');
 const UOM = require('../models/uom.model');
 const Location = require('../models/location.model');
+const { generateCsv, sendCsvResponse } = require('../utils/csvExport');
 
 /**
  * @desc    Create a new Machine
@@ -210,6 +211,59 @@ const getMachines = async (req, res) => {
 };
 
 /**
+ * @desc    Export machines to CSV respecting tenant & query filters
+ * @route   GET /api/machines/export
+ * @access  Private (MASTER_DATA:READ permission)
+ */
+const exportMachines = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing.'
+            });
+        }
+
+        const { section, status, isActive, search } = req.query;
+        const filter = { tenant: tenantId };
+
+        if (section) filter.section = section;
+        if (status) filter.status = status;
+        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
+        if (search) {
+            filter.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { code: { $regex: search, $options: 'i' } },
+                { currentOperator: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const machines = await Machine.find(filter).sort({ name: 1 });
+
+        const fields = [
+            { label: 'Machine Code', key: 'code' },
+            { label: 'Machine Name', key: 'name' },
+            { label: 'Section', key: (m) => m.section || '' },
+            { label: 'Capacity Per Hour', key: (m) => m.capacityPerHour || '' },
+            { label: 'Operator', key: (m) => m.currentOperator || '' },
+            { label: 'Efficiency (%)', key: (m) => m.efficiency || 0 },
+            { label: 'Status', key: (m) => m.status || 'AVAILABLE' },
+            { label: 'Is Active', key: (m) => m.isActive !== false ? 'Active' : 'Inactive' }
+        ];
+
+        const csvContent = generateCsv(machines, fields);
+        return sendCsvResponse(res, `machines_export_${Date.now()}.csv`, csvContent);
+    } catch (error) {
+        console.error('Error in exportMachines:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to export machines to CSV.'
+        });
+    }
+};
+
+/**
  * @desc    Get machine by ID scoped to user's tenant
  * @route   GET /api/machines/:id
  * @access  Private (MASTER_DATA:READ permission)
@@ -241,6 +295,12 @@ const getMachineById = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in getMachineById:', error);
+        if (error.name === 'CastError') {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid ID format provided for field '${error.path}'.`
+            });
+        }
         return res.status(500).json({
             success: false,
             message: 'Failed to retrieve machine.',
@@ -419,10 +479,6 @@ const deleteMachine = async (req, res) => {
             });
         }
 
-        // TODO: Check if any active WorkOrder references this machine once WorkOrder model is created in Production module.
-        // e.g. const activeWorkOrder = await WorkOrder.findOne({ machine: machine._id, status: { $in: ['PLANNED', 'IN_PROGRESS'] } });
-        // if (activeWorkOrder) return res.status(400).json({ success: false, message: 'Cannot deactivate machine while active work orders are assigned.' });
-
         machine.isActive = false;
         await machine.save();
 
@@ -444,6 +500,7 @@ const deleteMachine = async (req, res) => {
 module.exports = {
     createMachine,
     getMachines,
+    exportMachines,
     getMachineById,
     updateMachine,
     deleteMachine

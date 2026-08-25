@@ -2,6 +2,7 @@ const FinishedGood = require('../models/finishedGood.model');
 const Category = require('../models/category.model');
 const UOM = require('../models/uom.model');
 const Location = require('../models/location.model');
+const { generateCsv, sendCsvResponse } = require('../utils/csvExport');
 
 /**
  * @desc    Create a new Finished Good
@@ -210,6 +211,63 @@ const getFinishedGoods = async (req, res) => {
             success: false,
             message: 'Failed to fetch Finished Goods.',
             error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Export Finished Goods to CSV
+ * @route   GET /api/finished-goods/export
+ * @access  Private (INVENTORY:READ permission)
+ */
+const exportFinishedGoods = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing.'
+            });
+        }
+
+        const { category, uom, bagShape, isActive, search } = req.query;
+        const filter = { tenant: tenantId };
+
+        if (category) filter.category = category;
+        if (uom) filter.uom = uom;
+        if (bagShape) filter.bagShape = bagShape;
+        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
+        if (search) {
+            filter.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { code: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const items = await FinishedGood.find(filter)
+            .populate('category', 'name')
+            .sort({ name: 1 });
+
+        const fields = [
+            { label: 'Product Code', key: 'code' },
+            { label: 'Product Specification', key: 'name' },
+            { label: 'Bag Type', key: (f) => (typeof f.category === 'object' ? f.category?.name : f.category) || '' },
+            { label: 'Bag Shape', key: (f) => f.bagShape || 'Flat' },
+            { label: 'GSM', key: (f) => f.fabricGSM || '' },
+            { label: 'Dimensions', key: (f) => f.dimensions?.width && f.dimensions?.length ? `${f.dimensions.width}x${f.dimensions.length} cm` : '' },
+            { label: 'Bag Capacity (Kg)', key: (f) => f.bagCapacity || '' },
+            { label: 'Price Per Bag (INR)', key: (f) => f.pricePerBag || 0 },
+            { label: 'Current Stock', key: (f) => f.currentStock || 0 },
+            { label: 'Is Active', key: (f) => f.isActive !== false ? 'Active' : 'Inactive' }
+        ];
+
+        const csvContent = generateCsv(items, fields);
+        return sendCsvResponse(res, `finished_goods_export_${Date.now()}.csv`, csvContent);
+    } catch (error) {
+        console.error('Error in exportFinishedGoods:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to export finished goods to CSV.'
         });
     }
 };
@@ -447,6 +505,7 @@ const deleteFinishedGood = async (req, res) => {
 module.exports = {
     createFinishedGood,
     getFinishedGoods,
+    exportFinishedGoods,
     getFinishedGoodById,
     updateFinishedGood,
     deleteFinishedGood

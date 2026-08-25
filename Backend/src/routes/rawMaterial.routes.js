@@ -3,6 +3,7 @@ const router = express.Router();
 const {
     createRawMaterial,
     getRawMaterials,
+    exportRawMaterials,
     getRawMaterialById,
     updateRawMaterial,
     deleteRawMaterial
@@ -22,6 +23,13 @@ router.post('/', authenticate, checkPermission('INVENTORY', 'CREATE'), createRaw
  * @access  Private (INVENTORY:READ)
  */
 router.get('/', authenticate, checkPermission('INVENTORY', 'READ'), getRawMaterials);
+
+/**
+ * @route   GET /api/raw-materials/export
+ * @desc    Export Raw Materials to CSV
+ * @access  Private (INVENTORY:READ)
+ */
+router.get('/export', authenticate, checkPermission('INVENTORY', 'READ'), exportRawMaterials);
 
 /**
  * @route   GET /api/raw-materials/:id

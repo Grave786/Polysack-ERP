@@ -3,6 +3,7 @@ const router = express.Router();
 const {
     createFinishedGood,
     getFinishedGoods,
+    exportFinishedGoods,
     getFinishedGoodById,
     updateFinishedGood,
     deleteFinishedGood
@@ -22,6 +23,13 @@ router.post('/', authenticate, checkPermission('INVENTORY', 'CREATE'), createFin
  * @access  Private (INVENTORY:READ)
  */
 router.get('/', authenticate, checkPermission('INVENTORY', 'READ'), getFinishedGoods);
+
+/**
+ * @route   GET /api/finished-goods/export
+ * @desc    Export Finished Goods to CSV
+ * @access  Private (INVENTORY:READ)
+ */
+router.get('/export', authenticate, checkPermission('INVENTORY', 'READ'), exportFinishedGoods);
 
 /**
  * @route   GET /api/finished-goods/:id

@@ -3,6 +3,7 @@ const router = express.Router();
 const {
     createMachine,
     getMachines,
+    exportMachines,
     getMachineById,
     updateMachine,
     deleteMachine
@@ -22,6 +23,13 @@ router.post('/', authenticate, checkPermission('MASTER_DATA', 'CREATE'), createM
  * @access  Private (MASTER_DATA:READ)
  */
 router.get('/', authenticate, checkPermission('MASTER_DATA', 'READ'), getMachines);
+
+/**
+ * @route   GET /api/machines/export
+ * @desc    Export Machines to CSV
+ * @access  Private (MASTER_DATA:READ)
+ */
+router.get('/export', authenticate, checkPermission('MASTER_DATA', 'READ'), exportMachines);
 
 /**
  * @route   GET /api/machines/:id

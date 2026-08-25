@@ -17,32 +17,40 @@ const createShift = async (req, res) => {
 
         delete req.body.tenant;
 
-        const { shiftCode, name, startTime, endTime, standardHours, gracePeriodMinutes } = req.body;
+        const rawCode = req.body.shiftCode || req.body.code;
+        const name = req.body.name;
+        const startTime = req.body.startTime || '06:00';
+        const endTime = req.body.endTime || '14:00';
+        const standardHours = req.body.standardHours;
+        const gracePeriodMinutes = req.body.gracePeriodMinutes;
+        const isActive = req.body.isActive;
 
-        if (!shiftCode || !name || !startTime || !endTime) {
+        if (!rawCode || !name || !name.trim()) {
             return res.status(400).json({
                 success: false,
-                message: 'Please provide shiftCode, name, startTime, and endTime.'
+                message: 'Please provide shiftCode and name.'
             });
         }
 
-        const existingShift = await Shift.findOne({ shiftCode: shiftCode.trim().toUpperCase(), tenant: tenantId });
+        const formattedCode = rawCode.trim().toUpperCase();
+
+        const existingShift = await Shift.findOne({ shiftCode: formattedCode, tenant: tenantId });
         if (existingShift) {
             return res.status(400).json({
                 success: false,
-                message: `Shift code '${shiftCode}' already exists for your organization.`
+                message: `Shift code '${formattedCode}' already exists for your organization.`
             });
         }
 
         const shift = new Shift({
             tenant: tenantId,
-            shiftCode: shiftCode.trim().toUpperCase(),
+            shiftCode: formattedCode,
             name: name.trim(),
-            startTime: startTime.trim(),
-            endTime: endTime.trim(),
+            startTime: String(startTime).trim(),
+            endTime: String(endTime).trim(),
             standardHours: standardHours !== undefined ? Number(standardHours) : 8,
             gracePeriodMinutes: gracePeriodMinutes !== undefined ? Number(gracePeriodMinutes) : 15,
-            isActive: true
+            isActive: isActive !== undefined ? isActive : true
         });
 
         await shift.save();
@@ -82,8 +90,12 @@ const getShifts = async (req, res) => {
             });
         }
 
-        const { search, page = 1, limit = 20 } = req.query;
-        const filter = { tenant: tenantId, isActive: true };
+        const { search, isActive, page = 1, limit = 20 } = req.query;
+        const filter = { tenant: tenantId };
+
+        if (isActive !== undefined) {
+            filter.isActive = isActive === 'true' || isActive === true;
+        }
 
         if (search) {
             filter.$or = [
@@ -123,6 +135,79 @@ const getShifts = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Failed to fetch shifts.',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Seed standard shifts (Shift A, Shift B, Night Shift) if zero shifts exist
+ * @route   POST /api/shifts/seed-default
+ * @access  Private (MASTER_DATA:CREATE permission)
+ */
+const seedDefaultShifts = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const existingCount = await Shift.countDocuments({ tenant: tenantId });
+        if (existingCount > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Tenant already has ${existingCount} shift record(s). Default seeding is only available when no shifts exist.`
+            });
+        }
+
+        const defaultShifts = [
+            {
+                tenant: tenantId,
+                shiftCode: 'SHIFT_A',
+                name: 'Shift A',
+                startTime: '06:00',
+                endTime: '14:00',
+                standardHours: 8,
+                gracePeriodMinutes: 15,
+                isActive: true
+            },
+            {
+                tenant: tenantId,
+                shiftCode: 'SHIFT_B',
+                name: 'Shift B',
+                startTime: '14:00',
+                endTime: '22:00',
+                standardHours: 8,
+                gracePeriodMinutes: 15,
+                isActive: true
+            },
+            {
+                tenant: tenantId,
+                shiftCode: 'SHIFT_NIGHT',
+                name: 'Night Shift',
+                startTime: '22:00',
+                endTime: '06:00',
+                standardHours: 8,
+                gracePeriodMinutes: 15,
+                isActive: true
+            }
+        ];
+
+        const inserted = await Shift.insertMany(defaultShifts);
+
+        return res.status(201).json({
+            success: true,
+            message: 'Standard shifts (Shift A, Shift B, Night Shift) created successfully.',
+            data: inserted
+        });
+    } catch (error) {
+        console.error('Error in seedDefaultShifts:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to seed default shifts.',
             error: error.message
         });
     }
@@ -173,7 +258,7 @@ const getShiftById = async (req, res) => {
 
 /**
  * @desc    Update Shift details
- * @route   PUT /api/shifts/:id
+ * @route   PUT /api/shifts/:id or PATCH /api/shifts/:id
  * @access  Private (MASTER_DATA:UPDATE permission)
  */
 const updateShift = async (req, res) => {
@@ -196,13 +281,30 @@ const updateShift = async (req, res) => {
             });
         }
 
-        const { name, startTime, endTime, standardHours, gracePeriodMinutes } = req.body;
+        const { shiftCode, name, startTime, endTime, standardHours, gracePeriodMinutes, isActive } = req.body;
+
+        if (shiftCode && shiftCode.trim().toUpperCase() !== shift.shiftCode) {
+            const formattedCode = shiftCode.trim().toUpperCase();
+            const existingCode = await Shift.findOne({
+                shiftCode: formattedCode,
+                tenant: tenantId,
+                _id: { $ne: shift._id }
+            });
+            if (existingCode) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Shift code '${formattedCode}' already exists for your organization.`
+                });
+            }
+            shift.shiftCode = formattedCode;
+        }
 
         if (name) shift.name = name.trim();
         if (startTime) shift.startTime = startTime.trim();
         if (endTime) shift.endTime = endTime.trim();
         if (standardHours !== undefined) shift.standardHours = Number(standardHours);
         if (gracePeriodMinutes !== undefined) shift.gracePeriodMinutes = Number(gracePeriodMinutes);
+        if (isActive !== undefined) shift.isActive = isActive;
 
         await shift.save();
 
@@ -254,7 +356,8 @@ const deleteShift = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: `Shift '${shift.name}' deleted successfully.`
+            message: `Shift '${shift.name}' deactivated successfully.`,
+            data: shift
         });
     } catch (error) {
         console.error('Error in deleteShift:', error);
@@ -275,6 +378,7 @@ const deleteShift = async (req, res) => {
 module.exports = {
     createShift,
     getShifts,
+    seedDefaultShifts,
     getShiftById,
     updateShift,
     deleteShift

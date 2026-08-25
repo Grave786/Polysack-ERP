@@ -3,6 +3,7 @@ const router = express.Router();
 const {
     createShift,
     getShifts,
+    seedDefaultShifts,
     getShiftById,
     updateShift,
     deleteShift
@@ -15,6 +16,13 @@ const { authenticate, checkPermission } = require('../middlewares/rbac.middlewar
  * @access  Private (MASTER_DATA:CREATE)
  */
 router.post('/', authenticate, checkPermission('MASTER_DATA', 'CREATE'), createShift);
+
+/**
+ * @route   POST /api/shifts/seed-default
+ * @desc    Seed standard shifts (Shift A, Shift B, Night Shift)
+ * @access  Private (MASTER_DATA:CREATE)
+ */
+router.post('/seed-default', authenticate, checkPermission('MASTER_DATA', 'CREATE'), seedDefaultShifts);
 
 /**
  * @route   GET /api/shifts
@@ -36,6 +44,13 @@ router.get('/:id', authenticate, checkPermission('MASTER_DATA', 'READ'), getShif
  * @access  Private (MASTER_DATA:UPDATE)
  */
 router.put('/:id', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), updateShift);
+
+/**
+ * @route   PATCH /api/shifts/:id
+ * @desc    Update Shift by ID (Partial)
+ * @access  Private (MASTER_DATA:UPDATE)
+ */
+router.patch('/:id', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), updateShift);
 
 /**
  * @route   DELETE /api/shifts/:id

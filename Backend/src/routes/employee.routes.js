@@ -25,8 +25,15 @@ router.post('/', authenticate, checkPermission('USERS', 'CREATE'), createEmploye
 router.get('/', authenticate, checkPermission('USERS', 'READ'), getEmployees);
 
 /**
- * @route   GET /api/employees/export-csv
+ * @route   GET /api/employees/export
  * @desc    Export Employees to CSV
+ * @access  Private (USERS:READ / MASTER_DATA:READ)
+ */
+router.get('/export', authenticate, checkPermission('USERS', 'READ'), exportEmployeesCsv);
+
+/**
+ * @route   GET /api/employees/export-csv
+ * @desc    Export Employees to CSV (legacy alias)
  * @access  Private (USERS:READ / MASTER_DATA:READ)
  */
 router.get('/export-csv', authenticate, checkPermission('USERS', 'READ'), exportEmployeesCsv);
@@ -44,6 +51,13 @@ router.get('/:id', authenticate, checkPermission('USERS', 'READ'), getEmployeeBy
  * @access  Private (USERS:UPDATE / MASTER_DATA:UPDATE)
  */
 router.put('/:id', authenticate, checkPermission('USERS', 'UPDATE'), updateEmployee);
+
+/**
+ * @route   PATCH /api/employees/:id
+ * @desc    Update Employee by ID (Partial)
+ * @access  Private (USERS:UPDATE / MASTER_DATA:UPDATE)
+ */
+router.patch('/:id', authenticate, checkPermission('USERS', 'UPDATE'), updateEmployee);
 
 /**
  * @route   DELETE /api/employees/:id

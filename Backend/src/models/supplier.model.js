@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const SupplierSchema = new mongoose.Schema({
+    code: {
+        type: String,
+        required: [true, 'Supplier code is required'],
+        uppercase: true,
+        trim: true
+    },
     name: {
         type: String,
         required: [true, 'Supplier company name is required'],
@@ -51,10 +57,11 @@ const SupplierSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-// Compound unique index for name per tenant
+// Compound unique index for code and name per tenant
+SupplierSchema.index({ code: 1, tenant: 1 }, { unique: true });
 SupplierSchema.index({ name: 1, tenant: 1 }, { unique: true });
 
-// Sparse compound unique index for GSTIN per tenant (so optional GSTINs don't clash on null/empty)
+// Sparse compound unique index for GSTIN per tenant
 SupplierSchema.index(
     { gstin: 1, tenant: 1 },
     { unique: true, sparse: true, partialFilterExpression: { gstin: { $type: 'string' } } }
