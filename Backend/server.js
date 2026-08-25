@@ -23,6 +23,24 @@ const supplierRoutes = require('./src/routes/supplier.routes');
 const rawMaterialRoutes = require('./src/routes/rawMaterial.routes');
 const finishedGoodRoutes = require('./src/routes/finishedGood.routes');
 const stockTransactionRoutes = require('./src/routes/stockTransaction.routes');
+const machineRoutes = require('./src/routes/machine.routes');
+const customerRoutes = require('./src/routes/customer.routes');
+const bomRoutes = require('./src/routes/bom.routes');
+const workOrderRoutes = require('./src/routes/workOrder.routes');
+const purchaseOrderRoutes = require('./src/routes/purchaseOrder.routes');
+const grnRoutes = require('./src/routes/grn.routes');
+const salesOrderRoutes = require('./src/routes/salesOrder.routes');
+const invoiceRoutes = require('./src/routes/invoice.routes');
+const qcInspectionRoutes = require('./src/routes/qcInspection.routes');
+const dispatchRoutes = require('./src/routes/dispatch.routes');
+const posRoutes = require('./src/routes/pos.routes');
+const companyProfileRoutes = require('./src/routes/companyProfile.routes');
+const reportRoutes = require('./src/routes/report.routes');
+const shiftRoutes = require('./src/routes/shift.routes');
+const employeeRoutes = require('./src/routes/employee.routes');
+const attendanceRoutes = require('./src/routes/attendance.routes');
+const crmRoutes = require('./src/routes/crm.routes');
+const dashboardRoutes = require('./src/routes/dashboard.routes');
 
 const app = express();
 app.use(cors());
@@ -33,7 +51,7 @@ const initializeSystem = async () => {
   await connectDB();
   try {
     const count = await Permission.countDocuments();
-    const EXPECTED_PERMISSIONS_COUNT = 35;
+    const EXPECTED_PERMISSIONS_COUNT = 40;
     if (count < EXPECTED_PERMISSIONS_COUNT) {
       console.warn(`\x1b[33m⚠️ WARNING: Permission collection has missing entries! Expected ${EXPECTED_PERMISSIONS_COUNT}, found ${count}.\x1b[0m`);
       console.warn(`\x1b[33m👉 Please run: node src/scripts/permission.seed.js\x1b[0m`);
@@ -64,6 +82,24 @@ app.use('/api/suppliers', supplierRoutes);
 app.use('/api/raw-materials', rawMaterialRoutes);
 app.use('/api/finished-goods', finishedGoodRoutes);
 app.use('/api/stock-transactions', stockTransactionRoutes);
+app.use('/api/machines', machineRoutes);
+app.use('/api/customers', customerRoutes);
+app.use('/api/boms', bomRoutes);
+app.use('/api/work-orders', workOrderRoutes);
+app.use('/api/purchase-orders', purchaseOrderRoutes);
+app.use('/api/grns', grnRoutes);
+app.use('/api/sales-orders', salesOrderRoutes);
+app.use('/api/invoices', invoiceRoutes);
+app.use('/api/qc-inspections', qcInspectionRoutes);
+app.use('/api/dispatches', dispatchRoutes);
+app.use('/api/pos', posRoutes);
+app.use('/api/admin/company-profile', companyProfileRoutes);
+app.use('/api/reports', reportRoutes);
+app.use('/api/shifts', shiftRoutes);
+app.use('/api/employees', employeeRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/crm', crmRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

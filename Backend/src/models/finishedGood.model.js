@@ -51,6 +51,11 @@ const FinishedGoodSchema = new mongoose.Schema({
         type: Number,
         min: [0, 'Bag capacity cannot be negative']
     },
+    pendingQCStock: {
+        type: Number,
+        default: 0,
+        min: [0, 'Pending QC stock cannot be negative']
+    },
     currentStock: {
         type: Number,
         default: 0,

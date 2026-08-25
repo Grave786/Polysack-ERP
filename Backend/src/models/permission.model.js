@@ -4,7 +4,7 @@ const PermissionSchema = new mongoose.Schema({
     module: {
         type: String,
         required: true,
-        enum: ['INVENTORY', 'PRODUCTION', 'PROCUREMENT', 'SALES', 'MASTER_DATA', 'USERS', 'ROLES']
+        enum: ['INVENTORY', 'PRODUCTION', 'PROCUREMENT', 'SALES', 'MASTER_DATA', 'USERS', 'ROLES', 'QUALITY']
     },
     action: {
         type: String,

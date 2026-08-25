@@ -1,0 +1,97 @@
+const mongoose = require('mongoose');
+
+const DispatchItemSchema = new mongoose.Schema({
+    finishedGood: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'FinishedGood',
+        required: [true, 'Finished Good reference is required in Dispatch item']
+    },
+    dispatchedQuantity: {
+        type: Number,
+        required: [true, 'Dispatched quantity is required'],
+        min: [0.0001, 'Dispatched quantity must be greater than 0']
+    },
+    batchNumber: {
+        type: String,
+        trim: true
+    }
+}, { _id: false });
+
+const DispatchSchema = new mongoose.Schema({
+    tenant: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        required: [true, 'Tenant is required']
+    },
+    dispatchNumber: {
+        type: String,
+        required: [true, 'Dispatch Number is required'],
+        trim: true,
+        uppercase: true
+    },
+    salesOrder: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SalesOrder',
+        required: [true, 'Sales Order reference is required']
+    },
+    dispatchDate: {
+        type: Date,
+        default: Date.now
+    },
+    items: {
+        type: [DispatchItemSchema],
+        validate: {
+            validator: function (v) {
+                return Array.isArray(v) && v.length > 0;
+            },
+            message: 'Dispatch must contain at least one item.'
+        }
+    },
+    dispatchLocation: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Location',
+        required: [true, 'Dispatch location (source location) is required']
+    },
+    vehicleNumber: {
+        type: String,
+        trim: true,
+        uppercase: true
+    },
+    transporter: {
+        type: String,
+        trim: true
+    },
+    driverName: {
+        type: String,
+        trim: true
+    },
+    driverPhone: {
+        type: String,
+        trim: true
+    },
+    deliveryStatus: {
+        type: String,
+        default: 'IN_TRANSIT',
+        enum: {
+            values: ['IN_TRANSIT', 'DELIVERED', 'RETURNED'],
+            message: '{VALUE} is not a valid delivery status.'
+        }
+    },
+    podConfirmedAt: {
+        type: Date,
+        default: null
+    },
+    notes: {
+        type: String,
+        trim: true
+    },
+    dispatchedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: [true, 'Dispatched by user is required']
+    }
+}, { timestamps: true });
+
+DispatchSchema.index({ dispatchNumber: 1, tenant: 1 }, { unique: true });
+
+module.exports = mongoose.model('Dispatch', DispatchSchema);

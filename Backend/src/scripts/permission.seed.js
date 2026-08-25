@@ -6,11 +6,11 @@ const mongoose = require('mongoose');
 
 const Permission = require('../models/permission.model');
 
-const MODULES = ['INVENTORY', 'PRODUCTION', 'PROCUREMENT', 'SALES', 'MASTER_DATA', 'USERS', 'ROLES'];
+const MODULES = ['INVENTORY', 'PRODUCTION', 'PROCUREMENT', 'SALES', 'MASTER_DATA', 'USERS', 'ROLES', 'QUALITY'];
 const ACTIONS = ['CREATE', 'READ', 'UPDATE', 'DELETE', 'APPROVE'];
 
 /**
- * Seeds or updates all permissions (7 modules x 5 actions = 35 permissions).
+ * Seeds or updates all permissions (8 modules x 5 actions = 40 permissions).
  * Idempotent: uses findOneAndUpdate with upsert.
  */
 const seedPermissions = async () => {

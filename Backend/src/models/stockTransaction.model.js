@@ -39,6 +39,10 @@ const StockTransactionSchema = new mongoose.Schema({
                 'TRANSFER',
                 'PRODUCTION_CONSUMPTION',
                 'PRODUCTION_OUTPUT',
+                'PRODUCTION_OUTPUT_PENDING_QC',
+                'QC_PASSED',
+                'QC_REJECTED',
+                'POS_SALE',
                 'ADJUSTMENT',
                 'OPENING_BALANCE'
             ],
@@ -84,5 +88,7 @@ StockTransactionSchema.pre('validate', function (next) {
     }
     next();
 });
+
+StockTransactionSchema.index({ tenant: 1, transactionType: 1, createdAt: 1 });
 
 module.exports = mongoose.model('StockTransaction', StockTransactionSchema);
