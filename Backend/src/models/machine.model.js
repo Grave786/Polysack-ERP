@@ -20,8 +20,9 @@ const MachineSchema = new mongoose.Schema({
     section: {
         type: String,
         required: [true, 'Production section is required'],
+        uppercase: true,
         enum: {
-            values: ['EXTRUSION', 'WEAVING', 'LAMINATION', 'PRINTING', 'SEWING', 'BALING'],
+            values: ['EXTRUSION', 'WEAVING', 'LAMINATION', 'PRINTING', 'SEWING', 'BALING', 'QUALITY', 'MAINTENANCE', 'CONVERSION'],
             message: '{VALUE} is not a valid production section.'
         }
     },
@@ -46,8 +47,9 @@ const MachineSchema = new mongoose.Schema({
     status: {
         type: String,
         default: 'IDLE',
+        uppercase: true,
         enum: {
-            values: ['RUNNING', 'IDLE', 'MAINTENANCE', 'BREAKDOWN'],
+            values: ['RUNNING', 'IDLE', 'MAINTENANCE', 'BREAKDOWN', 'AVAILABLE', 'IN_USE', 'UNDER_MAINTENANCE', 'OUT_OF_SERVICE'],
             message: '{VALUE} is not a valid machine status.'
         }
     },

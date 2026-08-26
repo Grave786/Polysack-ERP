@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Plus, UserCheck, UserX, UserPlus, RefreshCw, ShieldCheck, CheckCircle2 } from 'lucide-react';
+import { useAuthStore } from '../store/authStore';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 
 export default function UserManagementPage() {
+    const currentUser = useAuthStore((state) => state.user);
     const [isAddUserOpen, setIsAddUserOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
 
@@ -48,6 +50,12 @@ export default function UserManagementPage() {
 
     // Handle soft delete / toggle active status
     const handleToggleActive = async (user) => {
+        const currentUserId = currentUser?._id || currentUser?.id;
+        if (String(user._id) === String(currentUserId)) {
+            toast.error('You cannot deactivate or delete your own account.');
+            return;
+        }
+
         try {
             const res = await axiosInstance.patch(`/users/${user._id}/toggle-active`);
             if (res.data?.success) {
@@ -109,7 +117,16 @@ export default function UserManagementPage() {
     const columns = [
         {
             header: 'FULL NAME',
-            render: (row) => <span className="font-bold text-text-main">{row.name || '-'}</span>,
+            render: (row) => (
+                <div className="flex items-center gap-1.5 font-bold text-text-main">
+                    <span>{row.name || '-'}</span>
+                    {String(row._id) === String(currentUser?._id || currentUser?.id) && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
+                            (You)
+                        </span>
+                    )}
+                </div>
+            ),
             sortable: true
         },
         {
@@ -157,21 +174,35 @@ export default function UserManagementPage() {
         },
         {
             header: 'ACTIONS',
-            render: (row) => (
-                <button
-                    type="button"
-                    onClick={() => handleToggleActive(row)}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-extrabold transition-all cursor-pointer shadow-2xs ${
-                        row.isActive !== false
-                            ? 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200'
-                            : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
-                    }`}
-                    title={row.isActive !== false ? 'Deactivate User Account' : 'Activate User Account'}
-                >
-                    {row.isActive !== false ? <UserX size={13} /> : <UserCheck size={13} />}
-                    <span>{row.isActive !== false ? 'Deactivate' : 'Activate'}</span>
-                </button>
-            )
+            render: (row) => {
+                const currentUserId = currentUser?._id || currentUser?.id;
+                const isSelf = String(row._id) === String(currentUserId);
+
+                return (
+                    <button
+                        type="button"
+                        disabled={isSelf}
+                        onClick={() => !isSelf && handleToggleActive(row)}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-extrabold transition-all shadow-2xs ${
+                            isSelf
+                                ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                                : row.isActive !== false
+                                    ? 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 cursor-pointer'
+                                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 cursor-pointer'
+                        }`}
+                        title={
+                            isSelf
+                                ? 'You cannot deactivate or delete your own account'
+                                : row.isActive !== false
+                                    ? 'Deactivate User Account'
+                                    : 'Activate User Account'
+                        }
+                    >
+                        {row.isActive !== false ? <UserX size={13} /> : <UserCheck size={13} />}
+                        <span>{row.isActive !== false ? 'Deactivate' : 'Activate'}</span>
+                    </button>
+                );
+            }
         }
     ];
 

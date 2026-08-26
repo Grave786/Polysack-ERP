@@ -84,6 +84,61 @@ export default function TabbedResourcePage({
     });
     const [isSavingInlineShift, setIsSavingInlineShift] = useState(false);
 
+    // Custom UOM Modal State
+    const [uomModal, setUomModal] = useState({
+        isOpen: false,
+        name: '',
+        abbreviation: '',
+        isSaving: false
+    });
+
+    const handleOpenAddUomModal = () => {
+        setUomModal({
+            isOpen: true,
+            name: '',
+            abbreviation: '',
+            isSaving: false
+        });
+    };
+
+    const handleSaveUomModal = async (e) => {
+        e.preventDefault();
+        if (!uomModal.name.trim() || !uomModal.abbreviation.trim()) {
+            toast.error('Please enter both UOM Name and Abbreviation');
+            return;
+        }
+
+        try {
+            setUomModal((prev) => ({ ...prev, isSaving: true }));
+            const res = await axiosInstance.post('/uoms', {
+                name: uomModal.name.trim(),
+                abbreviation: uomModal.abbreviation.trim(),
+                symbol: uomModal.abbreviation.trim()
+            });
+
+            if (res.data?.success) {
+                const newUom = res.data.data;
+                toast.success(`UOM '${newUom.name}' created successfully!`);
+
+                const uomRes = await axiosInstance.get('/uoms?isActive=true&limit=100');
+                if (uomRes.data?.success && Array.isArray(uomRes.data.data)) {
+                    setUomsList(uomRes.data.data);
+                }
+
+                setFormData((prev) => ({
+                    ...prev,
+                    uom: newUom._id
+                }));
+
+                setUomModal({ isOpen: false, name: '', abbreviation: '', isSaving: false });
+            }
+        } catch (err) {
+            console.error('Error saving UOM:', err);
+            toast.error(err.response?.data?.message || 'Failed to create UOM');
+            setUomModal((prev) => ({ ...prev, isSaving: false }));
+        }
+    };
+
     const activeTab = tabs.find((t) => t.key === activeTabKey) || tabs[0];
     const activeTabLabel = activeTab?.label || 'Record';
 
@@ -189,6 +244,14 @@ export default function TabbedResourcePage({
                             uom: prev.uom || list[0]._id
                         }));
                     }
+                }
+            }).catch(() => { });
+
+            // Fetch Locations dynamically
+            axiosInstance.get('/locations?isActive=true&limit=100').then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    const list = res.data.data;
+                    setLocationsList(list);
                 }
             }).catch(() => { });
         }
@@ -1200,16 +1263,19 @@ export default function TabbedResourcePage({
                                 Section
                             </label>
                             <select
-                                value={formData.section || 'Extrusion'}
+                                value={(formData.section || 'EXTRUSION').toUpperCase()}
                                 onChange={(e) => handleInputChange('section', e.target.value)}
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
                             >
-                                <option value="Extrusion">Extrusion</option>
-                                <option value="Weaving">Weaving</option>
-                                <option value="Lamination">Lamination</option>
-                                <option value="Conversion">Conversion</option>
-                                <option value="Printing">Printing</option>
-                                <option value="Quality">Quality</option>
+                                <option value="EXTRUSION">Extrusion</option>
+                                <option value="WEAVING">Weaving</option>
+                                <option value="LAMINATION">Lamination</option>
+                                <option value="PRINTING">Printing</option>
+                                <option value="SEWING">Sewing</option>
+                                <option value="BALING">Baling</option>
+                                <option value="QUALITY">Quality</option>
+                                <option value="MAINTENANCE">Maintenance</option>
+                                <option value="CONVERSION">Conversion</option>
                             </select>
                         </div>
 
@@ -1366,9 +1432,18 @@ export default function TabbedResourcePage({
 
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Unit of Measure (UOM) *
-                            </label>
+                            <div className="flex justify-between items-center mb-1">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                    Unit of Measure (UOM) *
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={handleOpenAddUomModal}
+                                    className="text-xs text-primary hover:underline font-bold cursor-pointer"
+                                >
+                                    + Add New
+                                </button>
+                            </div>
                             <select
                                 name="uom"
                                 required
@@ -1379,7 +1454,7 @@ export default function TabbedResourcePage({
                                 <option value="">-- Select UOM --</option>
                                 {uomsList.map((u) => (
                                     <option key={u._id} value={u._id}>
-                                        {u.name} ({u.symbol || u.name})
+                                        {u.name} ({u.abbreviation || u.symbol || u.name})
                                     </option>
                                 ))}
                             </select>
@@ -1387,15 +1462,21 @@ export default function TabbedResourcePage({
 
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Purchase Price (₹)
+                                Default Storage Location
                             </label>
-                            <input
-                                type="number"
-                                placeholder="125"
-                                value={formData.pricePerUnit || ''}
-                                onChange={(e) => handleInputChange('pricePerUnit', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                            />
+                            <select
+                                name="defaultLocation"
+                                value={typeof formData.defaultLocation === 'object' ? formData.defaultLocation?._id : (formData.defaultLocation || '')}
+                                onChange={(e) => handleInputChange('defaultLocation', e.target.value)}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                            >
+                                <option value="">-- Select Location --</option>
+                                {locationsList.map((loc) => (
+                                    <option key={loc._id} value={loc._id}>
+                                        {loc.name} ({loc.code || loc.type})
+                                    </option>
+                                ))}
+                            </select>
                         </div>
                     </div>
 
@@ -1519,9 +1600,18 @@ export default function TabbedResourcePage({
 
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Unit of Measure (UOM) *
-                            </label>
+                            <div className="flex justify-between items-center mb-1">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                    Unit of Measure (UOM) *
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={handleOpenAddUomModal}
+                                    className="text-xs text-primary hover:underline font-bold cursor-pointer"
+                                >
+                                    + Add New
+                                </button>
+                            </div>
                             <select
                                 name="uom"
                                 required
@@ -1532,7 +1622,7 @@ export default function TabbedResourcePage({
                                 <option value="">-- Select UOM --</option>
                                 {uomsList.map((u) => (
                                     <option key={u._id} value={u._id}>
-                                        {u.name} ({u.symbol || u.name})
+                                        {u.name} ({u.abbreviation || u.symbol || u.name})
                                     </option>
                                 ))}
                             </select>
@@ -2119,6 +2209,74 @@ export default function TabbedResourcePage({
                                     className="px-4 py-2 bg-primary text-white font-semibold rounded-md text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
                                 >
                                     {categoryModal.isSaving ? 'Saving...' : 'Save Category'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Custom UOM Modal */}
+            {uomModal.isOpen && (
+                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+                    <div className="bg-card-bg rounded-lg shadow-xl w-96 p-6 border border-border space-y-4 font-sans animate-in fade-in zoom-in duration-150">
+                        <div className="flex items-center justify-between border-b border-border pb-3">
+                            <h3 className="text-sm font-bold text-text-main uppercase tracking-wider">
+                                Add New Unit of Measure (UOM)
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setUomModal({ isOpen: false, name: '', abbreviation: '', isSaving: false })}
+                                className="text-text-muted hover:text-text-main p-1 rounded-md transition-colors cursor-pointer"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSaveUomModal} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                    Unit Name *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    autoFocus
+                                    placeholder="e.g. Kilogram, Metric Ton, Box"
+                                    value={uomModal.name}
+                                    onChange={(e) => setUomModal((prev) => ({ ...prev, name: e.target.value }))}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                    Abbreviation / Symbol *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    placeholder="e.g. kg, MT, box"
+                                    value={uomModal.abbreviation}
+                                    onChange={(e) => setUomModal((prev) => ({ ...prev, abbreviation: e.target.value }))}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
+                                />
+                            </div>
+
+                            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                                <button
+                                    type="button"
+                                    onClick={() => setUomModal({ isOpen: false, name: '', abbreviation: '', isSaving: false })}
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-sidebar-hover transition-colors cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={uomModal.isSaving}
+                                    className="px-4 py-2 bg-primary text-white font-semibold rounded-md text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
+                                >
+                                    {uomModal.isSaving ? 'Saving UOM...' : 'Save UOM'}
                                 </button>
                             </div>
                         </form>

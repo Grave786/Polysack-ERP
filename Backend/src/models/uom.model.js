@@ -6,9 +6,12 @@ const UomSchema = new mongoose.Schema({
         required: [true, 'UOM name is required'],
         trim: true
     },
+    abbreviation: {
+        type: String,
+        trim: true
+    },
     symbol: {
         type: String,
-        required: [true, 'UOM symbol is required'],
         trim: true
     },
     tenant: {
@@ -18,7 +21,7 @@ const UomSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        required: [true, 'UOM type is required'],
+        default: 'COUNT',
         enum: {
             values: ['WEIGHT', 'LENGTH', 'VOLUME', 'COUNT'],
             message: '{VALUE} is not a valid UOM type. Must be WEIGHT, LENGTH, VOLUME, or COUNT'
@@ -39,29 +42,18 @@ const UomSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-// Compound unique indexes per tenant
-UomSchema.index({ name: 1, tenant: 1 }, { unique: true });
-UomSchema.index({ symbol: 1, tenant: 1 }, { unique: true });
-
-// Pre-save validation: ensure only one base unit per (tenant, type)
-UomSchema.pre('save', async function (next) {
-    if (this.isBaseUnit) {
-        const existingBase = await this.constructor.findOne({
-            tenant: this.tenant,
-            type: this.type,
-            isBaseUnit: true,
-            _id: { $ne: this._id }
-        });
-
-        if (existingBase) {
-            const err = new Error(
-                `A base unit already exists for type '${this.type}' in this tenant: '${existingBase.name}' (${existingBase.symbol}). Only one base unit is allowed per type per tenant.`
-            );
-            err.name = 'ValidationError';
-            return next(err);
-        }
+// Sync abbreviation and symbol before validation
+UomSchema.pre('validate', function (next) {
+    if (!this.abbreviation && this.symbol) {
+        this.abbreviation = this.symbol;
+    }
+    if (!this.symbol && this.abbreviation) {
+        this.symbol = this.abbreviation;
     }
     next();
 });
+
+// Compound unique indexes per tenant
+UomSchema.index({ tenant: 1, name: 1 }, { unique: true });
 
 module.exports = mongoose.model('UOM', UomSchema);

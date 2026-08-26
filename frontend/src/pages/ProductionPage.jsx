@@ -58,7 +58,10 @@ export default function ProductionPage() {
                     render: (row) => {
                         const completedQty = Number(row.completedQuantity || 0);
                         const targetQty = Number(row.targetQuantity || 1);
-                        const pct = Math.min(100, Math.round((completedQty / Math.max(1, targetQty)) * 100));
+                        const completedStagesCount = Array.isArray(row.stages) ? row.stages.filter((s) => s.status === 'COMPLETED').length : 0;
+                        const pct = row.progressPercentage !== undefined 
+                            ? row.progressPercentage 
+                            : Math.min(100, Math.round((completedStagesCount / 6) * 100));
 
                         const activeStage = Array.isArray(row.stages) ? row.stages.find((s) => s.status === 'ACTIVE') : null;
                         const activeLabel = activeStage

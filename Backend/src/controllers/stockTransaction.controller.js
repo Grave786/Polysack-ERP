@@ -65,7 +65,8 @@ const executeStockTransactionCore = async (params, sessionOption = {}) => {
         }
     }
 
-    let newStock = itemDoc.currentStock;
+    const previousStock = Number(itemDoc.currentStock || 0);
+    let newStock = previousStock;
     let newPendingStock = itemDoc.pendingQCStock || 0;
 
     switch (transactionType) {
@@ -133,6 +134,8 @@ const executeStockTransactionCore = async (params, sessionOption = {}) => {
         item: itemDoc._id,
         transactionType,
         quantity: numQuantity,
+        previousStock,
+        newStock,
         fromLocation: fromLocation || null,
         toLocation: toLocation || null,
         batchNumber,
@@ -189,6 +192,13 @@ const createStockTransaction = async (req, res) => {
         return res.status(400).json({
             success: false,
             message: 'Please provide all required fields: referenceNumber, itemType, item, transactionType, and quantity.'
+        });
+    }
+
+    if ((transactionType === 'ADJUSTMENT' || transactionType === 'STOCK_OUT') && (!notes || !notes.trim())) {
+        return res.status(400).json({
+            success: false,
+            message: 'Reason / Remarks (notes) are strictly required for manual stock adjustments.'
         });
     }
 

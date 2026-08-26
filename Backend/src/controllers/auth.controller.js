@@ -131,12 +131,24 @@ const login = async (req, res) => {
             });
         }
 
+        // 4b. Verify Tenant active status (if tenant-scoped user)
+        if (user.tenant) {
+            const Tenant = require('../models/tenant.model');
+            const tenantDoc = await Tenant.findById(user.tenant).select('isActive name').lean();
+            if (!tenantDoc || tenantDoc.isActive === false) {
+                return res.status(403).json({
+                    success: false,
+                    code: 'TENANT_SUSPENDED',
+                    message: "Your organization's account has been suspended. Please contact support."
+                });
+            }
+        }
+
         // 5. Generate JWT token using generateToken utility
         const token = generateToken(user);
 
-        // 6. Exclude password from user object in response
-        const userResponse = user.toObject();
-        delete userResponse.password;
+        // 6. Exclude password & format permissions/isSuperAdmin in user object
+        const userResponse = formatUserResponse(user);
 
         return res.status(200).json({
             success: true,
@@ -152,6 +164,37 @@ const login = async (req, res) => {
             error: error.message
         });
     }
+};
+
+/**
+ * Helper to format user response with isSuperAdmin & permittedModules
+ */
+const formatUserResponse = (userDoc) => {
+    const userObj = userDoc.toObject ? userDoc.toObject() : { ...userDoc };
+    delete userObj.password;
+
+    const userRoleName = typeof userObj.role === 'object' ? userObj.role?.name : userObj.role;
+    const isSuperAdmin = Boolean(
+        !userObj.tenant ||
+        userObj.email === (process.env.SUPER_ADMIN_EMAIL || 'superadmin@polysack.com') ||
+        userRoleName === 'SUPER_ADMIN' ||
+        userRoleName === 'Super Admin'
+    );
+
+    let permittedModules = [];
+    if (isSuperAdmin) {
+        permittedModules = ['SUPER_ADMIN_PANEL', 'TENANTS', 'USERS', 'ROLES', 'DASHBOARD'];
+    } else if (userObj.role && Array.isArray(userObj.role.permissions)) {
+        const permSet = new Set();
+        userObj.role.permissions.forEach((p) => {
+            if (p.module) permSet.add(p.module);
+        });
+        permittedModules = Array.from(permSet);
+    }
+
+    userObj.isSuperAdmin = isSuperAdmin;
+    userObj.permittedModules = permittedModules;
+    return userObj;
 };
 
 /**
@@ -178,9 +221,11 @@ const getMe = async (req, res) => {
             });
         }
 
+        const userResponse = formatUserResponse(user);
+
         return res.status(200).json({
             success: true,
-            data: user
+            data: userResponse
         });
     } catch (error) {
         console.error('Error in getMe controller:', error);

@@ -15,17 +15,18 @@ const createUOM = async (req, res) => {
             });
         }
 
-        const { name, symbol, type, isBaseUnit, conversionFactor, isActive } = req.body;
+        const { name, symbol, abbreviation, type, isBaseUnit, conversionFactor, isActive } = req.body;
+        const finalAbbr = abbreviation || symbol;
 
         // 1. Basic validation
-        if (!name || !symbol || !type) {
+        if (!name || !finalAbbr) {
             return res.status(400).json({
                 success: false,
-                message: 'Please provide all required fields: name, symbol, and type.'
+                message: 'Please provide required fields: name and abbreviation (or symbol).'
             });
         }
 
-        // 2. Check for duplicate name or symbol in this tenant
+        // 2. Check for duplicate name in this tenant
         const existingName = await UOM.findOne({ name, tenant: tenantId });
         if (existingName) {
             return res.status(400).json({
@@ -34,19 +35,12 @@ const createUOM = async (req, res) => {
             });
         }
 
-        const existingSymbol = await UOM.findOne({ symbol, tenant: tenantId });
-        if (existingSymbol) {
-            return res.status(400).json({
-                success: false,
-                message: `A UOM with the symbol '${symbol}' already exists in your organization.`
-            });
-        }
-
         // 3. Create UOM (tenant overridden from req.user.tenant)
         const newUom = new UOM({
-            name,
-            symbol,
-            type,
+            name: name.trim(),
+            abbreviation: finalAbbr.trim(),
+            symbol: finalAbbr.trim(),
+            type: type || 'COUNT',
             isBaseUnit: isBaseUnit || false,
             conversionFactor: conversionFactor !== undefined ? conversionFactor : 1,
             isActive: isActive !== undefined ? isActive : true,

@@ -42,6 +42,7 @@ const attendanceRoutes = require('./src/routes/attendance.routes');
 const rosterRoutes = require('./src/routes/roster.routes');
 const crmRoutes = require('./src/routes/crm.routes');
 const analyticsRoutes = require('./src/routes/analytics.routes');
+const superAdminRoutes = require('./src/routes/superAdmin.routes');
 const dashboardRoutes = require('./src/routes/dashboard.routes');
 
 const app = express();
@@ -94,6 +95,7 @@ app.use('/api/tenants', tenantRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/uom', uomRoutes);
+app.use('/api/uoms', uomRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/suppliers', supplierRoutes);
@@ -119,6 +121,7 @@ app.use('/api/attendance', attendanceRoutes);
 app.use('/api/rosters', rosterRoutes);
 app.use('/api/crm', crmRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 
 const PORT = process.env.PORT || 5000;

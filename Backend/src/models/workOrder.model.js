@@ -86,6 +86,12 @@ const WorkOrderSchema = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    progressPercentage: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 100
+    },
     priority: {
         type: String,
         default: 'MEDIUM',
@@ -115,6 +121,13 @@ const WorkOrderSchema = new mongoose.Schema({
         default: true
     }
 }, { timestamps: true });
+
+WorkOrderSchema.methods.recalculateProgress = function () {
+    const total = this.stages?.length || 6;
+    const completed = (this.stages || []).filter((s) => s.status === 'COMPLETED').length;
+    this.progressPercentage = Math.min(100, Math.round((completed / total) * 100));
+    return this.progressPercentage;
+};
 
 WorkOrderSchema.index({ workOrderNumber: 1, tenant: 1 }, { unique: true });
 WorkOrderSchema.index({ tenant: 1, createdAt: 1 });

@@ -1,7 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { createTenant, getTenantProfile, updateTenantProfile } = require('../controllers/tenant.controller');
+const { createTenant, getTenantProfile, updateTenantProfile, getTenantsList } = require('../controllers/tenant.controller');
 const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+
+/**
+ * @route   GET /api/tenants
+ * @desc    Get list of all tenants in system
+ * @access  Private (Super Admin / USERS:READ)
+ */
+router.get('/', authenticate, checkPermission('USERS', 'READ'), getTenantsList);
 
 /**
  * @route   GET /api/tenants/profile

@@ -144,6 +144,14 @@ export default function InventoryPage() {
             )
         },
         {
+            header: 'BEFORE → AFTER',
+            render: (row) => (
+                <span className="font-mono text-xs text-text-muted">
+                    {row.previousStock !== undefined ? row.previousStock.toLocaleString('en-IN') : '-'} → <strong className="text-text-main">{row.newStock !== undefined ? row.newStock.toLocaleString('en-IN') : '-'}</strong>
+                </span>
+            )
+        },
+        {
             header: 'FROM → TO LOCATION',
             render: (row) => (
                 <span className="text-xs text-text-muted">

@@ -324,6 +324,14 @@ const advanceStage = async (req, res) => {
             }
         }
 
+        // Recalculate WorkOrder progress percentage based on completed stages
+        if (typeof workOrder.recalculateProgress === 'function') {
+            workOrder.recalculateProgress();
+        } else {
+            const completedCount = (workOrder.stages || []).filter((s) => s.status === 'COMPLETED').length;
+            workOrder.progressPercentage = Math.min(100, Math.round((completedCount / (workOrder.stages?.length || 6)) * 100));
+        }
+
         await workOrder.save(sessionOption);
 
         if (useTransaction && session) {

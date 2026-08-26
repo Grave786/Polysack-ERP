@@ -2,6 +2,18 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import toast from 'react-hot-toast';
 
+let isAccessDeniedToastShowing = false;
+
+const showSingleAccessDeniedToast = (msg) => {
+    if (!isAccessDeniedToastShowing) {
+        isAccessDeniedToastShowing = true;
+        toast.error(msg || 'Access Denied: You do not have permission to access this module.');
+        setTimeout(() => {
+            isAccessDeniedToastShowing = false;
+        }, 3000);
+    }
+};
+
 export default function ProtectedRoute({ allowedRoles, requiredModule, requiredAction }) {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
     const isLoading = useAuthStore((state) => state.isLoading);
@@ -21,30 +33,49 @@ export default function ProtectedRoute({ allowedRoles, requiredModule, requiredA
 
     if (user) {
         const userRoleName = (user.roleName || (typeof user.role === 'object' ? user.role?.name : user.role) || '').toLowerCase();
-        const isAdmin = userRoleName.includes('admin') || userRoleName === 'super admin';
+        const isSuperAdmin = Boolean(user.isSuperAdmin || !user.tenant || user.email === 'superadmin@polysack.com' || userRoleName === 'super admin' || userRoleName === 'super_admin');
 
-        // Admins bypass role/permission blocks
-        if (!isAdmin) {
-            // Check allowedRoles if specified
-            if (Array.isArray(allowedRoles) && allowedRoles.length > 0) {
-                const hasAllowedRole = allowedRoles.some((r) => r.toLowerCase() === userRoleName);
-                if (!hasAllowedRole) {
-                    toast.error('Access denied: You do not have the required role for this page.');
-                    return <Navigate to="/dashboard" replace />;
-                }
+        // 1. Super Admin Route Scoping
+        if (isSuperAdmin) {
+            // Super Admin must NOT access operational ERP modules
+            if (requiredModule && ['PRODUCTION', 'QUALITY', 'INVENTORY', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS', 'MASTER_DATA'].includes(requiredModule)) {
+                showSingleAccessDeniedToast('Access Denied: Operational shop-floor modules are reserved for tenant users.');
+                return <Navigate to="/dashboard" replace />;
+            }
+            return <Outlet />;
+        }
+
+        // 2. Tenant User Permission Check
+        if (requiredModule) {
+            const permittedModules = user.permittedModules || [];
+            const permissions = user.role?.permissions || user.permissions || [];
+
+            let hasPerm = false;
+
+            if (permittedModules.length > 0) {
+                hasPerm = permittedModules.includes(requiredModule);
             }
 
-            // Check requiredModule and requiredAction if specified
-            if (requiredModule && requiredAction) {
-                const permissions = user.role?.permissions || user.permissions || [];
-                const hasPerm = Array.isArray(permissions) && permissions.some(
-                    (p) => (typeof p === 'object' ? p.module === requiredModule && p.action === requiredAction : p === `${requiredModule}:${requiredAction}`)
-                );
+            if (!hasPerm && Array.isArray(permissions) && permissions.length > 0) {
+                hasPerm = permissions.some((p) => {
+                    if (typeof p === 'object') {
+                        if (requiredAction) {
+                            return p.module === requiredModule && p.action === requiredAction;
+                        }
+                        return p.module === requiredModule;
+                    }
+                    return String(p).startsWith(requiredModule);
+                });
+            }
 
-                if (!hasPerm) {
-                    toast.error(`Access denied: Required permission '${requiredModule}:${requiredAction}' missing.`);
-                    return <Navigate to="/dashboard" replace />;
-                }
+            // Tenant Admin role fallback for all modules
+            if (userRoleName.includes('admin') || userRoleName.includes('tenant admin')) {
+                hasPerm = true;
+            }
+
+            if (!hasPerm) {
+                showSingleAccessDeniedToast(`Access Denied: You do not have permission to access the '${requiredModule}' module.`);
+                return <Navigate to="/dashboard" replace />;
             }
         }
     }

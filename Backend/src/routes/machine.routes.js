@@ -6,6 +6,7 @@ const {
     exportMachines,
     getMachineById,
     updateMachine,
+    updateMachineStatus,
     deleteMachine
 } = require('../controllers/machine.controller');
 const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
@@ -37,6 +38,13 @@ router.get('/export', authenticate, checkPermission('MASTER_DATA', 'READ'), expo
  * @access  Private (MASTER_DATA:READ)
  */
 router.get('/:id', authenticate, checkPermission('MASTER_DATA', 'READ'), getMachineById);
+
+/**
+ * @route   PATCH /api/machines/:id/status
+ * @desc    Update Machine status
+ * @access  Private (MASTER_DATA:UPDATE)
+ */
+router.patch('/:id/status', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), updateMachineStatus);
 
 /**
  * @route   PUT /api/machines/:id

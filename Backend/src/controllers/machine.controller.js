@@ -93,16 +93,19 @@ const createMachine = async (req, res) => {
             });
         }
 
+        const formattedSection = String(section || 'EXTRUSION').trim().toUpperCase();
+        const formattedStatus = String(status || 'AVAILABLE').trim().toUpperCase();
+
         // 4. Create Machine
         const machine = new Machine({
             code: formattedCode,
             name: formattedName,
-            section,
+            section: formattedSection,
             capacityPerHour: capacityPerHour !== undefined ? Number(capacityPerHour) : undefined,
             capacityUnit: capacityUnit || null,
             defaultLocation: defaultLocation || null,
             currentOperator,
-            status: status || 'IDLE',
+            status: formattedStatus,
             efficiency: efficiency !== undefined ? Number(efficiency) : 0,
             isActive: isActive !== undefined ? isActive : true,
             tenant: tenantId
@@ -500,11 +503,60 @@ const deleteMachine = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Update machine status only (partial update)
+ * @route   PATCH /api/machines/:id/status
+ * @access  Private (MASTER_DATA:UPDATE permission)
+ */
+const updateMachineStatus = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing.'
+            });
+        }
+
+        const machine = await Machine.findOne({ _id: req.params.id, tenant: tenantId });
+        if (!machine) {
+            return res.status(404).json({
+                success: false,
+                message: 'Machine not found.'
+            });
+        }
+
+        const { status, isActive } = req.body;
+        if (status) {
+            machine.status = String(status).trim().toUpperCase();
+        }
+        if (isActive !== undefined) {
+            machine.isActive = Boolean(isActive);
+        }
+
+        await machine.save();
+
+        return res.status(200).json({
+            success: true,
+            message: 'Machine status updated successfully.',
+            data: machine
+        });
+    } catch (error) {
+        console.error('Error in updateMachineStatus:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to update machine status.',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     createMachine,
     getMachines,
     exportMachines,
     getMachineById,
     updateMachine,
+    updateMachineStatus,
     deleteMachine
 };

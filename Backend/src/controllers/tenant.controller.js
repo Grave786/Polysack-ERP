@@ -115,6 +115,10 @@ const createTenant = async (req, res) => {
             session.endSession();
         }
 
+        // Auto-seed default UOMs, Locations, Shifts, and Categories for the new tenant
+        const { seedTenantMasterData } = require('../utils/tenantSeeder');
+        await seedTenantMasterData(newTenant._id);
+
         // Format user object response excluding password
         const adminUserResponse = adminUser.toObject();
         delete adminUserResponse.password;
@@ -250,8 +254,31 @@ const updateTenantProfile = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get list of all tenants in the system for Super Admin overview
+ * @route   GET /api/tenants
+ * @access  Private (Super Admin / USERS:READ)
+ */
+const getTenantsList = async (req, res) => {
+    try {
+        const tenants = await Tenant.find().sort({ createdAt: -1 });
+        return res.status(200).json({
+            success: true,
+            data: tenants
+        });
+    } catch (error) {
+        console.error('Error in getTenantsList:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch tenants list.',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     createTenant,
     getTenantProfile,
-    updateTenantProfile
+    updateTenantProfile,
+    getTenantsList
 };

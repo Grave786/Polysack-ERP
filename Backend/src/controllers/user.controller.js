@@ -128,8 +128,16 @@ const getUsers = async (req, res) => {
 const toggleUserActive = async (req, res) => {
     try {
         const { id } = req.params;
-        const userTenant = req.user?.tenant || null;
+        const currentUserId = String(req.user?._id || req.user?.id);
 
+        if (String(id) === currentUserId) {
+            return res.status(403).json({
+                success: false,
+                message: 'You cannot deactivate your own account.'
+            });
+        }
+
+        const userTenant = req.user?.tenant || null;
         const userDoc = await User.findOne({ _id: id, tenant: userTenant });
         if (!userDoc) {
             return res.status(404).json({
@@ -156,6 +164,47 @@ const toggleUserActive = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Failed to update user active status.'
+        });
+    }
+};
+
+/**
+ * @desc    Hard delete user account
+ * @route   DELETE /api/users/:id
+ * @access  Private (USERS:DELETE permission)
+ */
+const deleteUser = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const currentUserId = String(req.user?._id || req.user?.id);
+
+        if (String(id) === currentUserId) {
+            return res.status(403).json({
+                success: false,
+                message: 'You cannot delete your own account.'
+            });
+        }
+
+        const userTenant = req.user?.tenant || null;
+        const userDoc = await User.findOne({ _id: id, tenant: userTenant });
+        if (!userDoc) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found in your organization.'
+            });
+        }
+
+        await User.findByIdAndDelete(id);
+
+        return res.status(200).json({
+            success: true,
+            message: `User '${userDoc.name}' deleted successfully.`
+        });
+    } catch (error) {
+        console.error('Error in deleteUser:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to delete user.'
         });
     }
 };
@@ -261,6 +310,7 @@ module.exports = {
     createUser,
     getUsers,
     toggleUserActive,
+    deleteUser,
     updateProfile,
     changePassword
 };

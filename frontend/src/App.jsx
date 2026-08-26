@@ -49,28 +49,58 @@ export default function App() {
                     <Route path="/profile" element={<ProfilePage />} />
 
                     {/* Module-specific Protected Routes */}
-                    <Route element={<ProtectedRoute allowedRoles={['Tenant Admin', 'Super Admin', 'Production Manager', 'Operator']} />}>
+                    <Route element={<ProtectedRoute requiredModule="PRODUCTION" />}>
                         <Route path="/production" element={<ProductionPage />} />
                     </Route>
 
-                    <Route element={<ProtectedRoute allowedRoles={['Tenant Admin', 'Super Admin', 'Sales Operator', 'Biller']} />}>
+                    <Route element={<ProtectedRoute requiredModule="SALES" />}>
                         <Route path="/pos" element={<PosPage />} />
+                        <Route path="/sales" element={<SalesPage />} />
                     </Route>
 
-                    <Route path="/master-data" element={<MasterDataPage />} />
-                    <Route path="/quality" element={<QualityPage />} />
-                    <Route path="/inventory" element={<InventoryPage />} />
-                    <Route path="/sales" element={<SalesPage />} />
-                    <Route path="/procurement" element={<ProcurementPage />} />
-                    <Route path="/customer-crm" element={<CustomerCrmPage />} />
-                    <Route path="/dispatch" element={<DispatchPage />} />
-                    <Route path="/attendance" element={<AttendancePage />} />
-                    <Route path="/analytics" element={<AnalyticsPage />} />
-                    <Route path="/administration" element={<AdministrationPage />} />
-                    <Route path="/administration/roles" element={<RolesManagementPage />} />
-                    <Route path="/administration/users" element={<UserManagementPage />} />
-                    <Route path="/roles" element={<RolesManagementPage />} />
-                    <Route path="/users" element={<UserManagementPage />} />
+                    <Route element={<ProtectedRoute requiredModule="MASTER_DATA" />}>
+                        <Route path="/master-data" element={<MasterDataPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="QUALITY" />}>
+                        <Route path="/quality" element={<QualityPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="INVENTORY" />}>
+                        <Route path="/inventory" element={<InventoryPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="PROCUREMENT" />}>
+                        <Route path="/procurement" element={<ProcurementPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="CRM" />}>
+                        <Route path="/customer-crm" element={<CustomerCrmPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="DISPATCH" />}>
+                        <Route path="/dispatch" element={<DispatchPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="HR" />}>
+                        <Route path="/attendance" element={<AttendancePage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="ANALYTICS" />}>
+                        <Route path="/analytics" element={<AnalyticsPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="USERS" />}>
+                        <Route path="/administration" element={<AdministrationPage />} />
+                        <Route path="/administration/tenants" element={<AdministrationPage />} />
+                        <Route path="/administration/users" element={<UserManagementPage />} />
+                        <Route path="/users" element={<UserManagementPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="ROLES" />}>
+                        <Route path="/administration/roles" element={<RolesManagementPage />} />
+                        <Route path="/roles" element={<RolesManagementPage />} />
+                    </Route>
 
                     {/* Fallback inside dashboard */}
                     <Route path="*" element={<Navigate to="/dashboard" replace />} />

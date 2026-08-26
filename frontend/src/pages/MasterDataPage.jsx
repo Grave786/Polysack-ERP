@@ -190,7 +190,11 @@ export default function MasterDataPage() {
                 },
                 {
                     header: 'UOM',
-                    render: (row) => typeof row.uom === 'object' ? row.uom?.symbol : (row.uom || 'kg')
+                    render: (row) => typeof row.uom === 'object' ? (row.uom?.symbol || row.uom?.name) : (row.uom || 'kg')
+                },
+                {
+                    header: 'Location',
+                    render: (row) => typeof row.defaultLocation === 'object' ? (row.defaultLocation?.name || row.defaultLocation?.code) : (row.defaultLocation || '-')
                 },
                 { header: 'Reorder Level', accessor: 'reorderLevel' },
                 { header: 'Stock', accessor: 'currentStock' },

@@ -13,15 +13,26 @@ import {
     UserCheck,
     BarChart3,
     Settings,
-    User,
     Users,
+    Building2,
     X
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 
 const SIDEBAR_SECTIONS = [
     {
+        title: 'PLATFORM MANAGEMENT',
+        superAdminOnly: true,
+        items: [
+            { name: 'System Dashboard', path: '/dashboard', icon: LayoutDashboard },
+            { name: 'Tenant Accounts', path: '/administration/tenants', icon: Building2 },
+            { name: 'System Roles', path: '/administration/roles', icon: ShieldCheck },
+            { name: 'Platform Users', path: '/administration/users', icon: Users }
+        ]
+    },
+    {
         title: 'CORE ERP',
+        tenantOnly: true,
         items: [
             { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
             { name: 'Master Data', path: '/master-data', icon: Database, module: 'MASTER_DATA' }
@@ -29,16 +40,18 @@ const SIDEBAR_SECTIONS = [
     },
     {
         title: 'OPERATIONS',
+        tenantOnly: true,
         items: [
-            { name: 'Production', path: '/production', icon: Factory, module: 'PRODUCTION', blockedRoles: ['biller', 'sales operator'] },
+            { name: 'Production', path: '/production', icon: Factory, module: 'PRODUCTION' },
             { name: 'Quality Control', path: '/quality', icon: ShieldCheck, module: 'QUALITY' },
             { name: 'Inventory & Stock', path: '/inventory', icon: Boxes, module: 'INVENTORY' }
         ]
     },
     {
         title: 'COMMERCIAL',
+        tenantOnly: true,
         items: [
-            { name: 'POS Billing Terminal', path: '/pos', icon: CreditCard, module: 'SALES', blockedRoles: ['production manager', 'qa inspector'] },
+            { name: 'POS Billing Terminal', path: '/pos', icon: CreditCard, module: 'SALES' },
             { name: 'Sales & Billing', path: '/sales', icon: Receipt, module: 'SALES' },
             { name: 'Purchase & GRN', path: '/procurement', icon: ShoppingBag, module: 'PROCUREMENT' },
             { name: 'Customer CRM', path: '/customer-crm', icon: Contact, module: 'CRM' },
@@ -47,12 +60,13 @@ const SIDEBAR_SECTIONS = [
     },
     {
         title: 'MANAGEMENT',
+        tenantOnly: true,
         items: [
             { name: 'Attendance & HR', path: '/attendance', icon: UserCheck, module: 'HR' },
             { name: 'Analytics & Reports', path: '/analytics', icon: BarChart3, module: 'ANALYTICS' },
-            { name: 'Administration', path: '/administration', icon: Settings, module: 'USERS' },
-            { name: 'Roles & Permissions', path: '/administration/roles', icon: ShieldCheck, module: 'ROLES', allowedRoles: ['tenant admin', 'super admin'] },
-            { name: 'User Accounts', path: '/administration/users', icon: Users, module: 'USERS', allowedRoles: ['tenant admin', 'super admin'] }
+            { name: 'Company Settings', path: '/administration', icon: Settings, module: 'USERS' },
+            { name: 'Roles & Permissions', path: '/administration/roles', icon: ShieldCheck, module: 'ROLES' },
+            { name: 'User Accounts', path: '/administration/users', icon: Users, module: 'USERS' }
         ]
     }
 ];
@@ -61,28 +75,40 @@ export default function Sidebar({ isOpen, onClose }) {
     const user = useAuthStore((state) => state.user);
 
     const userRoleName = (user?.roleName || (typeof user?.role === 'object' ? user?.role?.name : user?.role) || '').toLowerCase();
-    const isAdmin = userRoleName.includes('admin') || userRoleName === 'super admin';
+    const isSuperAdmin = Boolean(
+        user?.isSuperAdmin ||
+        !user?.tenant ||
+        user?.email === 'superadmin@polysack.com' ||
+        userRoleName === 'super admin' ||
+        userRoleName === 'super_admin'
+    );
+    const isTenantAdmin = userRoleName.includes('admin') || userRoleName.includes('tenant admin');
 
     const isItemVisible = (item) => {
-        // Admin roles see all sidebar items
-        if (isAdmin) return true;
-
-        // Block specific roles if blockedRoles array is specified
-        if (item.blockedRoles && item.blockedRoles.includes(userRoleName)) {
-            return false;
+        // Super Admin sees ONLY the 4 designated platform management links
+        if (isSuperAdmin) {
+            return ['/dashboard', '/administration/tenants', '/administration/roles', '/administration/users'].includes(item.path);
         }
 
-        // Allow specific roles if allowedRoles array is specified
-        if (item.allowedRoles) {
-            return item.allowedRoles.includes(userRoleName);
-        }
+        // Dashboard is visible for all tenant users
+        if (item.path === '/dashboard') return true;
 
-        // Permission module check
+        // Tenant Admin sees all tenant modules
+        if (isTenantAdmin) return true;
+
+        // Dynamic permission check for regular tenant users
+        const permittedModules = user?.permittedModules || [];
+        const permissions = user?.role?.permissions || user?.permissions || [];
+
         if (item.module) {
-            const permissions = user?.role?.permissions || user?.permissions || [];
+            if (permittedModules.length > 0) {
+                return permittedModules.includes(item.module);
+            }
+
             if (Array.isArray(permissions) && permissions.length > 0) {
                 return permissions.some((p) => (typeof p === 'object' ? p.module === item.module : String(p).startsWith(item.module)));
             }
+            return false;
         }
 
         return true;
@@ -120,6 +146,9 @@ export default function Sidebar({ isOpen, onClose }) {
 
                 <nav className="p-3 space-y-4 flex-1">
                     {SIDEBAR_SECTIONS.map((section) => {
+                        if (isSuperAdmin && section.tenantOnly) return null;
+                        if (!isSuperAdmin && section.superAdminOnly) return null;
+
                         const visibleItems = section.items.filter(isItemVisible);
                         if (visibleItems.length === 0) return null;
 
@@ -134,6 +163,7 @@ export default function Sidebar({ isOpen, onClose }) {
                                         <NavLink
                                             key={item.name}
                                             to={item.path}
+                                            end={true}
                                             onClick={onClose}
                                             className={({ isActive }) =>
                                                 `flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap overflow-hidden transition-all duration-150 ${

@@ -9,6 +9,17 @@ const axiosInstance = axios.create({
     }
 });
 
+let is403ToastActive = false;
+const showSingle403Toast = (msg) => {
+    if (!is403ToastActive) {
+        is403ToastActive = true;
+        toast.error(msg || 'Access Denied: You do not have permission to access this module.');
+        setTimeout(() => {
+            is403ToastActive = false;
+        }, 3000);
+    }
+};
+
 // Request Interceptor: Attach Bearer JWT token dynamically from localStorage or Cookies before EVERY single request
 axiosInstance.interceptors.request.use(
     (config) => {
@@ -32,7 +43,23 @@ axiosInstance.interceptors.response.use(
     (response) => response,
     (error) => {
         const status = error.response?.status;
+        const errCode = error.response?.data?.code;
         const errorMessage = error.response?.data?.message || 'An error occurred while processing your request.';
+        const isTenantSuspended = errCode === 'TENANT_SUSPENDED' || errorMessage?.toLowerCase()?.includes('suspended');
+
+        if (isTenantSuspended) {
+            Cookies.remove('polysack_token');
+            Cookies.remove('token');
+            if (typeof window !== 'undefined') {
+                localStorage.removeItem('token');
+                localStorage.removeItem('polysack_token');
+                localStorage.removeItem('polysack_user');
+                if (!window.location.pathname.includes('/login')) {
+                    window.location.href = '/login?suspended=true';
+                }
+            }
+            return Promise.reject(error);
+        }
 
         if (status === 401) {
             const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
@@ -51,7 +78,7 @@ axiosInstance.interceptors.response.use(
                 }
             }
         } else if (status === 403) {
-            toast.error(errorMessage || 'Access Denied: You do not have permission for this action.');
+            showSingle403Toast(errorMessage || 'Access Denied: You do not have permission to access this module.');
         }
 
         return Promise.reject(error);

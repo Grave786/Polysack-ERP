@@ -1,12 +1,56 @@
 import { useState, useEffect } from 'react';
-import { Building2, ShieldCheck, RefreshCw, Save, CheckCircle } from 'lucide-react';
+import { Building2, RefreshCw, Save, CheckCircle, Plus, Edit2, ShieldAlert, Check, X, UserCheck } from 'lucide-react';
+import { useAuthStore } from '../store/authStore';
+import SlideOverPanel from '../components/shared/SlideOverPanel';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 
 export default function AdministrationPage() {
+    const user = useAuthStore((state) => state.user);
+    const userRoleName = (user?.roleName || (typeof user?.role === 'object' ? user?.role?.name : user?.role) || '').toLowerCase();
+    const isSuperAdmin = Boolean(
+        user?.isSuperAdmin ||
+        !user?.tenant ||
+        user?.email === 'superadmin@polysack.com' ||
+        userRoleName === 'super admin' ||
+        userRoleName === 'super_admin'
+    );
+
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
 
+    // =========================================================
+    // SUPER ADMIN STATE
+    // =========================================================
+    const [tenantsList, setTenantsList] = useState([]);
+    const [isCreateTenantDrawerOpen, setIsCreateTenantDrawerOpen] = useState(false);
+    const [isEditTenantDrawerOpen, setIsEditTenantDrawerOpen] = useState(false);
+    const [selectedTenantId, setSelectedTenantId] = useState(null);
+
+    // Create Tenant Form State
+    const [newTenantForm, setNewTenantForm] = useState({
+        tenantName: '',
+        tenantEmail: '',
+        tenantPhone: '',
+        adminName: '',
+        adminEmail: '',
+        adminPassword: 'Password@123'
+    });
+
+    // Edit Specific Tenant Profile State
+    const [tenantProfileForm, setTenantProfileForm] = useState({
+        companyName: '',
+        gstin: '',
+        stateName: 'Gujarat',
+        pan: '',
+        contactEmail: '',
+        contactPhone: '',
+        registeredAddress: { line1: '', line2: '', city: '', pincode: '' }
+    });
+
+    // =========================================================
+    // TENANT ADMIN STATE
+    // =========================================================
     const [formData, setFormData] = useState({
         companyName: '',
         gstin: '',
@@ -14,87 +58,188 @@ export default function AdministrationPage() {
         pan: '',
         contactEmail: '',
         contactPhone: '',
-        registeredAddress: {
-            line1: '',
-            line2: '',
-            city: '',
-            pincode: ''
-        }
+        registeredAddress: { line1: '', line2: '', city: '', pincode: '' }
     });
 
-    // Derived state code preview
     const derivedStateCode = formData.gstin && formData.gstin.length >= 2 ? formData.gstin.substring(0, 2) : '';
+    const derivedTenantEditStateCode = tenantProfileForm.gstin && tenantProfileForm.gstin.length >= 2 ? tenantProfileForm.gstin.substring(0, 2) : '';
 
-    // Fetch existing Tenant Company Profile on Mount
+    // Load initial data based on role
     useEffect(() => {
         setIsLoading(true);
-        axiosInstance.get('/admin/company-profile')
+
+        if (isSuperAdmin) {
+            // Super Admin: Fetch list of all platform tenants
+            axiosInstance.get('/super-admin/tenants')
+                .then((res) => {
+                    if (res.data?.success && Array.isArray(res.data.data)) {
+                        setTenantsList(res.data.data);
+                    }
+                })
+                .catch((err) => {
+                    console.error('Error fetching platform tenants:', err);
+                    toast.error('Failed to load platform tenants list');
+                })
+                .finally(() => {
+                    setIsLoading(false);
+                });
+        } else {
+            // Tenant Admin: Fetch self-scoped company profile
+            axiosInstance.get('/admin/company-profile')
+                .then((res) => {
+                    if (res.data?.success && res.data?.data) {
+                        const profile = res.data.data;
+                        setFormData({
+                            companyName: profile.companyName || profile.name || '',
+                            gstin: profile.gstin || '',
+                            stateName: profile.stateName || 'Gujarat',
+                            pan: profile.pan || '',
+                            contactEmail: profile.contactEmail || profile.email || '',
+                            contactPhone: profile.contactPhone || profile.phone || '',
+                            registeredAddress: {
+                                line1: profile.registeredAddress?.line1 || '',
+                                line2: profile.registeredAddress?.line2 || '',
+                                city: profile.registeredAddress?.city || '',
+                                pincode: profile.registeredAddress?.pincode || ''
+                            }
+                        });
+                    }
+                })
+                .catch((err) => {
+                    console.error('Error loading company profile:', err);
+                    toast.error('Failed to load company profile');
+                })
+                .finally(() => {
+                    setIsLoading(false);
+                });
+        }
+    }, [isSuperAdmin]);
+
+    // Refresh tenants list for Super Admin
+    const refreshTenants = () => {
+        setIsLoading(true);
+        axiosInstance.get('/super-admin/tenants')
+            .then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    setTenantsList(res.data.data);
+                }
+            })
+            .catch((err) => console.error(err))
+            .finally(() => setIsLoading(false));
+    };
+
+    // Open Edit Specific Tenant Drawer
+    const handleOpenEditTenant = (tenantId) => {
+        setSelectedTenantId(tenantId);
+        setIsLoading(true);
+        axiosInstance.get(`/super-admin/tenants/${tenantId}/company-profile`)
             .then((res) => {
                 if (res.data?.success && res.data?.data) {
-                    const profile = res.data.data;
-                    setFormData({
-                        companyName: profile.companyName || profile.tenantName || '',
-                        gstin: profile.gstin || '',
-                        stateName: profile.stateName || 'Gujarat',
-                        pan: profile.pan || '',
-                        contactEmail: profile.contactEmail || profile.email || '',
-                        contactPhone: profile.contactPhone || profile.phone || '',
+                    const t = res.data.data;
+                    setTenantProfileForm({
+                        companyName: t.companyName || t.name || '',
+                        gstin: t.gstin || '',
+                        stateName: t.stateName || 'Gujarat',
+                        pan: t.pan || '',
+                        contactEmail: t.email || '',
+                        contactPhone: t.phone || '',
                         registeredAddress: {
-                            line1: profile.registeredAddress?.line1 || '',
-                            line2: profile.registeredAddress?.line2 || '',
-                            city: profile.registeredAddress?.city || '',
-                            pincode: profile.registeredAddress?.pincode || ''
+                            line1: t.registeredAddress?.line1 || '',
+                            line2: t.registeredAddress?.line2 || '',
+                            city: t.registeredAddress?.city || '',
+                            pincode: t.registeredAddress?.pincode || ''
                         }
                     });
+                    setIsEditTenantDrawerOpen(true);
                 }
             })
             .catch((err) => {
-                console.error('Error loading company profile:', err);
-                toast.error('Failed to load company profile');
+                console.error('Error fetching tenant details:', err);
+                toast.error('Failed to load tenant details');
             })
-            .finally(() => {
-                setIsLoading(false);
-            });
-    }, []);
-
-    const handleChange = (field, value) => {
-        setFormData((prev) => ({ ...prev, [field]: value }));
+            .finally(() => setIsLoading(false));
     };
 
-    const handleAddressChange = (field, value) => {
-        setFormData((prev) => ({
-            ...prev,
-            registeredAddress: {
-                ...prev.registeredAddress,
-                [field]: value
-            }
-        }));
-    };
-
-    const handleSubmit = async (e) => {
+    // Save Specific Tenant Profile (Super Admin)
+    const handleSaveTenantProfile = async (e) => {
         e.preventDefault();
-
-        if (formData.gstin) {
-            const cleanGstin = formData.gstin.trim().toUpperCase();
-            const gstinRegex = /^\d{2}[A-Z]{5}\d{4}[A-Z]{1}\d[Z]{1}[A-Z\d]{1}$/;
-            if (!gstinRegex.test(cleanGstin)) {
-                toast.error('Invalid GSTIN format. Expected 15 characters (e.g. 24AAAAA0000A1Z5)');
-                return;
-            }
-        }
-
-        if (formData.pan) {
-            const cleanPan = formData.pan.trim().toUpperCase();
-            const panRegex = /^[A-Z]{5}\d{4}[A-Z]{1}$/;
-            if (!panRegex.test(cleanPan)) {
-                toast.error('Invalid PAN format. Expected 10 characters (e.g. AAAAA0000A)');
-                return;
-            }
-        }
+        if (!selectedTenantId) return;
 
         try {
             setIsSaving(true);
+            const payload = {
+                companyName: tenantProfileForm.companyName.trim(),
+                name: tenantProfileForm.companyName.trim(),
+                gstin: tenantProfileForm.gstin.trim().toUpperCase(),
+                stateName: tenantProfileForm.stateName.trim(),
+                stateCode: derivedTenantEditStateCode || undefined,
+                pan: tenantProfileForm.pan.trim().toUpperCase(),
+                email: tenantProfileForm.contactEmail.trim(),
+                phone: tenantProfileForm.contactPhone.trim(),
+                registeredAddress: tenantProfileForm.registeredAddress
+            };
 
+            const res = await axiosInstance.patch(`/super-admin/tenants/${selectedTenantId}/company-profile`, payload);
+            if (res.data?.success) {
+                toast.success('Tenant company & GST profile updated successfully!');
+                setIsEditTenantDrawerOpen(false);
+                refreshTenants();
+            }
+        } catch (err) {
+            console.error('Error updating tenant profile:', err);
+            toast.error(err.response?.data?.message || 'Failed to update tenant profile');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    // Toggle Tenant Active/Suspended Status
+    const handleToggleTenantStatus = async (tenant) => {
+        try {
+            const nextStatus = !tenant.isActive;
+            const res = await axiosInstance.patch(`/super-admin/tenants/${tenant._id}/status`, { isActive: nextStatus });
+            if (res.data?.success) {
+                toast.success(`Tenant ${tenant.name} is now ${nextStatus ? 'Active' : 'Suspended'}`);
+                refreshTenants();
+            }
+        } catch (err) {
+            console.error('Error toggling tenant status:', err);
+            toast.error('Failed to toggle tenant status');
+        }
+    };
+
+    // Create New Tenant Submission
+    const handleCreateTenant = async (e) => {
+        e.preventDefault();
+        try {
+            setIsSaving(true);
+            const res = await axiosInstance.post('/tenants', newTenantForm);
+            if (res.data?.success) {
+                toast.success('New Tenant and Tenant Admin created successfully!');
+                setIsCreateTenantDrawerOpen(false);
+                setNewTenantForm({
+                    tenantName: '',
+                    tenantEmail: '',
+                    tenantPhone: '',
+                    adminName: '',
+                    adminEmail: '',
+                    adminPassword: 'Password@123'
+                });
+                refreshTenants();
+            }
+        } catch (err) {
+            console.error('Error creating tenant:', err);
+            toast.error(err.response?.data?.message || 'Failed to create tenant');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    // Save Tenant Admin Self Company Profile
+    const handleSubmitSelfProfile = async (e) => {
+        e.preventDefault();
+        try {
+            setIsSaving(true);
             const payload = {
                 companyName: formData.companyName.trim(),
                 name: formData.companyName.trim(),
@@ -108,7 +253,6 @@ export default function AdministrationPage() {
             };
 
             const res = await axiosInstance.put('/admin/company-profile', payload);
-
             if (res.data?.success) {
                 toast.success('Company GST Profile & Settings saved successfully!');
             }
@@ -124,11 +268,424 @@ export default function AdministrationPage() {
         return (
             <div className="flex flex-col items-center justify-center p-16 bg-card-bg border border-border rounded-xl font-sans">
                 <RefreshCw className="animate-spin text-primary mb-3" size={26} />
-                <p className="text-xs font-semibold text-text-muted">Loading Company Profile & GST Settings...</p>
+                <p className="text-xs font-semibold text-text-muted">Loading Administration Settings...</p>
             </div>
         );
     }
 
+    // =========================================================
+    // 1. SUPER ADMIN VIEW: PLATFORM TENANT ACCOUNTS MANAGEMENT
+    // =========================================================
+    if (isSuperAdmin) {
+        return (
+            <div className="space-y-6 font-sans">
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-4">
+                    <div>
+                        <h1 className="text-xl font-extrabold text-text-main tracking-tight">
+                            Tenant Accounts Management
+                        </h1>
+                        <p className="text-xs text-text-muted mt-0.5">
+                            Manage Multi-Tenant Organizations, Provision Tenant Admins & Edit Company Profiles
+                        </p>
+                    </div>
+
+                    <button
+                        type="button"
+                        onClick={() => setIsCreateTenantDrawerOpen(true)}
+                        className="flex items-center gap-1.5 px-4 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer shrink-0"
+                    >
+                        <Plus size={16} />
+                        <span>+ Register New Tenant</span>
+                    </button>
+                </div>
+
+                {/* Tenants Table Card */}
+                <div className="bg-card-bg border border-border rounded-xl shadow-xs overflow-hidden">
+                    <div className="p-4 border-b border-border bg-app-bg flex justify-between items-center">
+                        <h3 className="text-xs font-extrabold text-text-main uppercase tracking-wider">
+                            SYSTEM TENANT ORGANIZATIONS ({tenantsList.length})
+                        </h3>
+                        <span className="text-[10px] font-mono font-extrabold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded-full">
+                            • Isolated Compound Indexing
+                        </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse font-sans">
+                            <thead>
+                                <tr className="bg-table-header-bg text-table-header-text font-extrabold uppercase text-[10px]">
+                                    <th className="p-3 border-b border-border">Tenant / Company Name</th>
+                                    <th className="p-3 border-b border-border font-mono">GSTIN</th>
+                                    <th className="p-3 border-b border-border">State</th>
+                                    <th className="p-3 border-b border-border">Contact Email</th>
+                                    <th className="p-3 border-b border-border font-mono">Users</th>
+                                    <th className="p-3 border-b border-border">Status</th>
+                                    <th className="p-3 border-b border-border text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                                {tenantsList.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={7} className="p-8 text-center text-text-muted">
+                                            No tenant accounts registered on platform yet.
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    tenantsList.map((t) => (
+                                        <tr key={t._id} className="hover:bg-app-bg/50 transition-colors text-text-main">
+                                            <td className="p-3 font-bold text-text-main">
+                                                {t.companyName || t.name}
+                                            </td>
+                                            <td className="p-3 font-mono font-bold text-primary">
+                                                {t.gstin || 'Not Configured'}
+                                            </td>
+                                            <td className="p-3 text-text-muted">{t.stateName || 'Gujarat'}</td>
+                                            <td className="p-3 font-mono text-text-muted">{t.email || '-'}</td>
+                                            <td className="p-3 font-mono font-bold text-text-main">
+                                                {t.userCount || 0}
+                                            </td>
+                                            <td className="p-3">
+                                                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold ${
+                                                    t.isActive !== false
+                                                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                                        : 'bg-rose-50 text-rose-800 border border-rose-200'
+                                                }`}>
+                                                    {t.isActive !== false ? 'Active' : 'Suspended'}
+                                                </span>
+                                            </td>
+                                            <td className="p-3 text-right">
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleOpenEditTenant(t._id)}
+                                                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                                        title="View and Edit Tenant GST / Address Profile"
+                                                    >
+                                                        <Edit2 size={13} />
+                                                        <span>Edit Profile</span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleToggleTenantStatus(t)}
+                                                        className={`px-2 py-1 rounded text-[11px] font-bold transition-all cursor-pointer border ${
+                                                            t.isActive !== false
+                                                                ? 'bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-800 border-slate-200'
+                                                                : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+                                                        }`}
+                                                    >
+                                                        {t.isActive !== false ? 'Suspend' : 'Activate'}
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                {/* Drawer 1: Create New Tenant */}
+                <SlideOverPanel
+                    isOpen={isCreateTenantDrawerOpen}
+                    onClose={() => setIsCreateTenantDrawerOpen(false)}
+                    title="Register New Tenant Organization"
+                    subtitle="Create tenant company, database workspace, and first Tenant Admin user"
+                >
+                    <form onSubmit={handleCreateTenant} className="space-y-4 font-sans text-xs">
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                Tenant / Company Name *
+                            </label>
+                            <input
+                                type="text"
+                                required
+                                placeholder="e.g. Surat Packaging Mills Pvt Ltd"
+                                value={newTenantForm.tenantName}
+                                onChange={(e) => setNewTenantForm({ ...newTenantForm, tenantName: e.target.value })}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary font-sans"
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Tenant Official Email *
+                                </label>
+                                <input
+                                    type="email"
+                                    required
+                                    placeholder="contact@suratpack.com"
+                                    value={newTenantForm.tenantEmail}
+                                    onChange={(e) => setNewTenantForm({ ...newTenantForm, tenantEmail: e.target.value })}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Phone Number
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="+91 98250 12345"
+                                    value={newTenantForm.tenantPhone}
+                                    onChange={(e) => setNewTenantForm({ ...newTenantForm, tenantPhone: e.target.value })}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-border space-y-3">
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-text-main">
+                                Tenant Admin Account Provisioning
+                            </h4>
+
+                            <div>
+                                <label className="block text-[11px] font-semibold text-text-muted mb-1">
+                                    Admin Full Name *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    placeholder="Rajesh Shah"
+                                    value={newTenantForm.adminName}
+                                    onChange={(e) => setNewTenantForm({ ...newTenantForm, adminName: e.target.value })}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-[11px] font-semibold text-text-muted mb-1">
+                                        Admin Email *
+                                    </label>
+                                    <input
+                                        type="email"
+                                        required
+                                        placeholder="rajesh@suratpack.com"
+                                        value={newTenantForm.adminEmail}
+                                        onChange={(e) => setNewTenantForm({ ...newTenantForm, adminEmail: e.target.value })}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-[11px] font-semibold text-text-muted mb-1">
+                                        Initial Password *
+                                    </label>
+                                    <input
+                                        type="password"
+                                        required
+                                        value={newTenantForm.adminPassword}
+                                        onChange={(e) => setNewTenantForm({ ...newTenantForm, adminPassword: e.target.value })}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="pt-4 border-t border-border flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setIsCreateTenantDrawerOpen(false)}
+                                className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={isSaving}
+                                className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            >
+                                <Building2 size={16} />
+                                <span>{isSaving ? 'Registering Tenant...' : 'Create Tenant & Provision Admin'}</span>
+                            </button>
+                        </div>
+                    </form>
+                </SlideOverPanel>
+
+                {/* Drawer 2: Edit Specific Tenant Profile (Super Admin) */}
+                <SlideOverPanel
+                    isOpen={isEditTenantDrawerOpen}
+                    onClose={() => setIsEditTenantDrawerOpen(false)}
+                    title="Edit Tenant GST & Company Profile"
+                    subtitle="Update legal entity name, GSTIN, PAN, and registered address for selected tenant"
+                >
+                    <form onSubmit={handleSaveTenantProfile} className="space-y-4 font-sans text-xs">
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                Company / Legal Name *
+                            </label>
+                            <input
+                                type="text"
+                                required
+                                value={tenantProfileForm.companyName}
+                                onChange={(e) => setTenantProfileForm({ ...tenantProfileForm, companyName: e.target.value })}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary font-sans"
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    GSTIN Number *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    maxLength={15}
+                                    value={tenantProfileForm.gstin}
+                                    onChange={(e) => setTenantProfileForm({ ...tenantProfileForm, gstin: e.target.value.toUpperCase() })}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-bold text-primary uppercase focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    PAN Number *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    maxLength={10}
+                                    value={tenantProfileForm.pan}
+                                    onChange={(e) => setTenantProfileForm({ ...tenantProfileForm, pan: e.target.value.toUpperCase() })}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-bold text-text-main uppercase focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    State Name *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    value={tenantProfileForm.stateName}
+                                    onChange={(e) => setTenantProfileForm({ ...tenantProfileForm, stateName: e.target.value })}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Contact Email
+                                </label>
+                                <input
+                                    type="email"
+                                    value={tenantProfileForm.contactEmail}
+                                    onChange={(e) => setTenantProfileForm({ ...tenantProfileForm, contactEmail: e.target.value })}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-border space-y-3">
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-text-main">
+                                Registered Address
+                            </h4>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-[11px] font-semibold text-text-muted mb-1">
+                                        Line 1
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={tenantProfileForm.registeredAddress.line1}
+                                        onChange={(e) =>
+                                            setTenantProfileForm({
+                                                ...tenantProfileForm,
+                                                registeredAddress: { ...tenantProfileForm.registeredAddress, line1: e.target.value }
+                                            })
+                                        }
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-[11px] font-semibold text-text-muted mb-1">
+                                        Line 2
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={tenantProfileForm.registeredAddress.line2}
+                                        onChange={(e) =>
+                                            setTenantProfileForm({
+                                                ...tenantProfileForm,
+                                                registeredAddress: { ...tenantProfileForm.registeredAddress, line2: e.target.value }
+                                            })
+                                        }
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-[11px] font-semibold text-text-muted mb-1">
+                                        City
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={tenantProfileForm.registeredAddress.city}
+                                        onChange={(e) =>
+                                            setTenantProfileForm({
+                                                ...tenantProfileForm,
+                                                registeredAddress: { ...tenantProfileForm.registeredAddress, city: e.target.value }
+                                            })
+                                        }
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-[11px] font-semibold text-text-muted mb-1">
+                                        Pincode
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={tenantProfileForm.registeredAddress.pincode}
+                                        onChange={(e) =>
+                                            setTenantProfileForm({
+                                                ...tenantProfileForm,
+                                                registeredAddress: { ...tenantProfileForm.registeredAddress, pincode: e.target.value }
+                                            })
+                                        }
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="pt-4 border-t border-border flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setIsEditTenantDrawerOpen(false)}
+                                className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={isSaving}
+                                className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            >
+                                <Save size={16} />
+                                <span>{isSaving ? 'Updating Profile...' : 'Save Tenant GST Profile'}</span>
+                            </button>
+                        </div>
+                    </form>
+                </SlideOverPanel>
+            </div>
+        );
+    }
+
+    // =========================================================
+    // 2. TENANT ADMIN VIEW: SELF-SCOPED GST & COMPANY PROFILE
+    // =========================================================
     return (
         <div className="space-y-6 font-sans">
             {/* Header */}
@@ -153,7 +710,7 @@ export default function AdministrationPage() {
             </div>
 
             {/* Company Profile Form Card */}
-            <form onSubmit={handleSubmit} className="bg-card-bg border border-border rounded-xl p-6 shadow-2xs space-y-6">
+            <form onSubmit={handleSubmitSelfProfile} className="bg-card-bg border border-border rounded-xl p-6 shadow-2xs space-y-6">
                 <div className="flex items-center gap-2 border-b border-border pb-3">
                     <Building2 size={20} className="text-primary" />
                     <h2 className="text-sm font-bold text-text-main">
@@ -172,7 +729,7 @@ export default function AdministrationPage() {
                             required
                             placeholder="e.g. Polysack Packaging Industries Ltd"
                             value={formData.companyName}
-                            onChange={(e) => handleChange('companyName', e.target.value)}
+                            onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
                             className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary"
                         />
                     </div>
@@ -187,7 +744,7 @@ export default function AdministrationPage() {
                             maxLength={15}
                             placeholder="e.g. 24AAAAA0000A1Z5"
                             value={formData.gstin}
-                            onChange={(e) => handleChange('gstin', e.target.value.toUpperCase())}
+                            onChange={(e) => setFormData({ ...formData, gstin: e.target.value.toUpperCase() })}
                             className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-mono font-bold text-primary uppercase focus:outline-none focus:border-primary"
                         />
                         <span className="text-[10px] text-text-muted mt-1 block">
@@ -205,7 +762,7 @@ export default function AdministrationPage() {
                             maxLength={10}
                             placeholder="e.g. AAAAA0000A"
                             value={formData.pan}
-                            onChange={(e) => handleChange('pan', e.target.value.toUpperCase())}
+                            onChange={(e) => setFormData({ ...formData, pan: e.target.value.toUpperCase() })}
                             className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-mono font-bold text-text-main uppercase focus:outline-none focus:border-primary"
                         />
                     </div>
@@ -222,7 +779,7 @@ export default function AdministrationPage() {
                             required
                             placeholder="e.g. Gujarat"
                             value={formData.stateName}
-                            onChange={(e) => handleChange('stateName', e.target.value)}
+                            onChange={(e) => setFormData({ ...formData, stateName: e.target.value })}
                             className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary"
                         />
                     </div>
@@ -236,7 +793,7 @@ export default function AdministrationPage() {
                             required
                             placeholder="billing@polysack.com"
                             value={formData.contactEmail}
-                            onChange={(e) => handleChange('contactEmail', e.target.value)}
+                            onChange={(e) => setFormData({ ...formData, contactEmail: e.target.value })}
                             className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-primary"
                         />
                     </div>
@@ -249,7 +806,7 @@ export default function AdministrationPage() {
                             type="text"
                             placeholder="+91 9876543210"
                             value={formData.contactPhone}
-                            onChange={(e) => handleChange('contactPhone', e.target.value)}
+                            onChange={(e) => setFormData({ ...formData, contactPhone: e.target.value })}
                             className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-primary"
                         />
                     </div>
@@ -270,7 +827,12 @@ export default function AdministrationPage() {
                                 type="text"
                                 placeholder="Plot No 45, GIDC Industrial Estate"
                                 value={formData.registeredAddress.line1}
-                                onChange={(e) => handleAddressChange('line1', e.target.value)}
+                                onChange={(e) =>
+                                    setFormData({
+                                        ...formData,
+                                        registeredAddress: { ...formData.registeredAddress, line1: e.target.value }
+                                    })
+                                }
                                 className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-primary"
                             />
                         </div>
@@ -283,7 +845,12 @@ export default function AdministrationPage() {
                                 type="text"
                                 placeholder="Phase 2, Near Power Station"
                                 value={formData.registeredAddress.line2}
-                                onChange={(e) => handleAddressChange('line2', e.target.value)}
+                                onChange={(e) =>
+                                    setFormData({
+                                        ...formData,
+                                        registeredAddress: { ...formData.registeredAddress, line2: e.target.value }
+                                    })
+                                }
                                 className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-primary"
                             />
                         </div>
@@ -296,7 +863,12 @@ export default function AdministrationPage() {
                                 type="text"
                                 placeholder="Ahmedabad"
                                 value={formData.registeredAddress.city}
-                                onChange={(e) => handleAddressChange('city', e.target.value)}
+                                onChange={(e) =>
+                                    setFormData({
+                                        ...formData,
+                                        registeredAddress: { ...formData.registeredAddress, city: e.target.value }
+                                    })
+                                }
                                 className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-primary"
                             />
                         </div>
@@ -309,7 +881,12 @@ export default function AdministrationPage() {
                                 type="text"
                                 placeholder="380015"
                                 value={formData.registeredAddress.pincode}
-                                onChange={(e) => handleAddressChange('pincode', e.target.value)}
+                                onChange={(e) =>
+                                    setFormData({
+                                        ...formData,
+                                        registeredAddress: { ...formData.registeredAddress, pincode: e.target.value }
+                                    })
+                                }
                                 className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary"
                             />
                         </div>

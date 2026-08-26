@@ -54,6 +54,14 @@ const StockTransactionSchema = new mongoose.Schema({
         required: [true, 'Quantity is required'],
         min: [0.000001, 'Quantity must be greater than 0']
     },
+    previousStock: {
+        type: Number,
+        default: 0
+    },
+    newStock: {
+        type: Number,
+        default: 0
+    },
     fromLocation: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Location',

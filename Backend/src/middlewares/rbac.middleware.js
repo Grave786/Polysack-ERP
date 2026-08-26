@@ -1,12 +1,64 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/user.model');
-const Role = require('../models/role.model');             // Add this line
+const Role = require('../models/role.model');
 const Permission = require('../models/permission.model');
+const Tenant = require('../models/tenant.model');
+
+// In-memory TTL Cache for Tenant active status (10s TTL for fast live session enforcement)
+const tenantStatusCache = new Map();
+const CACHE_TTL_MS = 10000;
+
+// Helper to normalize tenant ID input (handles strings, ObjectIds, and populated objects)
+const normalizeTenantId = (val) => {
+    if (!val) return null;
+    if (typeof val === 'object') {
+        if (val._id) return String(val._id);
+        if (val.id) return String(val.id);
+    }
+    return String(val);
+};
+
+const getCachedTenantStatus = async (tenantIdInput) => {
+    const tenantId = normalizeTenantId(tenantIdInput);
+    if (!tenantId) return true;
+
+    const cached = tenantStatusCache.get(tenantId);
+    const now = Date.now();
+
+    if (cached && cached.expiresAt > now) {
+        console.log(`🔒 [TENANT CACHE HIT] Tenant: ${tenantId} | isActive: ${cached.isActive}`);
+        return cached.isActive;
+    }
+
+    const tenant = await Tenant.findById(tenantId).select('isActive').lean();
+    const isActive = Boolean(tenant && tenant.isActive !== false);
+
+    console.log(`⚡ [TENANT DB FETCH] Tenant: ${tenantId} | isActive from DB: ${isActive}`);
+
+    tenantStatusCache.set(tenantId, {
+        isActive,
+        expiresAt: now + CACHE_TTL_MS
+    });
+
+    return isActive;
+};
+
+// Invalidate tenant cache immediately upon status updates
+const clearTenantStatusCache = (tenantIdInput) => {
+    const tenantId = normalizeTenantId(tenantIdInput);
+    if (tenantId) {
+        console.log(`🚨 [TENANT CACHE CLEARED] Invalidated cache key: ${tenantId}`);
+        tenantStatusCache.delete(tenantId);
+    } else {
+        console.log(`🚨 [TENANT CACHE CLEARED ALL] Flushed entire tenant status cache`);
+        tenantStatusCache.clear();
+    }
+};
 
 /**
  * Middleware: authenticate
  * Extracts and verifies the JWT Bearer token from the Authorization header.
- * Attaches decoded payload (_id, role) to req.user.
+ * Enforces live check on User.isActive and Tenant.isActive on every single request.
  */
 const authenticate = async (req, res, next) => {
     try {
@@ -23,10 +75,37 @@ const authenticate = async (req, res, next) => {
         // 2. Extract token string
         const token = authHeader.split(' ')[1];
 
-        // 3. Verify token
+        // 3. Verify token signature and expiration
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-        // 4. Attach user payload (_id, role) to request object
+        const userId = decoded._id || decoded.id;
+        const tenantId = normalizeTenantId(decoded.tenant);
+
+        // 4. Live session enforcement: User account active status check
+        if (userId) {
+            const userDoc = await User.findById(userId).select('isActive').lean();
+            if (!userDoc || userDoc.isActive === false) {
+                return res.status(401).json({
+                    success: false,
+                    code: 'ACCOUNT_DEACTIVATED',
+                    message: 'Your account is deactivated. Please contact your system administrator.'
+                });
+            }
+        }
+
+        // 5. Live session enforcement: Tenant active status check
+        if (tenantId) {
+            const isTenantActive = await getCachedTenantStatus(tenantId);
+            if (!isTenantActive) {
+                return res.status(401).json({
+                    success: false,
+                    code: 'TENANT_SUSPENDED',
+                    message: "Your session has been terminated because your organization's account is suspended."
+                });
+            }
+        }
+
+        // Attach decoded payload (_id, role, tenant) to request object
         req.user = decoded;
         next();
     } catch (error) {
@@ -57,9 +136,6 @@ const authenticate = async (req, res, next) => {
  * Middleware Factory: checkPermission
  * @param {string} requiredModule - Module name (e.g., 'INVENTORY', 'PRODUCTION', 'USERS')
  * @param {string} requiredAction - Action name (e.g., 'CREATE', 'READ', 'UPDATE', 'DELETE')
- * 
- * Fetches user from DB, populates role and permissions inside role,
- * and checks if the required module & action exist in the user's role permissions.
  */
 const checkPermission = (requiredModule, requiredAction) => {
     return async (req, res, next) => {
@@ -92,8 +168,18 @@ const checkPermission = (requiredModule, requiredAction) => {
             if (!user.isActive) {
                 return res.status(403).json({
                     success: false,
+                    code: 'ACCOUNT_DEACTIVATED',
                     message: 'Forbidden: Account is deactivated.'
                 });
+            }
+
+            // Super Admin bypass check (system-level user without tenant or Super Admin email/role)
+            const userRoleName = typeof user.role === 'object' ? user.role?.name : user.role;
+            const isSuperAdmin = !user.tenant || user.email === process.env.SUPER_ADMIN_EMAIL || userRoleName === 'SUPER_ADMIN' || userRoleName === 'Super Admin';
+
+            if (isSuperAdmin) {
+                req.userDetails = user;
+                return next();
             }
 
             // 3. Verify user has a valid active role
@@ -106,7 +192,7 @@ const checkPermission = (requiredModule, requiredAction) => {
 
             // 4. Check if role has matching permission for requiredModule and requiredAction
             const permissions = user.role.permissions || [];
-            const hasPermission = permissions.some(perm =>
+            const hasPermission = permissions.some((perm) =>
                 perm.module === requiredModule && perm.action === requiredAction
             );
 
@@ -133,5 +219,6 @@ const checkPermission = (requiredModule, requiredAction) => {
 
 module.exports = {
     authenticate,
-    checkPermission
+    checkPermission,
+    clearTenantStatusCache
 };
