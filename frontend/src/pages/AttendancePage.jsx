@@ -11,10 +11,6 @@ export default function AttendancePage() {
      * One-time "Add Standard Shifts (A/B/Night)" action handler
      */
     const handleSeedDefaultShifts = async () => {
-        if (!window.confirm('Add 3 standard work shifts (Shift A 06:00-14:00, Shift B 14:00-22:00, Night Shift 22:00-06:00)?')) {
-            return;
-        }
-
         try {
             setIsSeedingShifts(true);
             const res = await axiosInstance.post('/shifts/seed-default');

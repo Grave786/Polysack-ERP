@@ -1,4 +1,6 @@
 const Category = require('../models/category.model');
+const RawMaterial = require('../models/rawMaterial.model');
+const FinishedGood = require('../models/finishedGood.model');
 
 /**
  * @desc    Create a new Category
@@ -45,9 +47,32 @@ const createCategory = async (req, res) => {
         });
 
         if (existingCategory) {
-            return res.status(400).json({
-                success: false,
-                message: `A category named '${name}' already exists under the selected parent.`
+            if (existingCategory.isActive) {
+                return res.status(400).json({
+                    success: false,
+                    message: `A category named '${name}' already exists under the selected parent.`
+                });
+            }
+
+            // Reactivate soft-deleted category
+            existingCategory.isActive = true;
+            if (type) {
+                existingCategory.type = type;
+            }
+            if (description !== undefined) {
+                existingCategory.description = description;
+            }
+
+            await existingCategory.save();
+
+            if (existingCategory.parentCategory) {
+                await existingCategory.populate('parentCategory', 'name type');
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: 'Category reactivated successfully.',
+                data: existingCategory
             });
         }
 
@@ -317,6 +342,19 @@ const deleteCategory = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Cannot deactivate category because it has active child categories. Please deactivate or reassign the child categories first.'
+            });
+        }
+
+        // Check if active Raw Materials or Finished Goods reference this category
+        const [linkedRawMaterials, linkedFinishedGoods] = await Promise.all([
+            RawMaterial.countDocuments({ category: category._id, tenant: tenantId, isActive: true }),
+            FinishedGood.countDocuments({ category: category._id, tenant: tenantId, isActive: true })
+        ]);
+
+        if (linkedRawMaterials > 0 || linkedFinishedGoods > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot delete this category because it is currently assigned to active items. Please reassign or delete those items first.'
             });
         }
 
