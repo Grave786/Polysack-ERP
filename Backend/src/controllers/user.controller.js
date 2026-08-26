@@ -120,7 +120,147 @@ const getUsers = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Toggle user active/inactive status (Soft delete)
+ * @route   PATCH /api/users/:id/toggle-active
+ * @access  Private (USERS:DELETE / USERS:UPDATE permission)
+ */
+const toggleUserActive = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userTenant = req.user?.tenant || null;
+
+        const userDoc = await User.findOne({ _id: id, tenant: userTenant });
+        if (!userDoc) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found in your organization.'
+            });
+        }
+
+        userDoc.isActive = !userDoc.isActive;
+        await userDoc.save();
+
+        return res.status(200).json({
+            success: true,
+            message: `User '${userDoc.name}' is now ${userDoc.isActive ? 'Active' : 'Deactivated'}.`,
+            data: {
+                _id: userDoc._id,
+                name: userDoc.name,
+                email: userDoc.email,
+                isActive: userDoc.isActive
+            }
+        });
+    } catch (error) {
+        console.error('Error in toggleUserActive:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to update user active status.'
+        });
+    }
+};
+
+/**
+ * @desc    Update current user's profile details (Name, Phone)
+ * @route   PUT /api/users/profile
+ * @access  Private
+ */
+const updateProfile = async (req, res) => {
+    try {
+        const userId = req.user?._id || req.user?.id;
+        const { name, phone } = req.body;
+
+        const userDoc = await User.findById(userId);
+        if (!userDoc) {
+            return res.status(404).json({
+                success: false,
+                message: 'User account not found.'
+            });
+        }
+
+        if (name) userDoc.name = name.trim();
+        if (phone !== undefined) userDoc.phone = phone.trim();
+
+        await userDoc.save();
+
+        const userResponse = userDoc.toObject();
+        delete userResponse.password;
+
+        return res.status(200).json({
+            success: true,
+            message: 'Profile updated successfully.',
+            data: userResponse
+        });
+    } catch (error) {
+        console.error('Error in updateProfile:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to update profile.'
+        });
+    }
+};
+
+/**
+ * @desc    Change current user's password
+ * @route   PUT /api/users/change-password
+ * @access  Private
+ */
+const changePassword = async (req, res) => {
+    try {
+        const userId = req.user?._id || req.user?.id;
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide both currentPassword and newPassword.'
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password must be at least 6 characters long.'
+            });
+        }
+
+        const userDoc = await User.findById(userId).select('+password');
+        if (!userDoc) {
+            return res.status(404).json({
+                success: false,
+                message: 'User account not found.'
+            });
+        }
+
+        const isMatch = await bcrypt.compare(currentPassword, userDoc.password);
+        if (!isMatch) {
+            return res.status(400).json({
+                success: false,
+                message: 'Current password does not match.'
+            });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        userDoc.password = await bcrypt.hash(newPassword, salt);
+        await userDoc.save();
+
+        return res.status(200).json({
+            success: true,
+            message: 'Password changed successfully!'
+        });
+    } catch (error) {
+        console.error('Error in changePassword:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to change password.'
+        });
+    }
+};
+
 module.exports = {
     createUser,
-    getUsers
+    getUsers,
+    toggleUserActive,
+    updateProfile,
+    changePassword
 };

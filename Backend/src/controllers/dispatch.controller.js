@@ -411,7 +411,14 @@ const getDispatches = async (req, res) => {
 
         const [dispatches, total] = await Promise.all([
             Dispatch.find(filter)
-                .populate('salesOrder', 'soNumber status customer')
+                .populate({
+                    path: 'salesOrder',
+                    select: 'soNumber status customer',
+                    populate: {
+                        path: 'customer',
+                        select: 'companyName code contactPerson phone'
+                    }
+                })
                 .populate('dispatchLocation', 'name code type')
                 .populate('items.finishedGood', 'name code uom')
                 .populate('dispatchedBy', 'name email')

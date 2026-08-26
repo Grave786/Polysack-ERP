@@ -144,6 +144,114 @@ const createTenant = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get active tenant's profile & GST settings
+ * @route   GET /api/tenants/profile
+ * @access  Private
+ */
+const getTenantProfile = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing.'
+            });
+        }
+
+        const tenant = await Tenant.findById(tenantId);
+        if (!tenant) {
+            return res.status(404).json({
+                success: false,
+                message: 'Tenant profile not found.'
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: tenant
+        });
+    } catch (error) {
+        console.error('Error in getTenantProfile:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch company profile.'
+        });
+    }
+};
+
+/**
+ * @desc    Update active tenant's profile & GST settings
+ * @route   PUT /api/tenants/profile
+ * @access  Private
+ */
+const updateTenantProfile = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing.'
+            });
+        }
+
+        const tenant = await Tenant.findById(tenantId);
+        if (!tenant) {
+            return res.status(404).json({
+                success: false,
+                message: 'Tenant profile not found.'
+            });
+        }
+
+        const {
+            companyName,
+            name,
+            gstin,
+            stateName,
+            stateCode,
+            pan,
+            phone,
+            email,
+            registeredAddress
+        } = req.body;
+
+        if (companyName) tenant.companyName = companyName.trim();
+        if (name) tenant.name = name.trim();
+        if (gstin !== undefined) tenant.gstin = gstin.trim().toUpperCase();
+        if (stateName) tenant.stateName = stateName.trim();
+        if (stateCode) tenant.stateCode = stateCode.trim();
+        if (pan !== undefined) tenant.pan = pan.trim().toUpperCase();
+        if (phone !== undefined) tenant.phone = phone.trim();
+        if (email !== undefined) tenant.email = email.trim();
+
+        if (registeredAddress && typeof registeredAddress === 'object') {
+            tenant.registeredAddress = {
+                line1: registeredAddress.line1 || tenant.registeredAddress?.line1 || '',
+                line2: registeredAddress.line2 || tenant.registeredAddress?.line2 || '',
+                city: registeredAddress.city || tenant.registeredAddress?.city || '',
+                pincode: registeredAddress.pincode || tenant.registeredAddress?.pincode || ''
+            };
+        }
+
+        // Saving triggers pre('save') hook in tenant.model.js to validate GSTIN/PAN and derive stateCode
+        await tenant.save();
+
+        return res.status(200).json({
+            success: true,
+            message: 'Company GST Profile & Settings updated successfully.',
+            data: tenant
+        });
+    } catch (error) {
+        console.error('Error in updateTenantProfile:', error);
+        return res.status(400).json({
+            success: false,
+            message: error.message || 'Failed to update company profile.'
+        });
+    }
+};
+
 module.exports = {
-    createTenant
+    createTenant,
+    getTenantProfile,
+    updateTenantProfile
 };

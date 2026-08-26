@@ -9,7 +9,6 @@ const UserSchema = new mongoose.Schema({
     email: {
         type: String,
         required: true,
-        unique: true,
         lowercase: true
     },
     password: {
@@ -40,5 +39,8 @@ const UserSchema = new mongoose.Schema({
         default: true
     }
 }, { timestamps: true });
+
+// Compound unique index for tenant-scoped user emails
+UserSchema.index({ tenant: 1, email: 1 }, { unique: true });
 
 module.exports = mongoose.model('User', UserSchema);

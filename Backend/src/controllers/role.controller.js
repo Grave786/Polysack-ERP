@@ -62,9 +62,24 @@ const createRole = async (req, res) => {
 const getRoles = async (req, res) => {
     try {
         const userTenant = req.user?.tenant || null;
+        const { status, search } = req.query;
+
+        const filter = { tenant: userTenant };
+
+        if (status && status !== 'All Statuses' && status !== 'All' && status !== 'ALL') {
+            if (status.toLowerCase() === 'active') {
+                filter.isActive = true;
+            } else if (status.toLowerCase() === 'inactive' || status.toLowerCase() === 'deactivated') {
+                filter.isActive = false;
+            }
+        }
+
+        if (search && search.trim()) {
+            filter.name = { $regex: search.trim(), $options: 'i' };
+        }
 
         // Fetch roles strictly scoped to user's tenant with populated permissions
-        const roles = await Role.find({ tenant: userTenant }).populate('permissions');
+        const roles = await Role.find(filter).populate('permissions');
 
         return res.status(200).json({
             success: true,
@@ -81,7 +96,130 @@ const getRoles = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get all system permissions for building the permission matrix
+ * @route   GET /api/roles/permissions
+ * @access  Private
+ */
+const getAllPermissions = async (req, res) => {
+    try {
+        let permissions = await Permission.find().sort({ module: 1, action: 1 });
+
+        // Auto-seed permissions if collection is empty
+        if (!permissions || permissions.length === 0) {
+            const modules = ['INVENTORY', 'PRODUCTION', 'PROCUREMENT', 'SALES', 'MASTER_DATA', 'USERS', 'ROLES', 'QUALITY', 'CRM', 'DISPATCH', 'HR'];
+            const actions = ['CREATE', 'READ', 'UPDATE', 'DELETE'];
+            const docsToSeed = [];
+
+            modules.forEach((module) => {
+                actions.forEach((action) => {
+                    docsToSeed.push({ module, action, description: `${action} access for ${module}` });
+                });
+            });
+
+            permissions = await Permission.insertMany(docsToSeed);
+        }
+
+        const grouped = {};
+        permissions.forEach((p) => {
+            if (!grouped[p.module]) {
+                grouped[p.module] = [];
+            }
+            grouped[p.module].push(p);
+        });
+
+        return res.status(200).json({
+            success: true,
+            count: permissions.length,
+            data: permissions,
+            grouped
+        });
+    } catch (error) {
+        console.error('Error in getAllPermissions:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve permissions list.'
+        });
+    }
+};
+
+/**
+ * @desc    Update a role's name, description, and assigned permissions
+ * @route   PUT /api/roles/:id
+ * @access  Private (ROLES:UPDATE)
+ */
+const updateRole = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, description, permissions } = req.body;
+        const userTenant = req.user?.tenant || null;
+
+        const role = await Role.findOne({ _id: id, tenant: userTenant });
+        if (!role) {
+            return res.status(404).json({
+                success: false,
+                message: 'Role not found in your organization.'
+            });
+        }
+
+        if (name) role.name = name.trim();
+        if (description !== undefined) role.description = description.trim();
+        if (Array.isArray(permissions)) role.permissions = permissions;
+
+        await role.save();
+        await role.populate('permissions');
+
+        return res.status(200).json({
+            success: true,
+            message: 'Role updated successfully!',
+            data: role
+        });
+    } catch (error) {
+        console.error('Error in updateRole:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to update role.'
+        });
+    }
+};
+
+/**
+ * @desc    Delete a role
+ * @route   DELETE /api/roles/:id
+ * @access  Private (ROLES:DELETE)
+ */
+const deleteRole = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userTenant = req.user?.tenant || null;
+
+        const role = await Role.findOne({ _id: id, tenant: userTenant });
+        if (!role) {
+            return res.status(404).json({
+                success: false,
+                message: 'Role not found in your organization.'
+            });
+        }
+
+        await Role.deleteOne({ _id: id });
+
+        return res.status(200).json({
+            success: true,
+            message: `Role '${role.name}' deleted successfully.`
+        });
+    } catch (error) {
+        console.error('Error in deleteRole:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to delete role.'
+        });
+    }
+};
+
 module.exports = {
     createRole,
-    getRoles
+    getRoles,
+    getAllPermissions,
+    updateRole,
+    deleteRole
 };

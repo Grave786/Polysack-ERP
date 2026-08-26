@@ -193,6 +193,26 @@ export const useAuthStore = create((set, get) => ({
             isLoading: false
         });
 
+        // Fetch fresh populated user from GET /api/auth/me
+        try {
+            const res = await axiosInstance.get('/auth/me');
+            if (res.data?.success && res.data?.data) {
+                const freshUser = await resolveUserNames(res.data.data);
+                if (typeof window !== 'undefined') {
+                    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(freshUser));
+                }
+                set({
+                    user: freshUser,
+                    currentFacility: freshUser.facilityName || 'Vapi Unit #1 (GIDC Phase 3)',
+                    isAuthenticated: true,
+                    isLoading: false
+                });
+                return;
+            }
+        } catch (meErr) {
+            console.warn('Fallback to local user session:', meErr.message);
+        }
+
         // Background resolve names if roleName/facilityName missing or raw ObjectIds
         if (!initialUser.roleName || !initialUser.facilityName) {
             const resolvedUser = await resolveUserNames(initialUser);

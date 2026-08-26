@@ -73,7 +73,7 @@ const FinishedGoodSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Compound unique indexes per tenant
-FinishedGoodSchema.index({ code: 1, tenant: 1 }, { unique: true });
-FinishedGoodSchema.index({ name: 1, tenant: 1 }, { unique: true });
+FinishedGoodSchema.index({ tenant: 1, code: 1 }, { unique: true });
+FinishedGoodSchema.index({ tenant: 1, name: 1 }, { unique: true });
 
 module.exports = mongoose.model('FinishedGood', FinishedGoodSchema);

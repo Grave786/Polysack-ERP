@@ -1,7 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { register, login } = require('../controllers/auth.controller');
+const { register, login, getMe } = require('../controllers/auth.controller');
 const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+
+/**
+ * @route   GET /api/auth/me
+ * @desc    Get current user profile session
+ * @access  Private
+ */
+router.get('/me', authenticate, getMe);
 
 /**
  * @route   POST /api/auth/register

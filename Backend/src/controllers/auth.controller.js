@@ -97,8 +97,16 @@ const login = async (req, res) => {
             });
         }
 
-        // 2. Find user by email and explicitly select password (select: false in schema)
-        const user = await User.findOne({ email }).select('+password');
+        // 2. Find user by email, select password and populate role with permissions
+        const user = await User.findOne({ email })
+            .select('+password')
+            .populate({
+                path: 'role',
+                populate: {
+                    path: 'permissions'
+                }
+            });
+
         if (!user) {
             return res.status(401).json({
                 success: false,
@@ -146,7 +154,45 @@ const login = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get currently logged in user session
+ * @route   GET /api/auth/me
+ * @access  Private
+ */
+const getMe = async (req, res) => {
+    try {
+        const userId = req.user?._id || req.user?.id;
+        const user = await User.findById(userId)
+            .select('-password')
+            .populate({
+                path: 'role',
+                populate: {
+                    path: 'permissions'
+                }
+            });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User account not found.'
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: user
+        });
+    } catch (error) {
+        console.error('Error in getMe controller:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error retrieving user context.'
+        });
+    }
+};
+
 module.exports = {
     register,
-    login
+    login,
+    getMe
 };

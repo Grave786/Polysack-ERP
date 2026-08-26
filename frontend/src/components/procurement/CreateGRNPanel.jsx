@@ -1,0 +1,283 @@
+import { useState, useEffect } from 'react';
+import { Truck, RefreshCw, CheckCircle2 } from 'lucide-react';
+import SlideOverPanel from '../shared/SlideOverPanel';
+import axiosInstance from '../../api/axiosInstance';
+import toast from 'react-hot-toast';
+
+export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
+    const [locations, setLocations] = useState([]);
+    const [receivingLocation, setReceivingLocation] = useState('');
+    const [notes, setNotes] = useState('');
+    const [isLoadingLocs, setIsLoadingLocs] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Items array mapping PO items
+    const [grnItems, setGrnItems] = useState([]);
+
+    // Initialize items when PO changes
+    useEffect(() => {
+        if (isOpen && po && Array.isArray(po.items)) {
+            setIsLoadingLocs(true);
+
+            // Fetch locations for receiving
+            axiosInstance.get('/locations?isActive=true&limit=200')
+                .then((res) => {
+                    if (res.data?.success && Array.isArray(res.data.data)) {
+                        const locs = res.data.data;
+                        setLocations(locs);
+                        if (locs.length > 0) setReceivingLocation(locs[0]._id);
+                    }
+                })
+                .catch((err) => {
+                    console.error('Error loading locations for GRN:', err);
+                })
+                .finally(() => {
+                    setIsLoadingLocs(false);
+                });
+
+            // Map PO items to GRN item inputs
+            setGrnItems(
+                po.items.map((i) => {
+                    const rmId = typeof i.rawMaterial === 'object' ? i.rawMaterial?._id : i.rawMaterial;
+                    const rmName = typeof i.rawMaterial === 'object' ? i.rawMaterial?.name : 'Raw Material';
+                    const rmCode = typeof i.rawMaterial === 'object' ? i.rawMaterial?.code : '';
+                    
+                    const ordered = i.orderedQuantity || 0;
+                    const alreadyRecv = i.receivedQuantity || 0;
+                    const remaining = Math.max(0, ordered - alreadyRecv);
+
+                    return {
+                        rawMaterial: rmId,
+                        name: rmName,
+                        code: rmCode,
+                        orderedQuantity: ordered,
+                        alreadyReceivedQuantity: alreadyRecv,
+                        remainingAllowed: remaining,
+                        receivedQuantity: remaining, // default to receiving remaining balance
+                        batchNumber: ''
+                    };
+                })
+            );
+        }
+    }, [isOpen, po]);
+
+    const handleItemChange = (index, field, value) => {
+        setGrnItems((prev) => {
+            const updated = [...prev];
+            updated[index][field] = value;
+            return updated;
+        });
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+
+        if (!po || !po._id) {
+            toast.error('Invalid Purchase Order');
+            return;
+        }
+
+        if (!receivingLocation) {
+            toast.error('Please select a Receiving Location');
+            return;
+        }
+
+        const validItems = [];
+        for (let idx = 0; idx < grnItems.length; idx++) {
+            const item = grnItems[idx];
+            const numRecv = Number(item.receivedQuantity);
+
+            if (isNaN(numRecv) || numRecv < 0) {
+                toast.error(`Invalid received quantity for ${item.name}`);
+                return;
+            }
+
+            if (numRecv > item.remainingAllowed) {
+                toast.error(`Cannot receive ${numRecv} for ${item.name}. Remaining balance allowed is ${item.remainingAllowed}.`);
+                return;
+            }
+
+            if (numRecv > 0) {
+                validItems.push({
+                    rawMaterial: item.rawMaterial,
+                    receivedQuantity: numRecv,
+                    batchNumber: item.batchNumber.trim() || undefined
+                });
+            }
+        }
+
+        if (validItems.length === 0) {
+            toast.error('Please enter received quantity (> 0) for at least one item');
+            return;
+        }
+
+        try {
+            setIsSubmitting(true);
+
+            const payload = {
+                purchaseOrder: po._id,
+                receivingLocation,
+                notes: notes.trim() || undefined,
+                items: validItems
+            };
+
+            const res = await axiosInstance.post('/grns', payload);
+
+            if (res.data?.success) {
+                toast.success(`GRN ${res.data.data?.grnNumber || ''} created & stock inwarded!`);
+                if (onSuccess) onSuccess();
+                onClose();
+            }
+        } catch (err) {
+            console.error('Error creating GRN:', err);
+            toast.error(err.response?.data?.message || 'Failed to create GRN');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    if (!po) return null;
+
+    const supplierName = typeof po.supplier === 'object' ? (po.supplier?.companyName || po.supplier?.name) : 'Supplier';
+
+    return (
+        <SlideOverPanel
+            isOpen={isOpen}
+            onClose={onClose}
+            title="Create Goods Receipt Note (GRN)"
+            subtitle={`Inward raw materials to inventory for Purchase Order ${po.poNumber || ''}`}
+        >
+            <form onSubmit={handleSubmit} className="space-y-4 font-sans text-xs">
+                {/* Locked PO Summary Card */}
+                <div className="bg-app-bg border border-border rounded-lg p-3 space-y-1">
+                    <div className="flex justify-between items-center text-xs">
+                        <span className="text-[10px] font-extrabold uppercase text-text-muted">PURCHASE ORDER</span>
+                        <span className="font-mono font-bold text-primary">{po.poNumber}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                        <span className="text-text-muted">Supplier:</span>
+                        <span className="font-semibold text-text-main">{supplierName}</span>
+                    </div>
+                </div>
+
+                {/* Receiving Location Selection */}
+                <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                        Receiving Location / Warehouse *
+                    </label>
+                    {isLoadingLocs ? (
+                        <div className="flex items-center gap-2 p-2.5 border border-border rounded-md text-xs text-text-muted">
+                            <RefreshCw size={14} className="animate-spin text-primary" />
+                            <span>Loading locations...</span>
+                        </div>
+                    ) : (
+                        <select
+                            required
+                            value={receivingLocation}
+                            onChange={(e) => setReceivingLocation(e.target.value)}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main font-semibold focus:outline-none focus:border-primary cursor-pointer"
+                        >
+                            <option value="">-- Select Receiving Location --</option>
+                            {locations.map((loc) => (
+                                <option key={loc._id} value={loc._id}>
+                                    {loc.name} ({loc.type || 'Warehouse'})
+                                </option>
+                            ))}
+                        </select>
+                    )}
+                </div>
+
+                {/* Received Items List */}
+                <div className="space-y-3 pt-2 border-t border-border">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                        Inward Items & Quantities Received *
+                    </label>
+
+                    <div className="space-y-2.5">
+                        {grnItems.map((item, idx) => (
+                            <div key={idx} className="bg-app-bg border border-border rounded-lg p-3 space-y-2">
+                                <div className="flex justify-between items-start">
+                                    <div>
+                                        <span className="font-bold text-text-main block">{item.name}</span>
+                                        <span className="text-[10px] font-mono text-text-muted">{item.code}</span>
+                                    </div>
+                                    <div className="text-right text-[10px]">
+                                        <span className="text-text-muted block">
+                                            Ordered: <strong>{item.orderedQuantity}</strong> | Recv: <strong>{item.alreadyReceivedQuantity}</strong>
+                                        </span>
+                                        <span className="text-emerald-700 font-bold block">
+                                            Remaining: {item.remainingAllowed}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border/60">
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-text-muted mb-0.5">
+                                            Received Qty (This GRN) *
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max={item.remainingAllowed}
+                                            required
+                                            value={item.receivedQuantity}
+                                            onChange={(e) => handleItemChange(idx, 'receivedQuantity', e.target.value)}
+                                            className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-emerald-800 focus:outline-none focus:border-primary"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-text-muted mb-0.5">
+                                            Batch / Lot Number
+                                        </label>
+                                        <input
+                                            type="text"
+                                            placeholder="e.g. LOT-2026-X"
+                                            value={item.batchNumber}
+                                            onChange={(e) => handleItemChange(idx, 'batchNumber', e.target.value)}
+                                            className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Inward Notes */}
+                <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                        Inward Notes / Remarks
+                    </label>
+                    <textarea
+                        rows={2}
+                        placeholder="e.g. Inspected on delivery truck, no moisture damage observed..."
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                    />
+                </div>
+
+                {/* Submit Actions */}
+                <div className="pt-3 border-t border-border flex justify-end gap-3">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                        <Truck size={15} />
+                        <span>{isSubmitting ? 'Inwarding GRN Stock...' : 'Confirm & Create GRN'}</span>
+                    </button>
+                </div>
+            </form>
+        </SlideOverPanel>
+    );
+}

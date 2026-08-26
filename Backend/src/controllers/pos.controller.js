@@ -68,6 +68,8 @@ const directCheckout = async (req, res) => {
 
         // Fetch Tenant inside transaction session to verify configured GST stateCode
         const tenantDoc = await Tenant.findById(tenantId).session(session);
+        console.log(`[POS Checkout] Tenant check for ${tenantId}: GSTIN=${tenantDoc?.gstin}, StateCode=${tenantDoc?.stateCode}, StateName=${tenantDoc?.stateName}`);
+
         if (!tenantDoc || !tenantDoc.stateCode) {
             await session.abortTransaction();
             session.endSession();

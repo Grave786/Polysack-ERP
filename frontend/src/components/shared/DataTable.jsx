@@ -87,6 +87,8 @@ export default function DataTable({
         );
     };
 
+    const hasCustomActionsColumn = columns.some((col) => col.header && String(col.header).toUpperCase() === 'ACTIONS');
+
     return (
         <div className="w-full space-y-3 font-sans">
             {/* Top Action Bar Above Table: Search Bar on LEFT, Columns & Export CSV on RIGHT */}
@@ -263,24 +265,26 @@ export default function DataTable({
                                         </div>
 
                                         {/* Card Actions Footer */}
-                                        <div className="flex items-center justify-end gap-3 pt-2.5 border-t border-border/40">
-                                            <button
-                                                type="button"
-                                                onClick={() => onEdit(row)}
-                                                className="flex items-center gap-1 text-xs font-semibold text-text-muted hover:text-primary transition-colors cursor-pointer"
-                                            >
-                                                <Pencil size={14} />
-                                                <span>Edit</span>
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => onDelete(row)}
-                                                className="flex items-center gap-1 text-xs font-semibold text-text-muted hover:text-rose-500 transition-colors cursor-pointer"
-                                            >
-                                                <Trash2 size={14} />
-                                                <span>Deactivate</span>
-                                            </button>
-                                        </div>
+                                        {!hasCustomActionsColumn && (
+                                            <div className="flex items-center justify-end gap-3 pt-2.5 border-t border-border/40">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onEdit(row)}
+                                                    className="flex items-center gap-1 text-xs font-semibold text-text-muted hover:text-primary transition-colors cursor-pointer"
+                                                >
+                                                    <Pencil size={14} />
+                                                    <span>Edit</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onDelete(row)}
+                                                    className="flex items-center gap-1 text-xs font-semibold text-text-muted hover:text-rose-500 transition-colors cursor-pointer"
+                                                >
+                                                    <Trash2 size={14} />
+                                                    <span>Deactivate</span>
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}
@@ -320,9 +324,11 @@ export default function DataTable({
                                             );
                                         })}
 
-                                        <th className="px-4 py-3.5 border-b border-border/40 text-right whitespace-nowrap">
-                                            ACTIONS
-                                        </th>
+                                        {!hasCustomActionsColumn && (
+                                            <th className="px-4 py-3.5 border-b border-border/40 text-right whitespace-nowrap">
+                                                ACTIONS
+                                            </th>
+                                        )}
                                     </tr>
                                 </thead>
 
@@ -381,27 +387,29 @@ export default function DataTable({
                                                     );
                                                 })}
 
-                                                <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                                                    <div className="flex items-center justify-end gap-2">
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => onEdit(row)}
-                                                            className="p-1 text-text-muted hover:text-primary transition-colors cursor-pointer rounded"
-                                                            title="Edit Record"
-                                                        >
-                                                            <Pencil size={15} />
-                                                        </button>
+                                                {!hasCustomActionsColumn && (
+                                                    <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                                                        <div className="flex items-center justify-end gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => onEdit(row)}
+                                                                className="p-1 text-text-muted hover:text-primary transition-colors cursor-pointer rounded"
+                                                                title="Edit Record"
+                                                            >
+                                                                <Pencil size={15} />
+                                                            </button>
 
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => onDelete(row)}
-                                                            className="p-1 text-text-muted hover:text-rose-500 transition-colors cursor-pointer rounded"
-                                                            title="Deactivate Record"
-                                                        >
-                                                            <Trash2 size={15} />
-                                                        </button>
-                                                    </div>
-                                                </td>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => onDelete(row)}
+                                                                className="p-1 text-text-muted hover:text-rose-500 transition-colors cursor-pointer rounded"
+                                                                title="Deactivate Record"
+                                                            >
+                                                                <Trash2 size={15} />
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                )}
                                             </tr>
                                         );
                                     })}

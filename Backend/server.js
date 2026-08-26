@@ -39,6 +39,7 @@ const reportRoutes = require('./src/routes/report.routes');
 const shiftRoutes = require('./src/routes/shift.routes');
 const employeeRoutes = require('./src/routes/employee.routes');
 const attendanceRoutes = require('./src/routes/attendance.routes');
+const rosterRoutes = require('./src/routes/roster.routes');
 const crmRoutes = require('./src/routes/crm.routes');
 const dashboardRoutes = require('./src/routes/dashboard.routes');
 
@@ -49,6 +50,22 @@ app.use(express.json());
 // Boot check to ensure permissions are seeded
 const initializeSystem = async () => {
   await connectDB();
+
+  // Synchronize MongoDB indexes for multi-tenancy across all registered schemas
+  try {
+    const models = mongoose.modelNames();
+    for (const modelName of models) {
+      try {
+        await mongoose.model(modelName).syncIndexes();
+      } catch (idxErr) {
+        console.warn(`[Index Sync] Non-critical warning for model '${modelName}':`, idxErr.message);
+      }
+    }
+    console.log('✅ MongoDB Indexes synchronized successfully for multi-tenancy.');
+  } catch (syncErr) {
+    console.warn('⚠️ Index sync error on boot:', syncErr.message);
+  }
+
   try {
     const count = await Permission.countDocuments();
     const EXPECTED_PERMISSIONS_COUNT = 40;
@@ -98,6 +115,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/shifts', shiftRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/rosters', rosterRoutes);
 app.use('/api/crm', crmRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 

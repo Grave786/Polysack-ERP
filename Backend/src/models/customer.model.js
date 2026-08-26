@@ -72,13 +72,13 @@ const CustomerSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Compound unique indexes per tenant
-CustomerSchema.index({ companyName: 1, tenant: 1 }, { unique: true });
-CustomerSchema.index({ code: 1, tenant: 1 }, { unique: true });
+CustomerSchema.index({ tenant: 1, companyName: 1 }, { unique: true });
+CustomerSchema.index({ tenant: 1, code: 1 }, { unique: true });
 
-// Sparse compound unique index for GSTIN per tenant (so optional GSTINs don't conflict on null/empty)
+// Partial filter expression compound unique index for GSTIN per tenant
 CustomerSchema.index(
-    { gstin: 1, tenant: 1 },
-    { unique: true, sparse: true, partialFilterExpression: { gstin: { $type: 'string' } } }
+    { tenant: 1, gstin: 1 },
+    { unique: true, partialFilterExpression: { gstin: { $type: 'string' } } }
 );
 
 module.exports = mongoose.model('Customer', CustomerSchema);

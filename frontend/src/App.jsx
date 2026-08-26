@@ -17,7 +17,9 @@ import DispatchPage from './pages/DispatchPage';
 import AttendancePage from './pages/AttendancePage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import AdministrationPage from './pages/AdministrationPage';
-import UsersPage from './pages/UsersPage';
+import UserManagementPage from './pages/UserManagementPage';
+import RolesManagementPage from './pages/RolesManagementPage';
+import ProfilePage from './pages/ProfilePage';
 
 export default function App() {
     const checkAuth = useAuthStore((state) => state.checkAuth);
@@ -44,11 +46,20 @@ export default function App() {
             <Route element={<ProtectedRoute />}>
                 <Route element={<DashboardLayout />}>
                     <Route path="/dashboard" element={<DashboardPage />} />
+                    <Route path="/profile" element={<ProfilePage />} />
+
+                    {/* Module-specific Protected Routes */}
+                    <Route element={<ProtectedRoute allowedRoles={['Tenant Admin', 'Super Admin', 'Production Manager', 'Operator']} />}>
+                        <Route path="/production" element={<ProductionPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute allowedRoles={['Tenant Admin', 'Super Admin', 'Sales Operator', 'Biller']} />}>
+                        <Route path="/pos" element={<PosPage />} />
+                    </Route>
+
                     <Route path="/master-data" element={<MasterDataPage />} />
-                    <Route path="/production" element={<ProductionPage />} />
                     <Route path="/quality" element={<QualityPage />} />
                     <Route path="/inventory" element={<InventoryPage />} />
-                    <Route path="/pos" element={<PosPage />} />
                     <Route path="/sales" element={<SalesPage />} />
                     <Route path="/procurement" element={<ProcurementPage />} />
                     <Route path="/customer-crm" element={<CustomerCrmPage />} />
@@ -56,7 +67,10 @@ export default function App() {
                     <Route path="/attendance" element={<AttendancePage />} />
                     <Route path="/analytics" element={<AnalyticsPage />} />
                     <Route path="/administration" element={<AdministrationPage />} />
-                    <Route path="/users" element={<UsersPage />} />
+                    <Route path="/administration/roles" element={<RolesManagementPage />} />
+                    <Route path="/administration/users" element={<UserManagementPage />} />
+                    <Route path="/roles" element={<RolesManagementPage />} />
+                    <Route path="/users" element={<UserManagementPage />} />
 
                     {/* Fallback inside dashboard */}
                     <Route path="*" element={<Navigate to="/dashboard" replace />} />

@@ -1,37 +1,471 @@
+import { useState, useEffect } from 'react';
+import { Truck, Plus, RefreshCw, CheckCircle2, AlertCircle, Clock, PackageCheck } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
+import SlideOverPanel from '../components/shared/SlideOverPanel';
+import axiosInstance from '../api/axiosInstance';
+import toast from 'react-hot-toast';
 
 export default function DispatchPage() {
-    const tabs = [
+    const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+    const [refreshKey, setRefreshKey] = useState(0);
+
+    // Sales Orders and Locations for drawer dropdowns
+    const [salesOrders, setSalesOrders] = useState([]);
+    const [locations, setLocations] = useState([]);
+    const [isLoadingFormOptions, setIsLoadingFormOptions] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Drawer Form State
+    const [formData, setFormData] = useState({
+        salesOrder: '',
+        dispatchLocation: '',
+        transporter: 'V-Trans India Ltd',
+        vehicleNumber: 'GJ-05-BX-1000',
+        driverName: '',
+        driverPhone: '',
+        notes: ''
+    });
+
+    const [dispatchItems, setDispatchItems] = useState([]);
+    const [selectedSO, setSelectedSO] = useState(null);
+
+    // Fetch Sales Orders & Locations when Drawer Opens
+    useEffect(() => {
+        if (isDrawerOpen) {
+            setIsLoadingFormOptions(true);
+            Promise.all([
+                axiosInstance.get('/sales-orders?limit=100'),
+                axiosInstance.get('/locations?isActive=true&limit=50')
+            ])
+                .then(([soRes, locRes]) => {
+                    if (soRes.data?.success && Array.isArray(soRes.data.data)) {
+                        const availableOrders = soRes.data.data.filter(
+                            (so) => so.status === 'CONFIRMED' || so.status === 'READY_FOR_DISPATCH' || so.status === 'DISPATCHED'
+                        );
+                        const list = availableOrders.length > 0 ? availableOrders : soRes.data.data;
+                        setSalesOrders(list);
+
+                        if (list.length > 0) {
+                            handleSelectSalesOrder(list[0]._id, list);
+                        }
+                    }
+
+                    if (locRes.data?.success && Array.isArray(locRes.data.data)) {
+                        const locs = locRes.data.data;
+                        setLocations(locs);
+                        if (locs.length > 0) {
+                            setFormData((prev) => ({ ...prev, dispatchLocation: locs[0]._id }));
+                        }
+                    }
+                })
+                .catch((err) => {
+                    console.error('Error fetching form options for dispatch:', err);
+                    toast.error('Failed to load Sales Orders catalog');
+                })
+                .finally(() => {
+                    setIsLoadingFormOptions(false);
+                });
+        }
+    }, [isDrawerOpen]);
+
+    // Handle Sales Order Selection
+    const handleSelectSalesOrder = (soId, ordersList = salesOrders) => {
+        const so = ordersList.find((o) => o._id === soId);
+        setSelectedSO(so || null);
+        setFormData((prev) => ({ ...prev, salesOrder: soId }));
+
+        if (so && Array.isArray(so.items)) {
+            const prepItems = so.items.map((item) => {
+                const fgObj = typeof item.finishedGood === 'object' ? item.finishedGood : null;
+                const fgId = fgObj?._id || item.finishedGood;
+                const fgName = fgObj?.name || 'Finished Goods Bag';
+                const orderedQty = item.quantity || 0;
+                const alreadyDispatched = item.dispatchedQuantity || 0;
+                const remainingQty = Math.max(0, orderedQty - alreadyDispatched);
+
+                return {
+                    finishedGood: fgId,
+                    finishedGoodName: fgName,
+                    orderedQuantity: orderedQty,
+                    remainingQuantity: remainingQty,
+                    dispatchedQuantity: remainingQty > 0 ? remainingQty : orderedQty
+                };
+            });
+            setDispatchItems(prepItems);
+        } else {
+            setDispatchItems([]);
+        }
+    };
+
+    // Submit Dispatch Plan
+    const handleSubmitDispatch = async (e) => {
+        e.preventDefault();
+
+        if (!formData.salesOrder || !formData.dispatchLocation || !formData.vehicleNumber.trim() || !formData.transporter.trim()) {
+            toast.error('Please fill in all required fields (Sales Order, Location, Vehicle #, Transporter)');
+            return;
+        }
+
+        if (dispatchItems.length === 0) {
+            toast.error('No items found in selected Sales Order');
+            return;
+        }
+
+        try {
+            setIsSubmitting(true);
+
+            const payload = {
+                salesOrder: formData.salesOrder,
+                dispatchLocation: formData.dispatchLocation,
+                vehicleNumber: formData.vehicleNumber.trim().toUpperCase(),
+                transporter: formData.transporter.trim(),
+                driverName: formData.driverName.trim(),
+                driverPhone: formData.driverPhone.trim(),
+                notes: formData.notes.trim(),
+                items: dispatchItems.map((item) => ({
+                    finishedGood: item.finishedGood,
+                    dispatchedQuantity: Number(item.dispatchedQuantity || 0)
+                }))
+            };
+
+            const res = await axiosInstance.post('/dispatches', payload);
+
+            if (res.data?.success) {
+                const dispNum = res.data.data?.dispatch?.dispatchNumber || 'DISP-NEW';
+                toast.success(`Dispatch '${dispNum}' planned successfully!`);
+                setIsDrawerOpen(false);
+                setRefreshKey((prev) => prev + 1);
+            }
+        } catch (err) {
+            console.error('Error planning dispatch:', err);
+            toast.error(err.response?.data?.message || 'Failed to plan vehicle dispatch');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    // Exact 7 Columns sequence required
+    const columns = [
         {
-            key: 'dispatches',
-            label: 'Dispatches',
-            resourcePath: '/dispatches',
-            columns: [
-                { header: 'Dispatch #', accessor: 'dispatchNumber' },
-                { header: 'Sales Order #', accessor: 'salesOrder.soNumber' },
-                {
-                    header: 'Dispatch Date',
-                    render: (row) => row.dispatchDate ? new Date(row.dispatchDate).toLocaleDateString() : '-'
-                },
-                { header: 'Carrier / Transporter', accessor: 'carrier' },
-                { header: 'Tracking / Vehicle #', accessor: 'trackingNumber' },
-                {
-                    header: 'Status',
-                    render: (row) => (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-status-neutral-bg text-status-neutral-text">
-                            {row.status || 'DISPATCHED'}
-                        </span>
-                    )
-                }
-            ]
+            header: 'DISPATCH #',
+            render: (row) => (
+                <span className="font-mono font-bold uppercase text-text-main text-xs">
+                    {row.dispatchNumber || '-'}
+                </span>
+            ),
+            sortable: true
+        },
+        {
+            header: 'SALES ORDER REF',
+            render: (row) => {
+                const soObj = typeof row.salesOrder === 'object' ? row.salesOrder : null;
+                const soNum = soObj?.soNumber || row.soNumber || '-';
+                return (
+                    <span className="font-mono font-bold uppercase text-primary text-xs">
+                        {soNum}
+                    </span>
+                );
+            },
+            sortable: true
+        },
+        {
+            header: 'CUSTOMER',
+            render: (row) => {
+                const soObj = typeof row.salesOrder === 'object' ? row.salesOrder : null;
+                const custObj = typeof soObj?.customer === 'object' ? soObj.customer : null;
+                const customerName = custObj?.companyName || row.customerName || '-';
+
+                return (
+                    <span className="font-extrabold text-text-main text-xs">
+                        {customerName}
+                    </span>
+                );
+            },
+            sortable: true
+        },
+        {
+            header: 'VEHICLE NUMBER',
+            render: (row) => (
+                <span className="font-mono font-semibold uppercase text-text-main text-xs bg-app-bg px-2 py-0.5 rounded border border-border">
+                    {row.vehicleNumber || '-'}
+                </span>
+            )
+        },
+        {
+            header: 'TRANSPORTER',
+            render: (row) => (
+                <span className="font-semibold text-text-main text-xs">
+                    {row.transporter || row.carrierName || 'V-Trans India Ltd'}
+                </span>
+            )
+        },
+        {
+            header: 'BAGS SHIPPED',
+            render: (row) => {
+                // Dynamically compute bags and bales (1 Bale = ~300 bags)
+                const itemsList = row.items || [];
+                const totalBags = itemsList.reduce((acc, i) => acc + Number(i.dispatchedQuantity || i.quantity || 0), 0);
+                const totalBales = totalBags > 0 ? Math.ceil(totalBags / 300) : 0;
+
+                return (
+                    <div className="font-sans leading-tight">
+                        <div className="font-extrabold text-text-main text-xs">
+                            {totalBags > 0 ? `${totalBags.toLocaleString()} Bags` : '-'}
+                        </div>
+                        {totalBags > 0 && (
+                            <div className="text-[10px] text-text-muted font-mono font-medium">
+                                ({totalBales} Bales)
+                            </div>
+                        )}
+                    </div>
+                );
+            }
+        },
+        {
+            header: 'DELIVERY STATUS',
+            render: (row) => {
+                const status = (row.deliveryStatus || row.status || 'IN_TRANSIT').toUpperCase();
+                const isDelivered = status === 'DELIVERED';
+
+                return (
+                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${
+                        isDelivered
+                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                            : 'bg-amber-50 text-amber-800 border border-amber-200'
+                    }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${isDelivered ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
+                        <span>{isDelivered ? 'Delivered' : 'In Transit'}</span>
+                    </div>
+                );
+            }
         }
     ];
 
+    const tabs = [
+        {
+            key: 'dispatches',
+            label: 'Vehicle Dispatches',
+            resourcePath: '/dispatches',
+            columns: columns
+        }
+    ];
+
+    const headerButton = (
+        <button
+            type="button"
+            onClick={() => setIsDrawerOpen(true)}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer shrink-0"
+        >
+            <Truck size={16} />
+            <span>+ Plan Vehicle Dispatch</span>
+        </button>
+    );
+
     return (
-        <TabbedResourcePage
-            title="Dispatch & Logistics"
-            description="Track outward dispatches, gate passes, vehicle numbers, and delivery status."
-            tabs={tabs}
-        />
+        <>
+            <TabbedResourcePage
+                key={refreshKey}
+                title="Fleet Dispatch & Logistics Control"
+                description="Vehicle loading, Delivery Challan, Baling Strapping & POD Confirmation"
+                tabs={tabs}
+                headerActions={headerButton}
+            />
+
+            {/* SlideOverPanel Drawer for "+ Plan Vehicle Dispatch" */}
+            <SlideOverPanel
+                isOpen={isDrawerOpen}
+                onClose={() => setIsDrawerOpen(false)}
+                title="Plan Vehicle Dispatch & Gate Pass"
+                subtitle="Select Sales Order, assign transporter carrier, vehicle number & quantity to ship"
+            >
+                <form onSubmit={handleSubmitDispatch} className="space-y-4 font-sans text-xs">
+                    {isLoadingFormOptions ? (
+                        <div className="flex items-center justify-center py-12 text-text-muted gap-2">
+                            <RefreshCw size={18} className="animate-spin text-primary" />
+                            <span>Loading Sales Orders & Locations...</span>
+                        </div>
+                    ) : (
+                        <>
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Select Sales Order *
+                                </label>
+                                <select
+                                    required
+                                    value={formData.salesOrder}
+                                    onChange={(e) => handleSelectSalesOrder(e.target.value)}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
+                                >
+                                    {salesOrders.length === 0 ? (
+                                        <option value="">No active Sales Orders available</option>
+                                    ) : (
+                                        salesOrders.map((so) => {
+                                            const custObj = typeof so.customer === 'object' ? so.customer : null;
+                                            const custName = custObj?.companyName || 'Retail Customer';
+                                            return (
+                                                <option key={so._id} value={so._id}>
+                                                    {so.soNumber} — {custName} ({so.status})
+                                                </option>
+                                            );
+                                        })
+                                    )}
+                                </select>
+                            </div>
+
+                            {selectedSO && (
+                                <div className="bg-app-bg border border-border p-3 rounded-lg space-y-1">
+                                    <div className="flex justify-between items-center text-[11px]">
+                                        <span className="text-text-muted font-medium">Customer:</span>
+                                        <span className="font-bold text-text-main">{selectedSO.customer?.companyName || 'N/A'}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-[11px]">
+                                        <span className="text-text-muted font-medium">Order Status:</span>
+                                        <span className="font-mono font-extrabold text-primary">{selectedSO.status}</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Transporter / Carrier Name *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        required
+                                        placeholder="e.g. V-Trans India Ltd"
+                                        value={formData.transporter}
+                                        onChange={(e) => setFormData({ ...formData, transporter: e.target.value })}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Vehicle Number *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        required
+                                        placeholder="e.g. GJ-05-BX-1000"
+                                        value={formData.vehicleNumber}
+                                        onChange={(e) => setFormData({ ...formData, vehicleNumber: e.target.value.toUpperCase() })}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-bold text-text-main uppercase focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Driver Name
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. Ramesh Kumar"
+                                        value={formData.driverName}
+                                        onChange={(e) => setFormData({ ...formData, driverName: e.target.value })}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Driver Phone Number
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="+91 98765 43210"
+                                        value={formData.driverPhone}
+                                        onChange={(e) => setFormData({ ...formData, driverPhone: e.target.value })}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Dispatch Location Dock *
+                                </label>
+                                <select
+                                    required
+                                    value={formData.dispatchLocation}
+                                    onChange={(e) => setFormData({ ...formData, dispatchLocation: e.target.value })}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
+                                >
+                                    {locations.map((loc) => (
+                                        <option key={loc._id} value={loc._id}>
+                                            {loc.name} ({loc.code})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* Dispatch Quantities & Items */}
+                            <div className="pt-2 border-t border-border space-y-2">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                    Total Bags & Bales to Load
+                                </label>
+
+                                {dispatchItems.map((item, idx) => {
+                                    const computedBales = Math.ceil(Number(item.dispatchedQuantity || 0) / 300);
+
+                                    return (
+                                        <div key={idx} className="bg-card-bg border border-border p-3 rounded-lg space-y-2">
+                                            <div className="font-semibold text-xs text-text-main">
+                                                {item.finishedGoodName}
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3 items-center">
+                                                <div>
+                                                    <span className="text-[10px] text-text-muted block">Quantity to Load (Bags)</span>
+                                                    <input
+                                                        type="number"
+                                                        required
+                                                        min={1}
+                                                        value={item.dispatchedQuantity}
+                                                        onChange={(e) => {
+                                                            const val = e.target.value;
+                                                            setDispatchItems((prev) =>
+                                                                prev.map((it, i) => (i === idx ? { ...it, dispatchedQuantity: val } : it))
+                                                            );
+                                                        }}
+                                                        className="w-full border border-border rounded p-2 bg-app-bg text-xs font-extrabold text-text-main focus:outline-none focus:border-primary font-mono"
+                                                    />
+                                                </div>
+
+                                                <div className="text-right">
+                                                    <span className="text-[10px] text-text-muted block">Calculated Bales</span>
+                                                    <span className="text-xs font-mono font-extrabold text-primary">
+                                                        {computedBales} Bales
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="pt-3 border-t border-border flex justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsDrawerOpen(false)}
+                                    className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isSubmitting}
+                                    className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                >
+                                    <Truck size={16} />
+                                    <span>{isSubmitting ? 'Processing Dispatch...' : 'Confirm & Plan Dispatch'}</span>
+                                </button>
+                            </div>
+                        </>
+                    )}
+                </form>
+            </SlideOverPanel>
+        </>
     );
 }

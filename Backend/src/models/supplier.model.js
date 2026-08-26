@@ -58,13 +58,13 @@ const SupplierSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Compound unique index for code and name per tenant
-SupplierSchema.index({ code: 1, tenant: 1 }, { unique: true });
-SupplierSchema.index({ name: 1, tenant: 1 }, { unique: true });
+SupplierSchema.index({ tenant: 1, code: 1 }, { unique: true });
+SupplierSchema.index({ tenant: 1, name: 1 }, { unique: true });
 
-// Sparse compound unique index for GSTIN per tenant
+// Partial filter expression compound unique index for GSTIN per tenant
 SupplierSchema.index(
-    { gstin: 1, tenant: 1 },
-    { unique: true, sparse: true, partialFilterExpression: { gstin: { $type: 'string' } } }
+    { tenant: 1, gstin: 1 },
+    { unique: true, partialFilterExpression: { gstin: { $type: 'string' } } }
 );
 
 module.exports = mongoose.model('Supplier', SupplierSchema);

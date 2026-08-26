@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import GlobalSearchBar from './GlobalSearchBar';
-import { Building2, ChevronDown, ShieldCheck, Bell, BellOff, LogOut, Loader2, Check, Menu } from 'lucide-react';
+import { Building2, ChevronDown, ShieldCheck, Bell, BellOff, LogOut, Loader2, Check, Menu, User, Settings, Users } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 
 // Helper to detect 24-character hexadecimal MongoDB ObjectId
@@ -24,29 +25,33 @@ const getRoleDisplayName = (user) => {
     if (user?.roleName) return user.roleName;
     if (user?.role && typeof user.role === 'object' && user.role.name) return user.role.name;
     if (typeof user?.role === 'string' && !isMongoObjectId(user.role)) return user.role;
-    return 'Admin';
+    return 'Authorized User';
 };
 
 export default function Topbar({ onToggleSidebar }) {
+    const navigate = useNavigate();
     const user = useAuthStore((state) => state.user);
     const logout = useAuthStore((state) => state.logout);
     const currentFacility = useAuthStore((state) => state.currentFacility);
     const setCurrentFacility = useAuthStore((state) => state.setCurrentFacility);
 
-    // Facility dropdown state
+    // Dropdown States
     const [showFacilityDropdown, setShowFacilityDropdown] = useState(false);
+    const [showNotificationDropdown, setShowNotificationDropdown] = useState(false);
+    const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+
     const [locations, setLocations] = useState([]);
     const [isLocationsLoading, setIsLocationsLoading] = useState(false);
 
-    // Notification dropdown state
-    const [showNotificationDropdown, setShowNotificationDropdown] = useState(false);
-    const notificationCount = 0; // TODO: Connect to backend GET /api/notifications endpoint when available
+    const notificationCount = 0;
 
     const facilityRef = useRef(null);
     const notificationRef = useRef(null);
+    const profileDropdownRef = useRef(null);
 
     const userInitials = getInitials(user?.name);
     const roleDisplayName = getRoleDisplayName(user);
+    const userEmail = user?.email || 'user@polysack.com';
 
     // Close popovers on outside click
     useEffect(() => {
@@ -56,6 +61,9 @@ export default function Topbar({ onToggleSidebar }) {
             }
             if (notificationRef.current && !notificationRef.current.contains(e.target)) {
                 setShowNotificationDropdown(false);
+            }
+            if (profileDropdownRef.current && !profileDropdownRef.current.contains(e.target)) {
+                setIsProfileMenuOpen(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
@@ -94,7 +102,7 @@ export default function Topbar({ onToggleSidebar }) {
     const displayFacilityName = currentFacility || user?.facilityName || 'Vapi Unit #1 (GIDC Phase 3)';
 
     return (
-        <header className="h-16 bg-sidebar-bg border-b border-sidebar-hover flex items-center justify-between px-3 sm:px-6 text-sidebar-text-active font-sans gap-2 sm:gap-6 shadow-xs shrink-0">
+        <header className="h-16 bg-sidebar-bg border-b border-sidebar-hover flex items-center justify-between px-3 sm:px-6 text-sidebar-text-active font-sans gap-2 sm:gap-6 shadow-xs shrink-0 relative z-30">
             {/* Left Group: Hamburger Toggle (below lg) + Brand Logo */}
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
                 {/* Hamburger Toggle Button (mobile/tablet only) */}
@@ -224,29 +232,112 @@ export default function Topbar({ onToggleSidebar }) {
                     )}
                 </div>
 
-                {/* User Info Block & Avatar */}
-                <div className="flex items-center gap-2 sm:gap-3 border-l border-sidebar-hover pl-2 sm:pl-4">
-                    <div className="w-8 h-8 sm:w-8.5 sm:h-8.5 rounded-full bg-primary text-sidebar-bg font-extrabold text-xs flex items-center justify-center shadow-xs shrink-0 select-none">
-                        {userInitials}
-                    </div>
-
-                    <div className="hidden sm:flex flex-col text-left leading-tight select-none">
-                        <span className="text-xs font-bold text-sidebar-text-active truncate max-w-[110px]">
-                            {user?.name || 'Authorized User'}
-                        </span>
-                        <span className="text-[10px] text-sidebar-text font-medium truncate max-w-[110px]">
-                            {roleDisplayName}
-                        </span>
-                    </div>
-
-                    {/* Working Logout Button */}
+                {/* Clickable Profile Dropdown Block */}
+                <div className="relative" ref={profileDropdownRef}>
                     <button
-                        onClick={logout}
-                        className="p-1.5 rounded-lg bg-sidebar-hover text-sidebar-text hover:text-rose-400 border border-sidebar-hover transition-all cursor-pointer"
-                        title="Sign Out"
+                        type="button"
+                        onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+                        className="flex items-center gap-2 sm:gap-3 border-l border-sidebar-hover pl-2 sm:pl-4 py-1 rounded-lg hover:bg-sidebar-hover/60 transition-all cursor-pointer select-none"
                     >
-                        <LogOut size={14} />
+                        <div className="w-8 h-8 sm:w-8.5 sm:h-8.5 rounded-full bg-primary text-sidebar-bg font-extrabold text-xs flex items-center justify-center shadow-xs shrink-0 select-none">
+                            {userInitials}
+                        </div>
+
+                        <div className="hidden sm:flex flex-col text-left leading-tight select-none">
+                            <span className="text-xs font-bold text-sidebar-text-active truncate max-w-[110px]">
+                                {user?.name || 'Authorized User'}
+                            </span>
+                            <span className="text-[10px] text-sidebar-text font-medium truncate max-w-[110px]">
+                                {roleDisplayName}
+                            </span>
+                        </div>
+
+                        <ChevronDown size={14} className="text-sidebar-text shrink-0 hidden sm:block" />
                     </button>
+
+                    {/* Professional Profile Dropdown Menu */}
+                    {isProfileMenuOpen && (
+                        <div className="absolute right-0 mt-2 w-60 bg-card-bg border border-border shadow-2xl rounded-xl z-[100] py-2 font-sans text-xs text-text-main divide-y divide-border animate-in fade-in zoom-in-95 duration-100">
+                            {/* Profile Header Summary */}
+                            <div className="px-4 py-3 bg-app-bg/50">
+                                <p className="font-bold text-text-main truncate text-xs">
+                                    {user?.name || 'User Account'}
+                                </p>
+                                <p className="text-[11px] font-mono text-text-muted truncate mt-0.5">
+                                    {userEmail}
+                                </p>
+                                <div className="mt-2 inline-block px-2 py-0.5 bg-primary/10 text-primary border border-primary/20 rounded text-[10px] font-bold uppercase tracking-wider">
+                                    {roleDisplayName}
+                                </div>
+                            </div>
+
+                            {/* Navigation Options */}
+                            <div className="py-1">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsProfileMenuOpen(false);
+                                        navigate('/profile');
+                                    }}
+                                    className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
+                                >
+                                    <User size={15} className="text-primary" />
+                                    <span>My Profile</span>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsProfileMenuOpen(false);
+                                        navigate('/administration');
+                                    }}
+                                    className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
+                                >
+                                    <Building2 size={15} className="text-amber-500" />
+                                    <span>Company Settings</span>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsProfileMenuOpen(false);
+                                        navigate('/administration/roles');
+                                    }}
+                                    className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
+                                >
+                                    <ShieldCheck size={15} className="text-purple-500" />
+                                    <span>Roles & Permissions</span>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsProfileMenuOpen(false);
+                                        navigate('/administration/users');
+                                    }}
+                                    className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
+                                >
+                                    <Users size={15} className="text-blue-500" />
+                                    <span>User Accounts</span>
+                                </button>
+                            </div>
+
+                            {/* Logout Action */}
+                            <div className="pt-1">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsProfileMenuOpen(false);
+                                        logout();
+                                    }}
+                                    className="w-full px-4 py-2.5 flex items-center gap-2.5 text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition-colors font-bold cursor-pointer text-xs"
+                                >
+                                    <LogOut size={15} />
+                                    <span>Sign Out</span>
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </header>

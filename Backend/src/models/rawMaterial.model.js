@@ -59,7 +59,7 @@ const RawMaterialSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Compound unique indexes per tenant
-RawMaterialSchema.index({ code: 1, tenant: 1 }, { unique: true });
-RawMaterialSchema.index({ name: 1, tenant: 1 }, { unique: true });
+RawMaterialSchema.index({ tenant: 1, code: 1 }, { unique: true });
+RawMaterialSchema.index({ tenant: 1, name: 1 }, { unique: true });
 
 module.exports = mongoose.model('RawMaterial', RawMaterialSchema);

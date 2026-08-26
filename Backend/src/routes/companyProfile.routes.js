@@ -16,5 +16,6 @@ router.get('/', authenticate, checkPermission('USERS', 'READ'), getCompanyProfil
  * @access  Private (USERS:UPDATE permission - pending ADMINISTRATION module approval)
  */
 router.patch('/', authenticate, checkPermission('USERS', 'UPDATE'), updateCompanyProfile);
+router.put('/', authenticate, checkPermission('USERS', 'UPDATE'), updateCompanyProfile);
 
 module.exports = router;
