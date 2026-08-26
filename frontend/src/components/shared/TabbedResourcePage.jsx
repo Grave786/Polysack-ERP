@@ -28,6 +28,7 @@ export default function TabbedResourcePage({
     tabs = [],
     onAddClick = null,
     headerActions = null,
+    tabBarActions = null,
     activeTabKey: controlledActiveTabKey,
     onTabChange
 }) {
@@ -1787,7 +1788,7 @@ export default function TabbedResourcePage({
 
                 <div className="flex items-center gap-2.5 shrink-0">
                     {/* Optional Custom Header Action Buttons */}
-                    {headerActions}
+                    {typeof headerActions === 'function' ? headerActions(handleOpenDrawer) : headerActions}
 
                     {/* Top-Right Dynamic "Add New Record" Button (rendered only if custom headerActions is not supplied) */}
                     {!headerActions && (
@@ -1805,39 +1806,47 @@ export default function TabbedResourcePage({
 
             {/* Tab Bar */}
             {showTabBar && (
-                <div className="flex items-center gap-2 border-b border-border pb-2.5 overflow-x-auto">
-                    {tabs.map((tab) => {
-                        const isActive = tab.key === activeTabKey;
-                        const isPlaceholderTab = tab.isPlaceholder || (!tab.resourcePath && !tab.customRender);
-                        const count = isPlaceholderTab ? '—' : tabCounts[tab.key];
-                        const TabIcon = tab.icon;
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-border pb-2.5">
+                    <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto">
+                        {tabs.map((tab) => {
+                            const isActive = tab.key === activeTabKey;
+                            const isPlaceholderTab = tab.isPlaceholder || (!tab.resourcePath && !tab.customRender);
+                            const count = isPlaceholderTab ? '—' : tabCounts[tab.key];
+                            const TabIcon = tab.icon;
 
-                        return (
-                            <button
-                                key={tab.key}
-                                onClick={() => {
-                                    handleTabChange(tab.key);
-                                    setSearch('');
-                                    setPage(1);
-                                }}
-                                className={`flex items-center gap-2 text-sm font-medium whitespace-nowrap transition-all duration-150 cursor-pointer ${isActive
-                                    ? 'bg-primary text-sidebar-bg font-medium px-4 py-1.5 rounded-md text-sm shadow-xs'
-                                    : 'text-text-muted hover:text-text-main px-3 py-1.5 rounded-md text-sm border border-transparent'
-                                    }`}
-                            >
-                                {TabIcon && <TabIcon size={15} className="shrink-0" />}
-                                <span>{tab.label}</span>
-                                <span
-                                    className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${isActive
-                                        ? 'bg-sidebar-bg/20 text-sidebar-bg'
-                                        : 'bg-status-neutral-bg text-status-neutral-text'
+                            return (
+                                <button
+                                    key={tab.key}
+                                    onClick={() => {
+                                        handleTabChange(tab.key);
+                                        setSearch('');
+                                        setPage(1);
+                                    }}
+                                    className={`flex items-center gap-2 text-sm font-medium whitespace-nowrap transition-all duration-150 cursor-pointer ${isActive
+                                        ? 'bg-primary text-sidebar-bg font-medium px-4 py-1.5 rounded-md text-sm shadow-xs'
+                                        : 'text-text-muted hover:text-text-main px-3 py-1.5 rounded-md text-sm border border-transparent'
                                         }`}
                                 >
-                                    {count !== undefined ? count : '...'}
-                                </span>
-                            </button>
-                        );
-                    })}
+                                    {TabIcon && <TabIcon size={15} className="shrink-0" />}
+                                    <span>{tab.label}</span>
+                                    <span
+                                        className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${isActive
+                                            ? 'bg-sidebar-bg/20 text-sidebar-bg'
+                                            : 'bg-status-neutral-bg text-status-neutral-text'
+                                            }`}
+                                    >
+                                        {count !== undefined ? count : '...'}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    {tabBarActions && (
+                        <div className="shrink-0 self-end sm:self-auto">
+                            {tabBarActions}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -1853,7 +1862,7 @@ export default function TabbedResourcePage({
                     </p>
                 </div>
             ) : activeTab?.customRender ? (
-                typeof activeTab.customRender === 'function' ? activeTab.customRender(data) : activeTab.customRender
+                typeof activeTab.customRender === 'function' ? activeTab.customRender(data, handleEditRow) : activeTab.customRender
             ) : (
                 <DataTable
                     columns={activeTab?.columns || []}
