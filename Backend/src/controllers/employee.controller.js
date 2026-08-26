@@ -156,13 +156,16 @@ const getEmployees = async (req, res) => {
             });
         }
 
-        const { department, facility, shift, isActive, search, page = 1, limit = 20 } = req.query;
+        const { department, facility, shift, status, isActive, search, page = 1, limit = 20 } = req.query;
         const filter = { tenant: tenantId };
 
         if (department) filter.department = department;
         if (facility) filter.facility = facility;
         if (shift) filter.shiftAssignment = shift;
-        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
+        if (status && status !== 'All' && status !== 'ALL') {
+            if (status === 'Active' || status === 'ACTIVE') filter.isActive = true;
+            else if (status === 'Inactive' || status === 'INACTIVE') filter.isActive = false;
+        } else if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
 
         if (search) {
             filter.$or = [
@@ -235,13 +238,16 @@ const exportEmployeesCsv = async (req, res) => {
             });
         }
 
-        const { department, facility, shift, isActive, search } = req.query;
+        const { department, facility, shift, status, isActive, search } = req.query;
         const filter = { tenant: tenantId };
 
         if (department) filter.department = department;
         if (facility) filter.facility = facility;
         if (shift) filter.shiftAssignment = shift;
-        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
+        if (status && status !== 'All' && status !== 'ALL') {
+            if (status === 'Active' || status === 'ACTIVE') filter.isActive = true;
+            else if (status === 'Inactive' || status === 'INACTIVE') filter.isActive = false;
+        } else if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
 
         if (search) {
             filter.$or = [

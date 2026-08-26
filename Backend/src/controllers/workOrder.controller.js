@@ -450,7 +450,7 @@ const getWorkOrders = async (req, res) => {
             WorkOrder.find(filter)
                 .populate('customer', 'companyName code')
                 .populate('finishedGood', 'name code')
-                .populate('assignedMachine', 'name code')
+                .populate('assignedMachine', 'name code currentOperator')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum),

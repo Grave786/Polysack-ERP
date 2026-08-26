@@ -13,6 +13,7 @@ export function useResourceApi(resourcePath, initialParams = {}) {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
     const [search, setSearch] = useState(initialParams.search || '');
+    const [statusFilter, setStatusFilter] = useState(initialParams.status || 'All Statuses');
     const [page, setPage] = useState(initialParams.page || 1);
     const [limit, setLimit] = useState(initialParams.limit || 10);
 
@@ -25,6 +26,11 @@ export function useResourceApi(resourcePath, initialParams = {}) {
             if (search.trim()) params.search = search.trim();
             if (page) params.page = page;
             if (limit) params.limit = limit;
+            
+            const isAll = !statusFilter || statusFilter === 'All Statuses' || statusFilter === 'All' || statusFilter === 'ALL';
+            if (!isAll) {
+                params.status = statusFilter;
+            }
 
             const response = await axiosInstance.get(resourcePath, { params });
             const result = response.data;
@@ -51,7 +57,7 @@ export function useResourceApi(resourcePath, initialParams = {}) {
         } finally {
             setIsLoading(false);
         }
-    }, [resourcePath, search, page, limit]);
+    }, [resourcePath, search, page, limit, statusFilter]);
 
     useEffect(() => {
         fetchData();
@@ -147,6 +153,11 @@ export function useResourceApi(resourcePath, initialParams = {}) {
         setSearch: (newSearch) => {
             setSearch(newSearch);
             setPage(1); // Reset to page 1 on new search
+        },
+        statusFilter,
+        setStatusFilter: (newStatus) => {
+            setStatusFilter(newStatus);
+            setPage(1);
         },
         page,
         setPage,

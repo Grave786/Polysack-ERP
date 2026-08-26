@@ -159,11 +159,11 @@ const getMachines = async (req, res) => {
             filter.section = section;
         }
 
-        if (status) {
-            filter.status = status;
-        }
-
-        if (isActive !== undefined) {
+        if (status && status !== 'All' && status !== 'ALL') {
+            if (status === 'Active' || status === 'ACTIVE') filter.isActive = true;
+            else if (status === 'Inactive' || status === 'INACTIVE') filter.isActive = false;
+            else filter.status = status;
+        } else if (isActive !== undefined) {
             filter.isActive = isActive === 'true' || isActive === true;
         }
 
@@ -229,8 +229,11 @@ const exportMachines = async (req, res) => {
         const filter = { tenant: tenantId };
 
         if (section) filter.section = section;
-        if (status) filter.status = status;
-        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
+        if (status && status !== 'All' && status !== 'ALL') {
+            if (status === 'Active' || status === 'ACTIVE') filter.isActive = true;
+            else if (status === 'Inactive' || status === 'INACTIVE') filter.isActive = false;
+            else filter.status = status;
+        } else if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
         if (search) {
             filter.$or = [
                 { name: { $regex: search, $options: 'i' } },

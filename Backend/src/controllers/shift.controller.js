@@ -90,10 +90,13 @@ const getShifts = async (req, res) => {
             });
         }
 
-        const { search, isActive, page = 1, limit = 20 } = req.query;
+        const { search, status, isActive, page = 1, limit = 20 } = req.query;
         const filter = { tenant: tenantId };
 
-        if (isActive !== undefined) {
+        if (status && status !== 'All' && status !== 'ALL') {
+            if (status === 'Active' || status === 'ACTIVE') filter.isActive = true;
+            else if (status === 'Inactive' || status === 'INACTIVE') filter.isActive = false;
+        } else if (isActive !== undefined) {
             filter.isActive = isActive === 'true' || isActive === true;
         }
 

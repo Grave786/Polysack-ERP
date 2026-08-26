@@ -95,7 +95,7 @@ const getLocations = async (req, res) => {
             });
         }
 
-        const { type, isActive, search, page = 1, limit = 20 } = req.query;
+        const { type, status, isActive, search, page = 1, limit = 20 } = req.query;
 
         const filter = { tenant: tenantId };
 
@@ -103,7 +103,10 @@ const getLocations = async (req, res) => {
             filter.type = type;
         }
 
-        if (isActive !== undefined) {
+        if (status && status !== 'All' && status !== 'ALL') {
+            if (status === 'Active' || status === 'ACTIVE') filter.isActive = true;
+            else if (status === 'Inactive' || status === 'INACTIVE') filter.isActive = false;
+        } else if (isActive !== undefined) {
             filter.isActive = isActive === 'true' || isActive === true;
         }
 

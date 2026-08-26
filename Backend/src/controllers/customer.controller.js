@@ -134,12 +134,20 @@ const getCustomers = async (req, res) => {
 
         const filter = { tenant: tenantId };
 
-        if (status) {
-            filter.status = status;
-        }
-
-        if (isActive !== undefined) {
-            filter.isActive = isActive === 'true' || isActive === true;
+        if (status && status !== 'All' && status !== 'ALL') {
+            if (status === 'Active' || status === 'ACTIVE') {
+                filter.isActive = true;
+            } else if (status === 'Inactive' || status === 'INACTIVE') {
+                filter.isActive = false;
+            } else if (status === 'Lead' || status === 'LEAD') {
+                filter.$or = [
+                    { status: 'LEAD' },
+                    { status: 'INACTIVE_LEAD' },
+                    { status: { $regex: 'lead', $options: 'i' } }
+                ];
+            } else {
+                filter.status = status;
+            }
         }
 
         if (search) {
@@ -200,8 +208,21 @@ const exportCustomers = async (req, res) => {
         const { status, isActive, search } = req.query;
         const filter = { tenant: tenantId };
 
-        if (status) filter.status = status;
-        if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
+        if (status && status !== 'All' && status !== 'ALL') {
+            if (status === 'Active' || status === 'ACTIVE') {
+                filter.isActive = true;
+            } else if (status === 'Inactive' || status === 'INACTIVE') {
+                filter.isActive = false;
+            } else if (status === 'Lead' || status === 'LEAD') {
+                filter.$or = [
+                    { status: 'LEAD' },
+                    { status: 'INACTIVE_LEAD' },
+                    { status: { $regex: 'lead', $options: 'i' } }
+                ];
+            } else {
+                filter.status = status;
+            }
+        }
         if (search) {
             filter.$or = [
                 { companyName: { $regex: search, $options: 'i' } },

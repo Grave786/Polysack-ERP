@@ -128,7 +128,7 @@ const getCategories = async (req, res) => {
             });
         }
 
-        const { type, parentCategory, isActive, search, page = 1, limit = 20 } = req.query;
+        const { type, parentCategory, status, isActive, search, page = 1, limit = 20 } = req.query;
 
         // Filter strictly scoped to req.user.tenant
         const filter = { tenant: tenantId };
@@ -141,7 +141,10 @@ const getCategories = async (req, res) => {
             filter.parentCategory = parentCategory === 'null' || parentCategory === '' ? null : parentCategory;
         }
 
-        if (isActive !== undefined) {
+        if (status && status !== 'All' && status !== 'ALL') {
+            if (status === 'Active' || status === 'ACTIVE') filter.isActive = true;
+            else if (status === 'Inactive' || status === 'INACTIVE') filter.isActive = false;
+        } else if (isActive !== undefined) {
             filter.isActive = isActive === 'true' || isActive === true;
         }
 

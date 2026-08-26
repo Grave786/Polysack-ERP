@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Loader2, Database, ArrowUpDown, Pencil, Trash2, Columns, Download } from 'lucide-react';
+import { Loader2, Database, ArrowUpDown, Pencil, Trash2, Columns, Download, Filter } from 'lucide-react';
 import SearchBar from './SearchBar';
 import Pagination from './Pagination';
 
@@ -10,6 +10,9 @@ export default function DataTable({
     emptyMessage = 'No records found',
     search = '',
     onSearchChange = () => {},
+    statusFilter = 'All',
+    onStatusFilterChange = () => {},
+    availableStatuses = ['Active', 'Inactive'],
     pagination = {},
     onPageChange = () => {},
     activeTabLabel = '',
@@ -97,8 +100,25 @@ export default function DataTable({
                     />
                 </div>
 
-                {/* Right Action Controls: Columns & Export CSV */}
-                <div className="flex items-center gap-2 w-full sm:w-auto justify-end shrink-0">
+                {/* Right Action Controls: Status Filter, Columns & Export CSV */}
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end shrink-0 flex-wrap sm:flex-nowrap">
+                    {/* Dynamic Status Filter Dropdown */}
+                    <div className="flex items-center gap-1.5 bg-card-bg border border-border rounded-lg px-2.5 py-1.5 text-xs text-text-main shadow-2xs select-none">
+                        <Filter size={14} className="text-text-muted shrink-0" />
+                        <select
+                            value={statusFilter}
+                            onChange={(e) => onStatusFilterChange(e.target.value)}
+                            className="bg-transparent text-xs font-semibold text-text-main focus:outline-none cursor-pointer"
+                        >
+                            <option value="All Statuses">All Statuses</option>
+                            {availableStatuses.map((st) => (
+                                <option key={st} value={st}>
+                                    {st}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
                     {/* Columns Dropdown Toggle Container */}
                     <div className="relative" ref={dropdownRef}>
                         <button
@@ -152,147 +172,243 @@ export default function DataTable({
                 </div>
             </div>
 
-            {/* Table Container */}
-            <div className="w-full overflow-x-auto border border-border rounded-xl shadow-2xs bg-card-bg">
+            {/* Table & Mobile Cards Container */}
+            <div className="w-full space-y-3">
                 {isLoading ? (
-                    <div className="flex flex-col items-center justify-center py-20 text-text-muted font-sans">
+                    <div className="flex flex-col items-center justify-center py-20 bg-card-bg border border-border rounded-xl text-text-muted font-sans">
                         <Loader2 className="animate-spin mb-2 text-primary" size={32} />
                         <span className="text-xs font-semibold text-text-main">Loading records...</span>
                     </div>
                 ) : !data || data.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-20 text-text-muted font-sans">
+                    <div className="flex flex-col items-center justify-center py-20 bg-card-bg border border-border rounded-xl text-text-muted font-sans">
                         <Database className="mb-2 opacity-40 text-text-muted" size={36} />
                         <span className="text-sm font-bold text-text-main">{emptyMessage}</span>
                         <span className="text-xs text-text-muted mt-1">There are no records matching your request.</span>
                     </div>
                 ) : (
-                    <table className="w-full text-left border-collapse text-xs">
-                        {/* Table Header */}
-                        <thead>
-                            <tr className="bg-table-header-bg text-table-header-text font-extrabold uppercase tracking-wider text-[11px]">
-                                {/* Far-left Header Checkbox Column (Select All) */}
-                                <th className="px-4 py-3.5 border-b border-border/40 w-10 text-center">
-                                    <input
-                                        type="checkbox"
-                                        checked={isAllSelected}
-                                        ref={(input) => {
-                                            if (input) input.indeterminate = isSomeSelected;
-                                        }}
-                                        onChange={handleToggleSelectAll}
-                                        className="rounded border-border text-primary focus:ring-primary cursor-pointer accent-primary"
-                                        title="Select all displayed rows"
-                                    />
-                                </th>
-
-                                {columns.map((col, idx) => {
-                                    const colKey = col.key || col.header;
-                                    if (visibleColumns[colKey] === false) return null;
-
-                                    return (
-                                        <th key={idx} className="px-4 py-3.5 border-b border-border/40 whitespace-nowrap">
-                                            <div className="flex items-center gap-1.5">
-                                                <span>{col.header}</span>
-                                                {col.sortable && (
-                                                    <ArrowUpDown size={12} className="text-table-header-text/70 shrink-0" />
-                                                )}
-                                            </div>
-                                        </th>
-                                    );
-                                })}
-
-                                {/* Rightmost Actions Header Column */}
-                                <th className="px-4 py-3.5 border-b border-border/40 text-right whitespace-nowrap">
-                                    ACTIONS
-                                </th>
-                            </tr>
-                        </thead>
-
-                        {/* Table Body */}
-                        <tbody className="divide-y divide-border bg-card-bg">
+                    <>
+                        {/* Mobile Card-Based List View (visible below sm breakpoint) */}
+                        <div className="sm:hidden space-y-3 font-sans">
                             {data.map((row, rowIndex) => {
                                 const rowId = row._id || rowIndex;
                                 const isRowSelected = selectedRowIds.includes(rowId);
                                 const isInactiveRecord = row.isActive === false;
 
                                 return (
-                                    <tr
+                                    <div
                                         key={rowId}
-                                        className={`transition-colors duration-150 text-text-main ${
+                                        className={`bg-card-bg border rounded-xl p-4 shadow-2xs space-y-2.5 transition-all ${
                                             isInactiveRecord
-                                                ? 'bg-gray-100/70 text-text-muted opacity-60'
+                                                ? 'border-border/60 bg-gray-100/50 text-text-muted opacity-75'
                                                 : isRowSelected
-                                                ? 'bg-primary/5 hover:bg-primary/10'
-                                                : 'hover:bg-app-bg/60'
+                                                ? 'border-primary/50 bg-primary/5'
+                                                : 'border-border'
                                         }`}
                                     >
-                                        {/* Far-left Checkbox Column */}
-                                        <td className="px-4 py-3.5 w-10 text-center whitespace-nowrap">
+                                        {/* Card Header row with checkbox */}
+                                        <div className="flex items-center justify-between pb-2 border-b border-border/40">
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isRowSelected}
+                                                    onChange={() => handleToggleRow(rowId)}
+                                                    className="rounded border-border text-primary focus:ring-primary cursor-pointer accent-primary"
+                                                />
+                                                <span className="text-[10px] font-extrabold uppercase tracking-wider text-text-muted">
+                                                    RECORD #{rowIndex + 1}
+                                                </span>
+                                            </div>
+                                            {isInactiveRecord && (
+                                                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-gray-100 text-gray-600 border border-gray-300">
+                                                    Inactive
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        {/* Label : Value pairs */}
+                                        <div className="space-y-2 pt-1">
+                                            {columns.map((col, colIndex) => {
+                                                const colKey = col.key || col.header;
+                                                if (visibleColumns[colKey] === false) return null;
+
+                                                let cellValue = null;
+                                                if (col.render) {
+                                                    cellValue = col.render(row);
+                                                } else if (col.accessor) {
+                                                    cellValue = getNestedValue(row, col.accessor);
+                                                }
+
+                                                if (col.type === 'badge') {
+                                                    const isActiveState = cellValue === true || cellValue === 'Active' || cellValue === 'COMPLETED' || cellValue === 'PASSED' || cellValue === 'PAID';
+                                                    cellValue = (
+                                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold inline-block ${
+                                                            isActiveState ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-gray-100 text-gray-700 border border-gray-200'
+                                                        }`}>
+                                                            {cellValue !== null && cellValue !== undefined ? String(cellValue) : 'Inactive'}
+                                                        </span>
+                                                    );
+                                                }
+
+                                                return (
+                                                    <div key={colIndex} className="flex items-center justify-between gap-3 text-xs">
+                                                        <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted shrink-0">
+                                                            {col.header}
+                                                        </span>
+                                                        <span className="font-semibold text-text-main text-right truncate">
+                                                            {cellValue !== null && cellValue !== undefined ? cellValue : '-'}
+                                                        </span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+
+                                        {/* Card Actions Footer */}
+                                        <div className="flex items-center justify-end gap-3 pt-2.5 border-t border-border/40">
+                                            <button
+                                                type="button"
+                                                onClick={() => onEdit(row)}
+                                                className="flex items-center gap-1 text-xs font-semibold text-text-muted hover:text-primary transition-colors cursor-pointer"
+                                            >
+                                                <Pencil size={14} />
+                                                <span>Edit</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => onDelete(row)}
+                                                className="flex items-center gap-1 text-xs font-semibold text-text-muted hover:text-rose-500 transition-colors cursor-pointer"
+                                            >
+                                                <Trash2 size={14} />
+                                                <span>Deactivate</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        {/* Standard Desktop / Tablet HTML Table (visible sm and above) */}
+                        <div className="hidden sm:block w-full overflow-x-auto border border-border rounded-xl shadow-2xs bg-card-bg">
+                            <table className="w-full text-left border-collapse text-xs">
+                                <thead>
+                                    <tr className="bg-table-header-bg text-table-header-text font-extrabold uppercase tracking-wider text-[11px]">
+                                        <th className="px-4 py-3.5 border-b border-border/40 w-10 text-center">
                                             <input
                                                 type="checkbox"
-                                                checked={isRowSelected}
-                                                onChange={() => handleToggleRow(rowId)}
+                                                checked={isAllSelected}
+                                                ref={(input) => {
+                                                    if (input) input.indeterminate = isSomeSelected;
+                                                }}
+                                                onChange={handleToggleSelectAll}
                                                 className="rounded border-border text-primary focus:ring-primary cursor-pointer accent-primary"
+                                                title="Select all displayed rows"
                                             />
-                                        </td>
+                                        </th>
 
-                                        {/* Data Columns (Checked against visibleColumns) */}
-                                        {columns.map((col, colIndex) => {
+                                        {columns.map((col, idx) => {
                                             const colKey = col.key || col.header;
                                             if (visibleColumns[colKey] === false) return null;
 
-                                            let cellValue = null;
-                                            if (col.render) {
-                                                cellValue = col.render(row);
-                                            } else if (col.accessor) {
-                                                cellValue = getNestedValue(row, col.accessor);
-                                            }
-
-                                            // Badge column formatting fallback
-                                            if (col.type === 'badge') {
-                                                const isActiveState = cellValue === true || cellValue === 'Active' || cellValue === 'COMPLETED' || cellValue === 'PASSED' || cellValue === 'PAID';
-                                                cellValue = (
-                                                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-block ${
-                                                        isActiveState ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-gray-100 text-gray-700 border border-gray-200'
-                                                    }`}>
-                                                        {cellValue !== null && cellValue !== undefined ? String(cellValue) : 'Inactive'}
-                                                    </span>
-                                                );
-                                            }
-
                                             return (
-                                                <td key={colIndex} className="px-4 py-3.5 whitespace-nowrap text-xs font-medium">
-                                                    {cellValue !== null && cellValue !== undefined ? cellValue : '-'}
-                                                </td>
+                                                <th key={idx} className="px-4 py-3.5 border-b border-border/40 whitespace-nowrap">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span>{col.header}</span>
+                                                        {col.sortable && (
+                                                            <ArrowUpDown size={12} className="text-table-header-text/70 shrink-0" />
+                                                        )}
+                                                    </div>
+                                                </th>
                                             );
                                         })}
 
-                                        {/* Rightmost Actions Column */}
-                                        <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                                            <div className="flex items-center justify-end gap-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onEdit(row)}
-                                                    className="p-1 text-text-muted hover:text-primary transition-colors cursor-pointer rounded"
-                                                    title="Edit Record"
-                                                >
-                                                    <Pencil size={15} />
-                                                </button>
-
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onDelete(row)}
-                                                    className="p-1 text-text-muted hover:text-rose-500 transition-colors cursor-pointer rounded"
-                                                    title="Deactivate Record"
-                                                >
-                                                    <Trash2 size={15} />
-                                                </button>
-                                            </div>
-                                        </td>
+                                        <th className="px-4 py-3.5 border-b border-border/40 text-right whitespace-nowrap">
+                                            ACTIONS
+                                        </th>
                                     </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
+                                </thead>
+
+                                <tbody className="divide-y divide-border bg-card-bg">
+                                    {data.map((row, rowIndex) => {
+                                        const rowId = row._id || rowIndex;
+                                        const isRowSelected = selectedRowIds.includes(rowId);
+                                        const isInactiveRecord = row.isActive === false;
+
+                                        return (
+                                            <tr
+                                                key={rowId}
+                                                className={`transition-colors duration-150 text-text-main ${
+                                                    isInactiveRecord
+                                                        ? 'bg-gray-100/70 text-text-muted opacity-60'
+                                                        : isRowSelected
+                                                        ? 'bg-primary/5 hover:bg-primary/10'
+                                                        : 'hover:bg-app-bg/60'
+                                                }`}
+                                            >
+                                                <td className="px-4 py-3.5 w-10 text-center whitespace-nowrap">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isRowSelected}
+                                                        onChange={() => handleToggleRow(rowId)}
+                                                        className="rounded border-border text-primary focus:ring-primary cursor-pointer accent-primary"
+                                                    />
+                                                </td>
+
+                                                {columns.map((col, colIndex) => {
+                                                    const colKey = col.key || col.header;
+                                                    if (visibleColumns[colKey] === false) return null;
+
+                                                    let cellValue = null;
+                                                    if (col.render) {
+                                                        cellValue = col.render(row);
+                                                    } else if (col.accessor) {
+                                                        cellValue = getNestedValue(row, col.accessor);
+                                                    }
+
+                                                    if (col.type === 'badge') {
+                                                        const isActiveState = cellValue === true || cellValue === 'Active' || cellValue === 'COMPLETED' || cellValue === 'PASSED' || cellValue === 'PAID';
+                                                        cellValue = (
+                                                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-block ${
+                                                                isActiveState ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-gray-100 text-gray-700 border border-gray-200'
+                                                            }`}>
+                                                                {cellValue !== null && cellValue !== undefined ? String(cellValue) : 'Inactive'}
+                                                            </span>
+                                                        );
+                                                    }
+
+                                                    return (
+                                                        <td key={colIndex} className="px-4 py-3.5 whitespace-nowrap text-xs font-medium">
+                                                            {cellValue !== null && cellValue !== undefined ? cellValue : '-'}
+                                                        </td>
+                                                    );
+                                                })}
+
+                                                <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onEdit(row)}
+                                                            className="p-1 text-text-muted hover:text-primary transition-colors cursor-pointer rounded"
+                                                            title="Edit Record"
+                                                        >
+                                                            <Pencil size={15} />
+                                                        </button>
+
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onDelete(row)}
+                                                            className="p-1 text-text-muted hover:text-rose-500 transition-colors cursor-pointer rounded"
+                                                            title="Deactivate Record"
+                                                        >
+                                                            <Trash2 size={15} />
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </>
                 )}
 
                 {/* Pagination Footer */}

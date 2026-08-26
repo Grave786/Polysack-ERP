@@ -22,8 +22,29 @@ const generateSuggestedCode = (tabKey, currentTotal = 0) => {
     return `${prefix}-${paddedNum}`;
 };
 
-export default function TabbedResourcePage({ title, description, tabs = [], onAddClick = null, headerActions = null }) {
-    const [activeTabKey, setActiveTabKey] = useState(tabs[0]?.key || '');
+export default function TabbedResourcePage({
+    title,
+    description,
+    tabs = [],
+    onAddClick = null,
+    headerActions = null,
+    activeTabKey: controlledActiveTabKey,
+    onTabChange
+}) {
+    const [internalActiveTabKey, setInternalActiveTabKey] = useState(tabs[0]?.key || '');
+
+    useEffect(() => {
+        if (controlledActiveTabKey) {
+            setInternalActiveTabKey(controlledActiveTabKey);
+        }
+    }, [controlledActiveTabKey]);
+
+    const activeTabKey = controlledActiveTabKey || internalActiveTabKey;
+
+    const handleTabChange = (key) => {
+        setInternalActiveTabKey(key);
+        if (onTabChange) onTabChange(key);
+    };
     const [tabCounts, setTabCounts] = useState({});
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [editingItem, setEditingItem] = useState(null);
@@ -41,11 +62,14 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
     // Form state values
     const [formData, setFormData] = useState({});
 
-    // Dropdown list states for employees, raw materials, and finished goods
+    // Dropdown list states for employees, raw materials, finished goods, and BOMs
     const [shiftsList, setShiftsList] = useState([]);
     const [locationsList, setLocationsList] = useState([]);
     const [categoriesList, setCategoriesList] = useState([]);
     const [uomsList, setUomsList] = useState([]);
+    const [finishedGoodsList, setFinishedGoodsList] = useState([]);
+    const [rawMaterialsList, setRawMaterialsList] = useState([]);
+    const [bomIngredients, setBomIngredients] = useState([{ rawMaterial: '', quantityPerUnit: '' }]);
 
     // Inline Shift Modal State inside Employee Form
     const [isInlineShiftModalOpen, setIsInlineShiftModalOpen] = useState(false);
@@ -62,7 +86,7 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
     const activeTab = tabs.find((t) => t.key === activeTabKey) || tabs[0];
     const activeTabLabel = activeTab?.label || 'Record';
 
-    const isTabPlaceholder = activeTab?.isPlaceholder || !activeTab?.resourcePath;
+    const isTabPlaceholder = activeTab?.isPlaceholder || (!activeTab?.resourcePath && !activeTab?.customRender);
 
     const {
         data,
@@ -70,6 +94,8 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
         isLoading,
         search,
         setSearch,
+        statusFilter,
+        setStatusFilter,
         page,
         setPage,
         createItem,
@@ -85,9 +111,25 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
                 [activeTab.key]: pagination.total
             }));
         }
-    }, [activeTab, isTabPlaceholder, pagination?.total]);
 
-    // Fetch shift, location, category, and UOM options when active tab or drawer opens
+        // Fetch counts for all other tabs with resourcePath
+        tabs.forEach((t) => {
+            if (t.resourcePath && !t.isPlaceholder) {
+                axiosInstance.get(t.resourcePath, { params: { limit: 1 } })
+                    .then((res) => {
+                        if (res.data?.success && res.data?.pagination?.total !== undefined) {
+                            setTabCounts((prev) => ({
+                                ...prev,
+                                [t.key]: res.data.pagination.total
+                            }));
+                        }
+                    })
+                    .catch(() => { });
+            }
+        });
+    }, [activeTab, isTabPlaceholder, pagination?.total, tabs]);
+
+    // Fetch shift, location, category, UOM, and BOM options when active tab or drawer opens
     const fetchDropdownOptions = () => {
         if (activeTabKey === 'employees') {
             axiosInstance.get('/shifts?isActive=true').then((res) => {
@@ -149,10 +191,34 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
                 }
             }).catch(() => { });
         }
+
+        if (key === 'boms' || key === 'bom') {
+            // Fetch Finished Goods options for target dropdown
+            axiosInstance.get('/finished-goods?isActive=true&limit=100').then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    const list = res.data.data;
+                    setFinishedGoodsList(list);
+                    if (list.length > 0) {
+                        setFormData((prev) => ({
+                            ...prev,
+                            finishedGood: prev.finishedGood || list[0]._id
+                        }));
+                    }
+                }
+            }).catch(() => { });
+
+            // Fetch Raw Materials options for ingredient rows
+            axiosInstance.get('/raw-materials?limit=100').then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    setRawMaterialsList(res.data.data);
+                }
+            }).catch(() => { });
+        }
     };
 
     useEffect(() => {
-        if (isDrawerOpen) {
+        const key = activeTabKey?.toLowerCase() || '';
+        if (isDrawerOpen || key === 'boms' || key === 'bom') {
             fetchDropdownOptions();
         }
     }, [activeTabKey, isDrawerOpen]);
@@ -316,7 +382,10 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
         try {
             toast.loading('Generating CSV export...', { id: 'csv-export' });
             const response = await axiosInstance.get(`${activeTab.resourcePath}/export`, {
-                params: { search },
+                params: {
+                    search,
+                    status: (statusFilter && statusFilter !== 'All Statuses' && statusFilter !== 'All' && statusFilter !== 'ALL') ? statusFilter : undefined
+                },
                 responseType: 'blob'
             });
 
@@ -367,6 +436,19 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
             payload.uom = uomVal || (uomsList[0]?._id || '');
         }
 
+        if (key === 'boms' || key === 'bom') {
+            const fgVal = typeof formData.finishedGood === 'object' ? formData.finishedGood?._id : (formData.finishedGood || finishedGoodsList[0]?._id);
+            payload.finishedGood = fgVal;
+            payload.name = formData.name || '';
+            payload.items = bomIngredients
+                .map((i) => ({
+                    rawMaterial: typeof i.rawMaterial === 'object' ? i.rawMaterial?._id : i.rawMaterial,
+                    quantityPerUnit: Number(i.quantityPerUnit || i.quantity || 0)
+                }))
+                .filter((i) => i.rawMaterial && i.quantityPerUnit > 0);
+            payload.replaceExisting = true;
+        }
+
         if (editingItem?._id) {
             res = await updateItem(editingItem._id, payload);
         } else {
@@ -407,6 +489,7 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
      */
     const handleOpenDrawer = () => {
         setEditingItem(null);
+        setBomIngredients([{ rawMaterial: '', quantityPerUnit: '' }]);
 
         const suggestedCode = generateSuggestedCode(activeTabKey, pagination?.total || 0);
 
@@ -426,7 +509,7 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
             status: activeTabKey === 'customers' ? 'ACTIVE_CUSTOMER' : (activeTabKey === 'machines' ? 'AVAILABLE' : 'Active')
         });
 
-        if (onAddClick) {
+        if (onAddClick && (activeTabKey === 'work-orders' || activeTabKey === 'stage-monitor')) {
             onAddClick(activeTabKey);
         } else {
             setIsDrawerOpen(true);
@@ -436,6 +519,18 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
     const handleEditRow = (row) => {
         setEditingItem(row);
         const codeVal = row.code || row.customerCode || row.supplierCode || row.employeeCode || row.machineCode || row.itemCode || row.shiftCode || '';
+
+        if (row.items && Array.isArray(row.items)) {
+            setBomIngredients(
+                row.items.map((i) => ({
+                    rawMaterial: typeof i.rawMaterial === 'object' ? i.rawMaterial?._id : i.rawMaterial,
+                    quantityPerUnit: i.quantityPerUnit || ''
+                }))
+            );
+        } else {
+            setBomIngredients([{ rawMaterial: '', quantityPerUnit: '' }]);
+        }
+
         setFormData({
             ...row,
             code: codeVal,
@@ -447,6 +542,7 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
             shiftCode: codeVal,
             shiftAssignment: typeof row.shiftAssignment === 'object' ? row.shiftAssignment?._id : row.shiftAssignment,
             facility: typeof row.facility === 'object' ? row.facility?._id : row.facility,
+            finishedGood: typeof row.finishedGood === 'object' ? row.finishedGood?._id : row.finishedGood,
             isActive: row.isActive !== false
         });
         setIsDrawerOpen(true);
@@ -1533,6 +1629,118 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
             );
         }
 
+        // BILL OF MATERIALS (BOM) FORM
+        if (key === 'boms' || key === 'bom' || key === 'billofmaterials' || key === 'bill-of-materials') {
+            return (
+                <div className="space-y-4 font-sans text-xs">
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            BOM / Recipe Name
+                        </label>
+                        <input
+                            type="text"
+                            placeholder="e.g. Recipe for 50kg Laminated PP Woven Sack"
+                            value={formData.name || ''}
+                            onChange={(e) => handleInputChange('name', e.target.value)}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            Target Finished Good *
+                        </label>
+                        <select
+                            required
+                            value={typeof formData.finishedGood === 'object' ? formData.finishedGood?._id : (formData.finishedGood || (finishedGoodsList[0]?._id || ''))}
+                            onChange={(e) => handleInputChange('finishedGood', e.target.value)}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                        >
+                            <option value="">-- Select Finished Good Spec --</option>
+                            {finishedGoodsList.map((fg) => (
+                                <option key={fg._id} value={fg._id}>
+                                    {fg.code || 'FG'} - {fg.name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* DYNAMIC INGREDIENTS / RAW MATERIALS SECTION */}
+                    <div className="space-y-3 border-t border-border pt-3">
+                        <div className="flex items-center justify-between">
+                            <label className="block text-xs font-extrabold uppercase tracking-wider text-text-main">
+                                Ingredients / Raw Materials *
+                            </label>
+                            <button
+                                type="button"
+                                onClick={() => setBomIngredients((prev) => [...prev, { rawMaterial: '', quantityPerUnit: '' }])}
+                                className="text-xs text-primary hover:underline font-bold cursor-pointer flex items-center gap-1"
+                            >
+                                <Plus size={13} />
+                                <span>Add Ingredient</span>
+                            </button>
+                        </div>
+
+                        {bomIngredients.map((item, idx) => (
+                            <div key={idx} className="flex items-center gap-2 bg-app-bg p-2.5 rounded-lg border border-border">
+                                <div className="flex-1">
+                                    <select
+                                        required
+                                        value={typeof item.rawMaterial === 'object' ? item.rawMaterial?._id : item.rawMaterial}
+                                        onChange={(e) => {
+                                            const val = e.target.value;
+                                            setBomIngredients((prev) =>
+                                                prev.map((ing, i) => (i === idx ? { ...ing, rawMaterial: val } : ing))
+                                            );
+                                        }}
+                                        className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                                    >
+                                        <option value="">-- Select Raw Material --</option>
+                                        {rawMaterialsList.map((rm) => (
+                                            <option key={rm._id} value={rm._id}>
+                                                {rm.name || rm.materialName || rm.companyName || rm.code || 'Raw Material'} ({rm.code || 'RM'})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="w-28">
+                                    <input
+                                        type="number"
+                                        step="any"
+                                        min="0.0001"
+                                        required
+                                        placeholder="Qty/Unit"
+                                        value={item.quantityPerUnit !== undefined ? item.quantityPerUnit : (item.quantity || '')}
+                                        onChange={(e) => {
+                                            const val = e.target.value;
+                                            setBomIngredients((prev) =>
+                                                prev.map((ing, i) => (i === idx ? { ...ing, quantityPerUnit: val } : ing))
+                                            );
+                                        }}
+                                        className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-semibold"
+                                    />
+                                </div>
+
+                                {bomIngredients.length > 1 && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setBomIngredients((prev) => prev.filter((_, i) => i !== idx))}
+                                        className="p-1.5 text-text-muted hover:text-rose-500 rounded transition-colors cursor-pointer"
+                                        title="Remove Ingredient"
+                                    >
+                                        <Trash2 size={15} />
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+
+                    {renderIsActiveToggle()}
+                </div>
+            );
+        }
+
         // Generic stub
         return (
             <div className="space-y-4 font-sans text-xs">
@@ -1573,7 +1781,7 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
             {/* Top Main Page Header with Dynamic Add Record Button */}
             <div className="flex justify-between items-start gap-4">
                 <div>
-                    <h1 className="text-xl font-extrabold text-text-main tracking-tight">{title}</h1>
+                    <h1 className="text-xl font-bold text-text-main tracking-tight">{title}</h1>
                     {description && <p className="text-xs text-text-muted mt-0.5">{description}</p>}
                 </div>
 
@@ -1581,15 +1789,17 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
                     {/* Optional Custom Header Action Buttons */}
                     {headerActions}
 
-                    {/* Top-Right Dynamic "Add New Record" Button */}
-                    <button
-                        type="button"
-                        className="flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
-                        onClick={handleOpenDrawer}
-                    >
-                        <Plus size={15} />
-                        <span>Add New {activeTabLabel} Record</span>
-                    </button>
+                    {/* Top-Right Dynamic "Add New Record" Button (rendered only if custom headerActions is not supplied) */}
+                    {!headerActions && (
+                        <button
+                            type="button"
+                            className="flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+                            onClick={handleOpenDrawer}
+                        >
+                            <Plus size={15} />
+                            <span>Add New {activeTabLabel} Record</span>
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -1598,7 +1808,7 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
                 <div className="flex items-center gap-2 border-b border-border pb-2.5 overflow-x-auto">
                     {tabs.map((tab) => {
                         const isActive = tab.key === activeTabKey;
-                        const isPlaceholderTab = tab.isPlaceholder || !tab.resourcePath;
+                        const isPlaceholderTab = tab.isPlaceholder || (!tab.resourcePath && !tab.customRender);
                         const count = isPlaceholderTab ? '—' : tabCounts[tab.key];
                         const TabIcon = tab.icon;
 
@@ -1606,13 +1816,13 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
                             <button
                                 key={tab.key}
                                 onClick={() => {
-                                    setActiveTabKey(tab.key);
+                                    handleTabChange(tab.key);
                                     setSearch('');
                                     setPage(1);
                                 }}
-                                className={`flex items-center gap-2 text-xs font-semibold whitespace-nowrap transition-all duration-150 cursor-pointer ${isActive
-                                    ? 'bg-primary text-sidebar-bg font-bold shadow-xs px-3.5 py-2 rounded-full'
-                                    : 'text-text-muted hover:text-text-main px-3 py-2 rounded-full border border-transparent'
+                                className={`flex items-center gap-2 text-sm font-medium whitespace-nowrap transition-all duration-150 cursor-pointer ${isActive
+                                    ? 'bg-primary text-sidebar-bg font-medium px-4 py-1.5 rounded-md text-sm shadow-xs'
+                                    : 'text-text-muted hover:text-text-main px-3 py-1.5 rounded-md text-sm border border-transparent'
                                     }`}
                             >
                                 {TabIcon && <TabIcon size={15} className="shrink-0" />}
@@ -1642,6 +1852,8 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
                         {activeTab?.placeholderMessage || 'Coming Soon — Attendance & HR module component.'}
                     </p>
                 </div>
+            ) : activeTab?.customRender ? (
+                typeof activeTab.customRender === 'function' ? activeTab.customRender(data) : activeTab.customRender
             ) : (
                 <DataTable
                     columns={activeTab?.columns || []}
@@ -1650,6 +1862,15 @@ export default function TabbedResourcePage({ title, description, tabs = [], onAd
                     emptyMessage={`No ${activeTab?.label || 'records'} found`}
                     search={search}
                     onSearchChange={setSearch}
+                    statusFilter={statusFilter}
+                    onStatusFilterChange={setStatusFilter}
+                    availableStatuses={(() => {
+                        const k = (activeTabKey || '').toLowerCase();
+                        if (k === 'customers' || k === 'customer') return ['Active', 'Inactive', 'Lead'];
+                        if (k === 'machines' || k === 'machine') return ['Active', 'Inactive', 'AVAILABLE', 'RUNNING', 'MAINTENANCE', 'OFFLINE'];
+                        if (k === 'work-orders' || k === 'workorders' || k === 'stage-monitor') return ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
+                        return ['Active', 'Inactive'];
+                    })()}
                     pagination={pagination}
                     onPageChange={setPage}
                     activeTabLabel={activeTab?.label}
