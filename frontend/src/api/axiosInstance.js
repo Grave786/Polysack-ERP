@@ -9,10 +9,14 @@ const axiosInstance = axios.create({
     }
 });
 
-// Request Interceptor: Attach Bearer JWT token from cookie
+// Request Interceptor: Attach Bearer JWT token dynamically from localStorage or Cookies before EVERY single request
 axiosInstance.interceptors.request.use(
     (config) => {
-        const token = Cookies.get('polysack_token');
+        const token =
+            (typeof window !== 'undefined' && (localStorage.getItem('token') || localStorage.getItem('polysack_token'))) ||
+            Cookies.get('polysack_token') ||
+            Cookies.get('token');
+
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
@@ -31,10 +35,20 @@ axiosInstance.interceptors.response.use(
         const errorMessage = error.response?.data?.message || 'An error occurred while processing your request.';
 
         if (status === 401) {
-            toast.error(errorMessage || 'Session expired. Please log in again.');
-            Cookies.remove('polysack_token');
-            if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-                window.location.href = '/login';
+            const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
+            const isAuthUrl = error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/me') || currentPath === '/login';
+
+            if (!isAuthUrl) {
+                console.warn('⚠️ 401 Unauthorized detected on protected route:', error.config?.url);
+                toast.error(errorMessage || 'Session expired. Please log in again.');
+                Cookies.remove('polysack_token');
+                Cookies.remove('token');
+                if (typeof window !== 'undefined') {
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('polysack_token');
+                    localStorage.removeItem('polysack_user');
+                    window.location.href = '/login';
+                }
             }
         } else if (status === 403) {
             toast.error(errorMessage || 'Access Denied: You do not have permission for this action.');

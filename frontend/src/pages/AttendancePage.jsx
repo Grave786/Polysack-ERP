@@ -323,11 +323,10 @@ export default function AttendancePage() {
                 const isPresent = st === 'PRESENT';
 
                 return (
-                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border ${
-                        isPresent
-                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                            : 'bg-slate-100 text-slate-700 border-slate-200'
-                    }`}>
+                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border ${isPresent
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        : 'bg-slate-100 text-slate-700 border-slate-200'
+                        }`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${isPresent ? 'bg-emerald-500' : 'bg-slate-400'}`} />
                         <span>{isPresent ? 'Present' : 'On Leave'}</span>
                     </div>

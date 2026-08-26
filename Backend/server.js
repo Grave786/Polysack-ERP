@@ -41,6 +41,7 @@ const employeeRoutes = require('./src/routes/employee.routes');
 const attendanceRoutes = require('./src/routes/attendance.routes');
 const rosterRoutes = require('./src/routes/roster.routes');
 const crmRoutes = require('./src/routes/crm.routes');
+const analyticsRoutes = require('./src/routes/analytics.routes');
 const dashboardRoutes = require('./src/routes/dashboard.routes');
 
 const app = express();
@@ -117,6 +118,7 @@ app.use('/api/employees', employeeRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/rosters', rosterRoutes);
 app.use('/api/crm', crmRoutes);
+app.use('/api/analytics', analyticsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 
 const PORT = process.env.PORT || 5000;

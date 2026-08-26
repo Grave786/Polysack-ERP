@@ -86,7 +86,7 @@ export const useAuthStore = create((set, get) => ({
 
     /**
      * Login Action
-     * Calls POST /api/auth/login, resolves names for role & facility, sets state & cookie
+     * Calls POST /api/auth/login, resolves names for role & facility, sets state & storage
      */
     login: async (email, password) => {
         try {
@@ -95,19 +95,22 @@ export const useAuthStore = create((set, get) => ({
             const { success, message, token, data } = response.data;
 
             if (success && token) {
-                // Store JWT token in cookie with 1-day expiry
-                Cookies.set(TOKEN_COOKIE_NAME, token, { expires: 1, sameSite: 'lax' });
-
                 // Asynchronously fetch human-readable role and location names if they are ObjectIds
                 const resolvedUser = await resolveUserNames(data);
 
-                if (typeof window !== 'undefined' && resolvedUser) {
-                    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(resolvedUser));
+                // Store JWT token in cookie & localStorage with 1-day expiry
+                Cookies.set(TOKEN_COOKIE_NAME, token, { expires: 1, sameSite: 'lax' });
+                if (typeof window !== 'undefined') {
+                    localStorage.setItem('token', token);
+                    localStorage.setItem('polysack_token', token);
+                    if (resolvedUser) {
+                        localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(resolvedUser));
+                    }
                 }
 
                 set({
                     user: resolvedUser,
-                    currentFacility: resolvedUser.facilityName || 'Vapi Unit #1 (GIDC Phase 3)',
+                    currentFacility: resolvedUser?.facilityName || 'Vapi Unit #1 (GIDC Phase 3)',
                     isAuthenticated: true,
                     isLoading: false
                 });
@@ -131,7 +134,10 @@ export const useAuthStore = create((set, get) => ({
      */
     logout: () => {
         Cookies.remove(TOKEN_COOKIE_NAME);
+        Cookies.remove('token');
         if (typeof window !== 'undefined') {
+            localStorage.removeItem('token');
+            localStorage.removeItem('polysack_token');
             localStorage.removeItem(USER_STORAGE_KEY);
         }
 
@@ -147,10 +153,13 @@ export const useAuthStore = create((set, get) => ({
 
     /**
      * Check Auth on App Mount
-     * Validates cookie token, restores user session & resolves human-readable names
+     * Validates cookie/localStorage token, restores user session & resolves human-readable names
      */
     checkAuth: async () => {
-        const token = Cookies.get(TOKEN_COOKIE_NAME);
+        const token =
+            Cookies.get(TOKEN_COOKIE_NAME) ||
+            Cookies.get('token') ||
+            (typeof window !== 'undefined' && (localStorage.getItem('token') || localStorage.getItem('polysack_token')));
 
         if (!token) {
             set({ user: null, isAuthenticated: false, isLoading: false });
@@ -161,7 +170,12 @@ export const useAuthStore = create((set, get) => ({
         if (!payload || (payload.exp && payload.exp * 1000 < Date.now())) {
             // Token expired or invalid
             Cookies.remove(TOKEN_COOKIE_NAME);
-            if (typeof window !== 'undefined') localStorage.removeItem(USER_STORAGE_KEY);
+            Cookies.remove('token');
+            if (typeof window !== 'undefined') {
+                localStorage.removeItem('token');
+                localStorage.removeItem('polysack_token');
+                localStorage.removeItem(USER_STORAGE_KEY);
+            }
             set({ user: null, isAuthenticated: false, isLoading: false });
             return;
         }
@@ -210,6 +224,18 @@ export const useAuthStore = create((set, get) => ({
                 return;
             }
         } catch (meErr) {
+            if (meErr.response?.status === 401) {
+                // Token rejected by backend — clear bad session cleanly without crashing
+                Cookies.remove(TOKEN_COOKIE_NAME);
+                Cookies.remove('token');
+                if (typeof window !== 'undefined') {
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('polysack_token');
+                    localStorage.removeItem(USER_STORAGE_KEY);
+                }
+                set({ user: null, isAuthenticated: false, isLoading: false });
+                return;
+            }
             console.warn('Fallback to local user session:', meErr.message);
         }
 
