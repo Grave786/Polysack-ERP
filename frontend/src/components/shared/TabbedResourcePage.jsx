@@ -1912,7 +1912,7 @@ export default function TabbedResourcePage({
                         />
                     </div>
 
-                    {/* Bag Type / Category Field Full Width */}
+                    {/* Master Data Bag Category Dropdown */}
                     <div>
                         <div className="flex justify-between items-center mb-1">
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
@@ -1957,7 +1957,7 @@ export default function TabbedResourcePage({
                             onChange={(e) => handleInputChange('category', e.target.value)}
                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
                         >
-                            <option value="">-- Select Bag Type --</option>
+                            <option value="">-- Select Bag Category --</option>
                             {categoriesList.map((cat) => (
                                 <option key={cat._id} value={cat._id}>
                                     {cat.name}
@@ -2050,7 +2050,7 @@ export default function TabbedResourcePage({
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                                 Width (cm)
@@ -2078,7 +2078,7 @@ export default function TabbedResourcePage({
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                                 Capacity (Kg)
@@ -2104,81 +2104,77 @@ export default function TabbedResourcePage({
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                             />
                         </div>
+                    </div>
 
-                        <div className="space-y-3 pt-2 border-t border-border">
-                            <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                    Bag Type / Description
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g. Laminated PP Woven Sack"
-                                    value={formData.bagType || ''}
-                                    onChange={(e) => handleInputChange('bagType', e.target.value)}
-                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                                />
-                            </div>
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            Product Description / Notes
+                        </label>
+                        <input
+                            type="text"
+                            placeholder="e.g. Heavy-duty Laminated PP Woven Sack with liner"
+                            value={formData.bagType || ''}
+                            onChange={(e) => handleInputChange('bagType', e.target.value)}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                        />
+                    </div>
 
-                            <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                        Color & Print Specification
-                                    </label>
-                                    <input
-                                        type="text"
-                                        placeholder="e.g. Milky White (2-Color Flexo)"
-                                        value={formData.colorAndPrint || ''}
-                                        onChange={(e) => handleInputChange('colorAndPrint', e.target.value)}
-                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                                    />
-                                </div>
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            Color & Print Specification
+                        </label>
+                        <input
+                            type="text"
+                            placeholder="e.g. Milky White (2-Color Flexo Printing)"
+                            value={formData.colorAndPrint || ''}
+                            onChange={(e) => handleInputChange('colorAndPrint', e.target.value)}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                        />
+                    </div>
 
-                                <div>
-                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                        Warehouse Bay / Location
-                                    </label>
-                                    <input
-                                        type="text"
-                                        placeholder="e.g. Finished Goods Warehouse - Bay 1"
-                                        value={formData.warehouseLocation || ''}
-                                        onChange={(e) => handleInputChange('warehouseLocation', e.target.value)}
-                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                                    />
-                                </div>
-                            </div>
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            Warehouse Storage Location / Bay
+                        </label>
+                        <input
+                            type="text"
+                            placeholder="e.g. Finished Goods Warehouse - Bay 1"
+                            value={formData.warehouseLocation || ''}
+                            onChange={(e) => handleInputChange('warehouseLocation', e.target.value)}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                        />
+                    </div>
 
-                            <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                        Retail Price / Bag (₹)
-                                    </label>
-                                    <input
-                                        type="number"
-                                        step="any"
-                                        placeholder="22.00"
-                                        value={formData.retailPrice || formData.pricePerBag || ''}
-                                        onChange={(e) => {
-                                            handleInputChange('retailPrice', e.target.value);
-                                            handleInputChange('pricePerBag', e.target.value);
-                                        }}
-                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold"
-                                    />
-                                </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                Retail Price / Bag (₹)
+                            </label>
+                            <input
+                                type="number"
+                                step="any"
+                                placeholder="22.00"
+                                value={formData.retailPrice || formData.pricePerBag || ''}
+                                onChange={(e) => {
+                                    handleInputChange('retailPrice', e.target.value);
+                                    handleInputChange('pricePerBag', e.target.value);
+                                }}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold"
+                            />
+                        </div>
 
-                                <div>
-                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                        Wholesale Price / Bag (₹)
-                                    </label>
-                                    <input
-                                        type="number"
-                                        step="any"
-                                        placeholder="18.50"
-                                        value={formData.wholesalePrice || ''}
-                                        onChange={(e) => handleInputChange('wholesalePrice', e.target.value)}
-                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold text-primary"
-                                    />
-                                </div>
-                            </div>
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                Wholesale Price / Bag (₹)
+                            </label>
+                            <input
+                                type="number"
+                                step="any"
+                                placeholder="18.50"
+                                value={formData.wholesalePrice || ''}
+                                onChange={(e) => handleInputChange('wholesalePrice', e.target.value)}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold text-primary"
+                            />
                         </div>
                     </div>
 

@@ -62,15 +62,20 @@ export default function ProductionPage() {
                         const targetQty = Number(row.targetQuantity || 1);
                         const completedStagesCount = Array.isArray(row.stages) ? row.stages.filter((s) => s.status === 'COMPLETED').length : 0;
                         const activeStagesCount = Array.isArray(row.stages) ? row.stages.filter((s) => s.status !== 'SKIPPED').length : 8;
-                        const pct = row.progressPercentage !== undefined
-                            ? row.progressPercentage
-                            : Math.min(100, Math.round((completedStagesCount / Math.max(1, activeStagesCount)) * 100));
+                        const allStagesDone = Array.isArray(row.stages) && activeStagesCount > 0 && row.stages.filter(s => s.status !== 'SKIPPED').every(s => s.status === 'COMPLETED');
+                        const isFullyDone = row.status === 'COMPLETED' || allStagesDone || (row.progressPercentage === 100);
+
+                        const pct = isFullyDone
+                            ? 100
+                            : row.progressPercentage !== undefined
+                                ? row.progressPercentage
+                                : Math.min(100, Math.round((completedStagesCount / Math.max(1, activeStagesCount)) * 100));
 
                         const activeStage = Array.isArray(row.stages) ? row.stages.find((s) => s.status === 'ACTIVE') : null;
-                        const activeLabel = activeStage
-                            ? (STAGE_LABELS[activeStage.stageName] || activeStage.stageName)
-                            : row.status === 'COMPLETED'
-                                ? 'Completed'
+                        const activeLabel = isFullyDone
+                            ? 'Completed'
+                            : activeStage
+                                ? (STAGE_LABELS[activeStage.stageName] || activeStage.stageName)
                                 : 'Pending';
 
                         return (

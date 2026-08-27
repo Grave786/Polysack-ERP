@@ -320,7 +320,7 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
 
                                     {isSkipped && (
                                         <span className="inline-block text-[9px] font-bold text-gray-400 bg-gray-200/80 px-1 py-0.5 rounded mt-1">
-                                            Skipped — Not in Use
+                                            Skipped — Not Required
                                         </span>
                                     )}
                                 </div>
@@ -332,16 +332,16 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
 
             {/* Panel: Record Live Stage Output & Defect Scrap */}
             {isFinishedOrCancelled ? (
-                workOrder.status === 'COMPLETED' ? (
-                    <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center shadow-2xs space-y-2">
-                        <CheckCircle2 className="text-green-600 mx-auto" size={32} />
-                        <h4 className="text-sm font-bold text-green-900">Work Order Completed & Output Routed to Pending QC</h4>
-                        <p className="text-xs text-green-700 max-w-md mx-auto">
-                            All active pipeline stages for this Work Order have been successfully completed. Batch output has been sent to Pending QC stock inspection.
+                (workOrder.status === 'COMPLETED' || (workOrder?.stages && workOrder.stages.filter(s => s.status !== 'SKIPPED').every(s => s.status === 'COMPLETED'))) ? (
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-6 text-center shadow-2xs space-y-2 font-sans">
+                        <CheckCircle2 className="text-emerald-500 mx-auto" size={40} />
+                        <h4 className="text-sm font-extrabold text-emerald-900 uppercase tracking-wider">Production Successfully Completed</h4>
+                        <p className="text-xs text-emerald-700 max-w-md mx-auto">
+                            All pipeline stages are finished. The final output has been moved to Finished Goods inventory.
                         </p>
                     </div>
                 ) : workOrder.status === 'CANCELLED' ? (
-                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-6 text-center shadow-2xs space-y-2">
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-6 text-center shadow-2xs space-y-2 font-sans">
                         <AlertCircle className="text-rose-600 mx-auto" size={32} />
                         <h4 className="text-sm font-bold text-rose-900">Work Order Cancelled</h4>
                         <p className="text-xs text-rose-700 max-w-md mx-auto">
@@ -349,11 +349,11 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                         </p>
                     </div>
                 ) : (
-                    <div className="bg-card-bg border border-border rounded-xl p-6 text-center shadow-2xs space-y-2">
-                        <AlertCircle className="text-amber-500 mx-auto" size={28} />
-                        <h4 className="text-sm font-bold text-text-main">No Active Stage Found</h4>
+                    <div className="bg-card-bg border border-border rounded-xl p-6 text-center shadow-2xs space-y-2 font-sans">
+                        <AlertCircle className="text-text-muted mx-auto" size={32} />
+                        <h4 className="text-sm font-bold text-text-main">Waiting to Start</h4>
                         <p className="text-xs text-text-muted max-w-md mx-auto">
-                            This Work Order has no stage currently marked as active.
+                            Production for this Work Order has not started yet.
                         </p>
                     </div>
                 )

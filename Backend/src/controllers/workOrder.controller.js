@@ -162,9 +162,15 @@ const createWorkOrder = async (req, res) => {
         const workOrderNumber = await generateWorkOrderNumber(tenantId);
         const now = new Date();
 
+        let firstActiveAssigned = false;
+
         const stages = ALL_STAGE_NAMES.map((stageName, index) => {
             const sequence = index + 1;
-            if (index < startingIndex) {
+            const isExplicitlySelected = Array.isArray(selectedStages)
+                ? selectedStages.includes(stageName)
+                : index >= startingIndex;
+
+            if (!isExplicitlySelected || index < startingIndex) {
                 return {
                     stageName,
                     sequence,
@@ -172,7 +178,8 @@ const createWorkOrder = async (req, res) => {
                     goodOutputQty: 0,
                     rejectedQty: 0
                 };
-            } else if (index === startingIndex) {
+            } else if (!firstActiveAssigned) {
+                firstActiveAssigned = true;
                 return {
                     stageName,
                     sequence,
@@ -410,10 +417,10 @@ const advanceStage = async (req, res) => {
                 outputTxn = txnResult.transaction;
             }
 
-            workOrder.completedQuantity += numGoodQty;
-            if (workOrder.completedQuantity >= workOrder.targetQuantity) {
-                workOrder.status = 'COMPLETED';
-            }
+            // Auto-complete Work Order on final stage completion
+            workOrder.completedQuantity = numGoodQty;
+            workOrder.status = 'COMPLETED';
+            workOrder.progressPercentage = 100;
         } else {
             // Activate next non-skipped stage
             const nextStage = workOrder.stages[nextStageIndex];
@@ -423,15 +430,11 @@ const advanceStage = async (req, res) => {
             }
         }
 
-        // Recalculate WorkOrder progress percentage based on completed stages
-        if (typeof workOrder.recalculateProgress === 'function') {
-            workOrder.recalculateProgress();
-        } else {
-            const activeOrCompleted = (workOrder.stages || []).filter((s) => s.status !== 'SKIPPED');
-            const totalActiveCount = activeOrCompleted.length || 1;
-            const completedCount = activeOrCompleted.filter((s) => s.status === 'COMPLETED').length;
-            workOrder.progressPercentage = Math.min(100, Math.round((completedCount / totalActiveCount) * 100));
-        }
+        const activeOrCompleted = workOrder.stages.filter(s => s.status !== 'SKIPPED');
+        const completedCount = activeOrCompleted.filter(s => s.status === 'COMPLETED').length;
+        workOrder.progressPercentage = workOrder.status === 'COMPLETED'
+            ? 100
+            : Math.min(100, Math.round((completedCount / activeOrCompleted.length) * 100));
 
         await workOrder.save(sessionOption);
 
