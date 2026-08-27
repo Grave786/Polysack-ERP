@@ -34,6 +34,11 @@ const GrnSchema = new mongoose.Schema({
         ref: 'PurchaseOrder',
         required: [true, 'Purchase Order reference is required']
     },
+    supplier: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Supplier',
+        required: [true, 'Supplier is required']
+    },
     receivedDate: {
         type: Date,
         default: Date.now

@@ -24,7 +24,7 @@ export default function CustomerCrmPage() {
     // Interaction Form State
     const [interactionForm, setInteractionForm] = useState({
         customer: '',
-        interactionType: 'Phone Call',
+        interactionType: 'CALL',
         subject: '',
         date: new Date().toISOString().split('T')[0],
         assignedExecutive: '',
@@ -36,7 +36,7 @@ export default function CustomerCrmPage() {
     // Complaint Form State
     const [complaintForm, setComplaintForm] = useState({
         customer: '',
-        complaintType: 'Quality Defect',
+        complaintType: 'QUALITY_DEFECT',
         description: '',
         date: new Date().toISOString().split('T')[0],
         assignedExecutive: '',
@@ -431,11 +431,12 @@ export default function CustomerCrmPage() {
                                         onChange={(e) => setInteractionForm({ ...interactionForm, interactionType: e.target.value })}
                                         className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-amber-500 cursor-pointer font-sans"
                                     >
-                                        <option value="Phone Call">Phone Call</option>
-                                        <option value="Email">Email Communication</option>
-                                        <option value="In-Person Meeting">In-Person Meeting</option>
-                                        <option value="Factory Visit">Factory Visit</option>
-                                        <option value="Escalation">Escalation / Issue</option>
+                                        <option value="CALL">Phone Call</option>
+                                        <option value="EMAIL">Email Communication</option>
+                                        <option value="MEETING">In-Person Meeting</option>
+                                        <option value="VISIT">Factory Visit</option>
+                                        <option value="FOLLOW_UP">Follow Up</option>
+                                        <option value="OTHER">Other / Escalation</option>
                                     </select>
                                 </div>
 
@@ -581,11 +582,12 @@ export default function CustomerCrmPage() {
                                         onChange={(e) => setComplaintForm({ ...complaintForm, complaintType: e.target.value })}
                                         className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-rose-500 cursor-pointer font-sans"
                                     >
-                                        <option value="Quality Defect">Bag Burst / Stitching Defect</option>
-                                        <option value="Delivery Delay">Delivery Delay / Logistics</option>
-                                        <option value="Quantity Mismatch">Shortage / Quantity Mismatch</option>
-                                        <option value="Packaging Damage">Bale Damage / Wet Bags</option>
-                                        <option value="Billing Error">Invoice / Rate Discrepancy</option>
+                                        <option value="QUALITY_DEFECT">Bag Burst / Stitching Defect</option>
+                                        <option value="DELIVERY_DELAY">Delivery Delay / Logistics</option>
+                                        <option value="QUANTITY_MISMATCH">Shortage / Quantity Mismatch</option>
+                                        <option value="PACKAGING_DAMAGE">Bale Damage / Wet Bags</option>
+                                        <option value="PRICE_DISCREPANCY">Invoice / Rate Discrepancy</option>
+                                        <option value="OTHER">Other Issue</option>
                                     </select>
                                 </div>
 

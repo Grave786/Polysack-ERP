@@ -3,6 +3,7 @@ const GRN = require('../models/grn.model');
 const PurchaseOrder = require('../models/purchaseOrder.model');
 const Location = require('../models/location.model');
 const RawMaterial = require('../models/rawMaterial.model');
+const QCInspection = require('../models/qcInspection.model');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
 
 /**
@@ -31,7 +32,25 @@ const generateGrnNumber = async (tenantId) => {
 };
 
 /**
- * @desc    Create a new Goods Receipt Note (GRN) and atomically update stock & PO status
+ * Helper to auto-generate unique QC Certificate number per tenant & year
+ */
+const generateQcCertNumber = async (tenantId) => {
+    const year = new Date().getFullYear();
+    const prefix = `QC-${year}-`;
+    const lastQc = await QCInspection.findOne({ tenant: tenantId, qcCertificateNumber: { $regex: `^${prefix}\\d{4}$` } }).sort({ qcCertificateNumber: -1 });
+    let nextNumber = 1001;
+    if (lastQc && lastQc.qcCertificateNumber) {
+        const parts = lastQc.qcCertificateNumber.split('-');
+        const lastSeq = parseInt(parts[2], 10);
+        if (!isNaN(lastSeq)) nextNumber = lastSeq + 1;
+    }
+    return `${prefix}${String(nextNumber).padStart(4, '0')}`;
+};
+
+/**
+ * @desc    Create a Goods Receipt Note (GRN)
+ *          Note: Goods received via GRN are routed to the Inbound QC gate.
+ *          Usable RawMaterial.currentStock is NOT updated here; it updates ONLY upon Inbound QC Pass.
  * @route   POST /api/grns
  * @access  Private (PROCUREMENT:CREATE permission)
  */
@@ -60,7 +79,6 @@ const createGRN = async (req, res) => {
             notes
         } = req.body;
 
-        // 1. Validation
         if (!purchaseOrder || !receivingLocation || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({
                 success: false,
@@ -68,7 +86,6 @@ const createGRN = async (req, res) => {
             });
         }
 
-        // 2. Verify Receiving Location exists and belongs to tenant
         const locationDoc = await Location.findOne({ _id: receivingLocation, tenant: tenantId });
         if (!locationDoc) {
             return res.status(400).json({
@@ -77,18 +94,15 @@ const createGRN = async (req, res) => {
             });
         }
 
-        // 3. Setup Mongoose Session Transaction
         try {
             session = await mongoose.startSession();
             session.startTransaction();
-        } catch (sessionErr) {
-            useTransaction = false; // Fallback for standalone MongoDB
+        } catch {
+            useTransaction = false;
         }
 
-        const createdStockTransactions = [];
         const sessionOption = useTransaction ? { session } : {};
 
-        // Fetch PurchaseOrder in session
         const poQuery = PurchaseOrder.findOne({ _id: purchaseOrder, tenant: tenantId });
         if (useTransaction && session) poQuery.session(session);
         const poDoc = await poQuery;
@@ -111,14 +125,12 @@ const createGRN = async (req, res) => {
             }
             return res.status(400).json({
                 success: false,
-                message: `Cannot receive goods against Purchase Order with status '${poDoc.status}'. Goods can only be received for POs that are 'SENT_TO_SUPPLIER' or 'PARTIALLY_RECEIVED'.`
+                message: `Cannot receive goods for PO in status '${poDoc.status}'. Only SENT_TO_SUPPLIER or PARTIALLY_RECEIVED allowed.`
             });
         }
 
-        const grnNumber = await generateGrnNumber(tenantId);
         const cleanedItems = [];
 
-        // 4. Validate items against PurchaseOrder
         for (const grnItem of items) {
             const rawMaterialId = typeof grnItem.rawMaterial === 'object'
                 ? String(grnItem.rawMaterial?._id || grnItem.rawMaterial?.id || '')
@@ -160,7 +172,7 @@ const createGRN = async (req, res) => {
                 }
                 return res.status(400).json({
                     success: false,
-                    message: `Cannot receive ${numQty} units of raw material. Ordered: ${poItem.orderedQuantity}, Already received: ${currentReceived}, Remaining allowed: ${remainingAllowed}.`
+                    message: `Cannot receive ${numQty} units. Ordered: ${poItem.orderedQuantity}, Received: ${currentReceived}, Allowed: ${remainingAllowed}.`
                 });
             }
 
@@ -171,11 +183,13 @@ const createGRN = async (req, res) => {
             });
         }
 
-        // Step A: Create GRN Document
+        const grnNumber = await generateGrnNumber(tenantId);
+
         const grnDocs = await GRN.create([{
             tenant: tenantId,
             grnNumber,
             purchaseOrder: poDoc._id,
+            supplier: poDoc.supplier,
             receivedDate: receivedDate || new Date(),
             items: cleanedItems,
             receivingLocation,
@@ -185,24 +199,8 @@ const createGRN = async (req, res) => {
 
         const grn = grnDocs[0];
 
-        // Step B: Create STOCK_IN StockTransactions for each received item & update raw material stock
+        // Process GRN items: update PO received quantities & pricePerUnit, create pending Inbound QC records
         for (const grnItem of cleanedItems) {
-            const txnResult = await executeStockTransactionCore({
-                tenantId,
-                referenceNumber: grnNumber,
-                itemType: 'RAW_MATERIAL',
-                item: grnItem.rawMaterial,
-                transactionType: 'STOCK_IN',
-                quantity: grnItem.receivedQuantity,
-                toLocation: receivingLocation,
-                batchNumber: grnItem.batchNumber,
-                notes: notes || `Goods received via GRN ${grnNumber} for PO ${poDoc.poNumber}`,
-                performedBy: req.user._id || req.user.id
-            }, sessionOption);
-
-            createdStockTransactions.push(txnResult.transaction);
-
-            // Increment PO item received quantity and update RawMaterial pricePerUnit (latest price wins)
             const poItem = poDoc.items.find(i => String(i.rawMaterial) === String(grnItem.rawMaterial));
             if (poItem) {
                 poItem.receivedQuantity += grnItem.receivedQuantity;
@@ -212,14 +210,17 @@ const createGRN = async (req, res) => {
                     if (useTransaction && session) rmDocQuery.session(session);
                     const rmDoc = await rmDocQuery;
                     if (rmDoc) {
-                        rmDoc.pricePerUnit = Number(poItem.ratePerUnit);
+                        rmDoc.lastPurchasePrice = Number(poItem.ratePerUnit);
+                        if (!rmDoc.pricePerUnit || rmDoc.pricePerUnit === 0) {
+                            rmDoc.pricePerUnit = Number(poItem.ratePerUnit);
+                        }
                         await rmDoc.save(sessionOption);
                     }
                 }
             }
         }
 
-        // Step C: Recompute PurchaseOrder Status
+        // Recompute PurchaseOrder Status
         const allFullyReceived = poDoc.items.every(i => i.receivedQuantity >= i.orderedQuantity);
         const anyReceived = poDoc.items.some(i => i.receivedQuantity > 0);
 
@@ -237,42 +238,30 @@ const createGRN = async (req, res) => {
         }
 
         await grn.populate([
-            { path: 'purchaseOrder', select: 'poNumber status totalValue' },
+            { path: 'purchaseOrder', select: 'poNumber poDate totalValue status' },
+            { path: 'supplier', select: 'name contactPerson phone' },
             { path: 'receivingLocation', select: 'name code type' },
-            { path: 'items.rawMaterial', select: 'name code uom' },
+            { path: 'items.rawMaterial', select: 'name code uom currentStock' },
             { path: 'receivedBy', select: 'name email' }
         ]);
 
         return res.status(201).json({
             success: true,
-            message: `GRN '${grnNumber}' processed successfully. Inventory updated and PO status changed to '${poDoc.status}'.`,
+            message: `GRN '${grnNumber}' created successfully. Material routed to Inbound QC gate.`,
             data: {
                 grn,
                 updatedPurchaseOrder: {
-                    id: poDoc._id,
                     poNumber: poDoc.poNumber,
-                    status: poDoc.status,
-                    items: poDoc.items
-                },
-                stockTransactionsCreated: createdStockTransactions
+                    status: poDoc.status
+                }
             }
         });
     } catch (error) {
         if (useTransaction && session) {
-            if (session.inTransaction()) {
-                await session.abortTransaction();
-            }
+            if (session.inTransaction()) await session.abortTransaction();
             session.endSession();
         }
         console.error('Error in createGRN:', error);
-
-        if (error.name === 'CastError') {
-            return res.status(400).json({
-                success: false,
-                message: `Invalid ID format provided for field '${error.path}'.`
-            });
-        }
-
         return res.status(400).json({
             success: false,
             message: error.message || 'Failed to process GRN.'
@@ -295,14 +284,11 @@ const getGRNs = async (req, res) => {
             });
         }
 
-        const { purchaseOrder, search, page = 1, limit = 20 } = req.query;
-
+        const { purchaseOrder, supplier, search, page = 1, limit = 20 } = req.query;
         const filter = { tenant: tenantId };
 
-        if (purchaseOrder) {
-            filter.purchaseOrder = purchaseOrder;
-        }
-
+        if (purchaseOrder) filter.purchaseOrder = purchaseOrder;
+        if (supplier) filter.supplier = supplier;
         if (search) {
             filter.grnNumber = { $regex: search, $options: 'i' };
         }
@@ -313,9 +299,10 @@ const getGRNs = async (req, res) => {
 
         const [grns, total] = await Promise.all([
             GRN.find(filter)
-                .populate('purchaseOrder', 'poNumber status supplier')
+                .populate('purchaseOrder', 'poNumber poDate status')
+                .populate('supplier', 'name contactPerson phone')
                 .populate('receivingLocation', 'name code type')
-                .populate('items.rawMaterial', 'name code uom')
+                .populate('items.rawMaterial', 'name code uom currentStock')
                 .populate('receivedBy', 'name email')
                 .sort({ createdAt: -1 })
                 .skip(skip)
@@ -360,17 +347,10 @@ const getGRNById = async (req, res) => {
         }
 
         const grn = await GRN.findOne({ _id: req.params.id, tenant: tenantId })
-            .populate({
-                path: 'purchaseOrder',
-                select: 'poNumber status poDate expectedDelivery supplier',
-                populate: { path: 'supplier', select: 'name code contactPerson phone' }
-            })
+            .populate('purchaseOrder', 'poNumber poDate totalValue status')
+            .populate('supplier', 'name contactPerson phone')
             .populate('receivingLocation', 'name code type')
-            .populate({
-                path: 'items.rawMaterial',
-                select: 'name code uom',
-                populate: { path: 'uom', select: 'name symbol' }
-            })
+            .populate('items.rawMaterial', 'name code uom currentStock')
             .populate('receivedBy', 'name email');
 
         if (!grn) {

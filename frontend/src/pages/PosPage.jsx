@@ -167,26 +167,40 @@ export default function PosPage() {
     const estimatedSgst = estimatedGst / 2;
     const grandTotalWithGst = subtotal + estimatedGst;
 
-    // Add product to cart (or increment if already in cart)
-    const handleAddToCart = (product) => {
+    // State for bulk quantity input per product card
+    const [productQuantities, setProductQuantities] = useState({});
+
+    // Add product to cart (or increment bulk quantity if specified)
+    const handleAddToCart = (product, customQty) => {
         const availableStock = product.currentStock || 0;
+        const inputQty = customQty !== undefined ? customQty : (productQuantities[product._id] || 1);
+        const qtyToAdd = Math.max(1, parseInt(inputQty, 10) || 1);
+
         if (availableStock <= 0) {
             toast.error(`'${product.name}' is currently out of stock`);
             return;
         }
 
+        let addedSuccessfully = false;
+
         setCart((prevCart) => {
             const existingIndex = prevCart.findIndex((i) => i._id === product._id);
             if (existingIndex > -1) {
                 const currentQty = prevCart[existingIndex].quantity;
-                if (currentQty + 1 > availableStock) {
-                    toast.error(`Cannot add more than ${availableStock} available bags`);
+                if (currentQty + qtyToAdd > availableStock) {
+                    toast.error(`Cannot add ${qtyToAdd} more bags. Total exceeds available stock (${availableStock}).`);
                     return prevCart;
                 }
                 const updated = [...prevCart];
-                updated[existingIndex].quantity += 1;
+                updated[existingIndex].quantity += qtyToAdd;
+                addedSuccessfully = true;
                 return updated;
             } else {
+                if (qtyToAdd > availableStock) {
+                    toast.error(`Cannot add ${qtyToAdd} bags. Only ${availableStock} in stock.`);
+                    return prevCart;
+                }
+                addedSuccessfully = true;
                 return [
                     ...prevCart,
                     {
@@ -195,13 +209,16 @@ export default function PosPage() {
                         name: product.name,
                         pricePerBag: product.pricePerBag || product.price || 0,
                         currentStock: availableStock,
-                        quantity: 1
+                        quantity: qtyToAdd
                     }
                 ];
             }
         });
-    };
 
+        if (addedSuccessfully) {
+            toast.success(`Added ${qtyToAdd} unit(s) of '${product.name}' to cart!`);
+        }
+    };
     // Update quantity of an item in cart
     const handleUpdateQuantity = (productId, newQty) => {
         setCart((prevCart) => {
@@ -348,11 +365,10 @@ export default function PosPage() {
                                         key={cat}
                                         type="button"
                                         onClick={() => setSelectedCategory(cat)}
-                                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
-                                            selectedCategory === cat
+                                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${selectedCategory === cat
                                                 ? 'bg-primary text-sidebar-bg font-bold shadow-2xs'
                                                 : 'bg-app-bg text-text-muted hover:text-text-main border border-border'
-                                        }`}
+                                            }`}
                                     >
                                         {cat}
                                     </button>
@@ -422,11 +438,10 @@ export default function PosPage() {
                                                 {fg.code}
                                             </span>
 
-                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                                isAvailable
+                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${isAvailable
                                                     ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                                                     : 'bg-rose-100 text-rose-800 border border-rose-300'
-                                            }`}>
+                                                }`}>
                                                 {isAvailable ? `${stock} Available` : 'Out of Stock'}
                                             </span>
                                         </div>
@@ -450,19 +465,30 @@ export default function PosPage() {
                                                 </span>
                                             </div>
 
-                                            <button
-                                                type="button"
-                                                disabled={!isAvailable}
-                                                onClick={() => handleAddToCart(fg)}
-                                                className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                                                    qtyInCart > 0
-                                                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
-                                                        : 'bg-primary hover:bg-primary-hover text-sidebar-bg shadow-xs'
-                                                }`}
-                                            >
-                                                <Plus size={14} />
-                                                <span>{qtyInCart > 0 ? `In Cart (${qtyInCart})` : 'Add to Cart'}</span>
-                                            </button>
+                                            <div className="flex items-center gap-1.5">
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    max={stock}
+                                                    disabled={!isAvailable}
+                                                    value={productQuantities[fg._id] || 1}
+                                                    onChange={(e) => setProductQuantities(prev => ({ ...prev, [fg._id]: e.target.value }))}
+                                                    className="w-12 border border-border rounded-lg p-1 text-center font-mono font-bold text-xs bg-card-bg text-text-main focus:outline-none focus:border-primary disabled:opacity-40"
+                                                    title="Enter bulk quantity to add"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    disabled={!isAvailable}
+                                                    onClick={() => handleAddToCart(fg)}
+                                                    className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${qtyInCart > 0
+                                                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                                                            : 'bg-primary hover:bg-primary-hover text-sidebar-bg shadow-xs'
+                                                        }`}
+                                                >
+                                                    <Plus size={14} />
+                                                    <span>{qtyInCart > 0 ? `+ Add (${qtyInCart})` : 'Add to Cart'}</span>
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 );
@@ -484,22 +510,20 @@ export default function PosPage() {
                                 <button
                                     type="button"
                                     onClick={() => setCustomerType('WALK_IN')}
-                                    className={`py-2 px-3 rounded-lg border text-center transition-all cursor-pointer ${
-                                        customerType === 'WALK_IN'
+                                    className={`py-2 px-3 rounded-lg border text-center transition-all cursor-pointer ${customerType === 'WALK_IN'
                                             ? 'bg-primary text-sidebar-bg font-extrabold border-primary shadow-2xs'
                                             : 'bg-app-bg text-text-muted border-border hover:text-text-main'
-                                    }`}
+                                        }`}
                                 >
                                     Walk-in Retail
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => setCustomerType('REGISTERED')}
-                                    className={`py-2 px-3 rounded-lg border text-center transition-all cursor-pointer ${
-                                        customerType === 'REGISTERED'
+                                    className={`py-2 px-3 rounded-lg border text-center transition-all cursor-pointer ${customerType === 'REGISTERED'
                                             ? 'bg-primary text-sidebar-bg font-extrabold border-primary shadow-2xs'
                                             : 'bg-app-bg text-text-muted border-border hover:text-text-main'
-                                    }`}
+                                        }`}
                                 >
                                     Registered B2B
                                 </button>
@@ -671,11 +695,10 @@ export default function PosPage() {
                                         key={mode}
                                         type="button"
                                         onClick={() => setPaymentMode(mode)}
-                                        className={`py-1.5 px-2 rounded-md border text-center transition-all cursor-pointer ${
-                                            paymentMode === mode
+                                        className={`py-1.5 px-2 rounded-md border text-center transition-all cursor-pointer ${paymentMode === mode
                                                 ? 'bg-emerald-600 text-white font-extrabold border-emerald-600 shadow-2xs'
                                                 : 'bg-app-bg text-text-muted border-border hover:text-text-main'
-                                        }`}
+                                            }`}
                                     >
                                         {mode}
                                     </button>

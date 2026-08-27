@@ -216,7 +216,8 @@ const updateTenantProfile = async (req, res) => {
             pan,
             phone,
             email,
-            registeredAddress
+            registeredAddress,
+            productionSettings
         } = req.body;
 
         if (companyName) tenant.companyName = companyName.trim();
@@ -234,6 +235,15 @@ const updateTenantProfile = async (req, res) => {
                 line2: registeredAddress.line2 || tenant.registeredAddress?.line2 || '',
                 city: registeredAddress.city || tenant.registeredAddress?.city || '',
                 pincode: registeredAddress.pincode || tenant.registeredAddress?.pincode || ''
+            };
+        }
+
+        if (productionSettings && typeof productionSettings === 'object') {
+            tenant.productionSettings = {
+                activeStartingStage: productionSettings.activeStartingStage || tenant.productionSettings?.activeStartingStage || 'FLEXO_PRINTING',
+                stageConfigs: Array.isArray(productionSettings.stageConfigs)
+                    ? productionSettings.stageConfigs
+                    : (tenant.productionSettings?.stageConfigs || [])
             };
         }
 

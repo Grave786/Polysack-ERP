@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle2, Play, ArrowRight, AlertCircle, RefreshCw } from 'lucide-react';
+import { CheckCircle2, Play, ArrowRight, AlertCircle, RefreshCw, Ban } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
@@ -9,7 +9,9 @@ const STAGE_CONFIG = [
     { sequence: 3, key: 'EXTRUSION_LAMINATION', label: 'Extrusion Lamination' },
     { sequence: 4, key: 'FLEXO_PRINTING', label: 'Flexo Printing' },
     { sequence: 5, key: 'CUTTING_SEWING', label: 'Cutting & Sewing' },
-    { sequence: 6, key: 'BALING_PACKING', label: 'Baling & Packing' }
+    { sequence: 6, key: 'STITCHING', label: 'Stitching' },
+    { sequence: 7, key: 'HANDLE_ATTACHMENT', label: 'Handle Attachment' },
+    { sequence: 8, key: 'BALING_PACKING', label: 'Baling & Packing' }
 ];
 
 export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder }) {
@@ -17,7 +19,6 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
     const [allWorkOrders, setAllWorkOrders] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [goodOutputQty, setGoodOutputQty] = useState('');
-    const [rejectedQty, setRejectedQty] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Fetch list of Work Orders
@@ -41,7 +42,7 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
         }
     };
 
-    // Fetch single WorkOrder detail with full 6 stages
+    // Fetch single WorkOrder detail
     const fetchWorkOrderDetail = async (id) => {
         if (!id) {
             setIsLoading(false);
@@ -76,16 +77,44 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
         }
     }, [workOrderId, allWorkOrders.length]);
 
+    const activeStageIndex = workOrder?.stages?.findIndex((s) => s.status === 'ACTIVE') ?? -1;
+    const activeStage = activeStageIndex !== -1 ? workOrder.stages[activeStageIndex] : null;
+
+    // Determine max available quantity passed from previous non-skipped completed stage (or targetQuantity if first active stage)
+    let maxAvailableQty = Number(workOrder?.targetQuantity || 0);
+    if (workOrder?.stages && activeStageIndex > 0) {
+        for (let i = activeStageIndex - 1; i >= 0; i--) {
+            const prevStage = workOrder.stages[i];
+            if (prevStage && prevStage.status !== 'SKIPPED') {
+                maxAvailableQty = Number(prevStage.goodOutputQty || 0);
+                break;
+            }
+        }
+    }
+
+    const numGoodOutput = goodOutputQty !== '' ? Number(goodOutputQty) : '';
+    const autoRejectedQty = typeof numGoodOutput === 'number' && !isNaN(numGoodOutput)
+        ? Math.max(0, maxAvailableQty - numGoodOutput)
+        : maxAvailableQty;
+
+    const isExceedingCap = typeof numGoodOutput === 'number' && numGoodOutput > maxAvailableQty;
+
     // Handle Advance Stage submit
     const handleAdvanceStage = async (e) => {
         e.preventDefault();
-        if (!workOrder?._id) return;
+        if (!workOrder?._id || !activeStage) return;
 
         const numGood = Number(goodOutputQty);
-        const numRejected = Number(rejectedQty);
+        const numDefect = autoRejectedQty;
+        const totalEntered = numGood + numDefect;
 
-        if (isNaN(numGood) || numGood < 0 || isNaN(numRejected) || numRejected < 0) {
-            toast.error('Please enter valid quantities >= 0');
+        if (isNaN(numGood) || numGood < 0) {
+            toast.error('Please enter a valid Good Output quantity >= 0');
+            return;
+        }
+
+        if (totalEntered > maxAvailableQty) {
+            toast.error(`Total quantity (${totalEntered}) cannot exceed the available input from the previous stage (${maxAvailableQty}).`);
             return;
         }
 
@@ -93,19 +122,17 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
             setIsSubmitting(true);
             const res = await axiosInstance.patch(`/work-orders/${workOrder._id}/advance-stage`, {
                 goodOutputQty: numGood,
-                rejectedQty: numRejected
+                rejectedQty: autoRejectedQty
             });
 
             if (res.data?.success) {
-                const activeStage = workOrder.stages?.find((s) => s.status === 'ACTIVE');
-                if (activeStage?.sequence === 6) {
+                if (activeStage?.sequence === 8 || res.data?.data?.workOrder?.status === 'COMPLETED') {
                     toast.success('Final stage completed! Batch output routed to Pending QC inspection.');
                 } else {
                     toast.success(`Stage advanced successfully! Next stage activated.`);
                 }
 
                 setGoodOutputQty('');
-                setRejectedQty('');
 
                 // Refetch details to reflect newly active/completed stage
                 await fetchWorkOrderDetail(workOrder._id);
@@ -122,7 +149,7 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
         return (
             <div className="flex flex-col items-center justify-center p-10 bg-card-bg border border-border rounded-xl font-sans">
                 <RefreshCw className="animate-spin text-primary mb-3" size={24} />
-                <p className="text-xs font-semibold text-text-muted">Loading Live 6-Stage Process Monitor...</p>
+                <p className="text-xs font-semibold text-text-muted">Loading Live Production Pipeline Monitor...</p>
             </div>
         );
     }
@@ -137,7 +164,6 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
         );
     }
 
-    const activeStage = workOrder.stages?.find((s) => s.status === 'ACTIVE');
     const isFinishedOrCancelled = workOrder.status === 'COMPLETED' || workOrder.status === 'CANCELLED' || !activeStage;
 
     const clientName = workOrder.customer?.companyName || workOrder.customer?.name || 'Unassigned';
@@ -216,7 +242,7 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
 
                         <div className="bg-app-bg border border-border rounded-lg px-3 py-2 text-right shrink-0 w-full md:w-auto">
                             <span className="block text-[10px] font-bold uppercase tracking-wider text-text-muted">
-                                Target vs Completed
+                                COMPLETED / TARGET
                             </span>
                             <div className="mt-0.5 font-mono">
                                 <span className="text-base font-bold text-primary">{workOrder.completedQuantity || 0}</span>
@@ -229,61 +255,72 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                 </div>
             </div>
 
-            {/* 6-Stage Pipeline Sequence */}
+            {/* Production Pipeline Sequence */}
             <div>
                 <h3 className="text-xs font-bold uppercase tracking-wider text-text-muted mb-2.5">
-                    6-Stage Pipeline Sequence
+                    Production Pipeline Sequence
                 </h3>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
                     {STAGE_CONFIG.map((cfg) => {
-                        const stageData = workOrder.stages?.find((s) => s.sequence === cfg.sequence || s.stageName === cfg.key);
+                        const stageData = workOrder.stages?.find((s) => s.stageName === cfg.key);
                         const status = stageData?.status || 'PENDING';
 
                         const isCompleted = status === 'COMPLETED';
                         const isActive = status === 'ACTIVE';
+                        const isSkipped = status === 'SKIPPED';
 
                         return (
                             <div
                                 key={cfg.key}
-                                className={`rounded-lg p-3 flex flex-col justify-between transition-all duration-200 min-h-[85px] ${
+                                className={`rounded-lg p-2.5 flex flex-col justify-between transition-all duration-200 min-h-[90px] ${
                                     isCompleted
                                         ? 'bg-green-50 border border-green-200 text-green-700'
                                         : isActive
                                         ? 'bg-orange-50 border border-orange-400 text-orange-800 shadow-sm'
+                                        : isSkipped
+                                        ? 'bg-gray-100/70 border border-gray-200 text-gray-400 opacity-60'
                                         : 'bg-transparent border border-gray-200 text-gray-400'
                                 }`}
                             >
                                 <div className="flex justify-between items-start">
                                     <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                                        isCompleted ? 'text-green-700' : isActive ? 'text-orange-800' : 'text-gray-400'
+                                        isCompleted ? 'text-green-700' : isActive ? 'text-orange-800' : isSkipped ? 'text-gray-400' : 'text-gray-400'
                                     }`}>
                                         STEP 0{cfg.sequence}
                                     </span>
 
                                     {isCompleted ? (
-                                        <CheckCircle2 size={15} className="text-green-600 shrink-0" />
+                                        <CheckCircle2 size={14} className="text-green-600 shrink-0" />
                                     ) : isActive ? (
-                                        <Play size={15} className="text-orange-600 fill-orange-600 shrink-0 animate-pulse" />
+                                        <Play size={14} className="text-orange-600 fill-orange-600 shrink-0 animate-pulse" />
+                                    ) : isSkipped ? (
+                                        <Ban size={14} className="text-gray-400 shrink-0" />
                                     ) : null}
                                 </div>
 
                                 <div className="mt-1">
-                                    <h4 className={`text-sm font-medium leading-snug ${
-                                        isCompleted ? 'text-green-800' : isActive ? 'text-orange-900' : 'text-gray-500'
+                                    <h4 className={`text-xs font-semibold leading-tight ${
+                                        isCompleted ? 'text-green-800' : isActive ? 'text-orange-900' : isSkipped ? 'text-gray-400 line-through' : 'text-gray-500'
                                     }`}>
                                         {cfg.label}
                                     </h4>
 
                                     {isCompleted && (
-                                        <p className="text-[10px] text-green-600 font-medium mt-1">
+                                        <p className="text-[9px] text-green-600 font-medium mt-1">
                                             Good: {stageData?.goodOutputQty || 0} | Defect: {stageData?.rejectedQty || 0}
                                         </p>
                                     )}
 
                                     {isActive && (
-                                        <span className="inline-block text-[9px] font-bold uppercase tracking-wider text-orange-700 bg-orange-100/80 px-1.5 py-0.5 rounded mt-1">
-                                            • Active Stage
+                                        <span className="inline-block text-[9px] font-bold uppercase tracking-wider text-orange-700 bg-orange-100/80 px-1 py-0.5 rounded mt-1">
+                                            • Active
+                                        </span>
+                                    )}
+
+                                    {isSkipped && (
+                                        <span className="inline-block text-[9px] font-bold text-gray-400 bg-gray-200/80 px-1 py-0.5 rounded mt-1">
+                                            Skipped — Not in Use
                                         </span>
                                     )}
                                 </div>
@@ -295,18 +332,34 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
 
             {/* Panel: Record Live Stage Output & Defect Scrap */}
             {isFinishedOrCancelled ? (
-                <div className="bg-card-bg border border-border rounded-xl p-6 text-center shadow-2xs space-y-2">
-                    <AlertCircle className="text-text-muted mx-auto" size={28} />
-                    <h4 className="text-sm font-bold text-text-main">This Work Order Has No Active Stage</h4>
-                    <p className="text-xs text-text-muted max-w-md mx-auto">
-                        {workOrder.status === 'COMPLETED'
-                            ? 'All 6 stages for this Work Order have been completed and routed to Pending QC inspection.'
-                            : 'This Work Order has been cancelled or has no stage currently in progress.'}
-                    </p>
-                </div>
+                workOrder.status === 'COMPLETED' ? (
+                    <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center shadow-2xs space-y-2">
+                        <CheckCircle2 className="text-green-600 mx-auto" size={32} />
+                        <h4 className="text-sm font-bold text-green-900">Work Order Completed & Output Routed to Pending QC</h4>
+                        <p className="text-xs text-green-700 max-w-md mx-auto">
+                            All active pipeline stages for this Work Order have been successfully completed. Batch output has been sent to Pending QC stock inspection.
+                        </p>
+                    </div>
+                ) : workOrder.status === 'CANCELLED' ? (
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-6 text-center shadow-2xs space-y-2">
+                        <AlertCircle className="text-rose-600 mx-auto" size={32} />
+                        <h4 className="text-sm font-bold text-rose-900">Work Order Cancelled</h4>
+                        <p className="text-xs text-rose-700 max-w-md mx-auto">
+                            This Work Order was cancelled and is no longer active on the shop floor.
+                        </p>
+                    </div>
+                ) : (
+                    <div className="bg-card-bg border border-border rounded-xl p-6 text-center shadow-2xs space-y-2">
+                        <AlertCircle className="text-amber-500 mx-auto" size={28} />
+                        <h4 className="text-sm font-bold text-text-main">No Active Stage Found</h4>
+                        <p className="text-xs text-text-muted max-w-md mx-auto">
+                            This Work Order has no stage currently marked as active.
+                        </p>
+                    </div>
+                )
             ) : (
                 <div className="bg-sidebar-bg text-sidebar-text-active border border-sidebar-hover rounded-xl p-5 shadow-xl space-y-3">
-                    <div className="flex items-center justify-between border-b border-sidebar-hover pb-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-sidebar-hover pb-2.5 gap-2">
                         <div>
                             <h3 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-2">
                                 Record Live Stage Output & Defect Scrap
@@ -314,6 +367,11 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                             <p className="text-xs text-sidebar-text mt-0.5">
                                 Currently Processing: <strong className="text-amber-400">STEP 0{activeStage.sequence} — {STAGE_CONFIG.find(c => c.key === activeStage.stageName)?.label || activeStage.stageName}</strong>
                             </p>
+                        </div>
+
+                        {/* Maximum Available Quantity Badge */}
+                        <div className="bg-amber-400/10 border border-amber-400/30 text-amber-300 px-3 py-1 rounded-lg text-xs font-semibold">
+                            Max Available Input: <strong className="font-mono text-white">{maxAvailableQty} Bags</strong>
                         </div>
                     </div>
 
@@ -326,34 +384,43 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                                 <input
                                     type="number"
                                     min="0"
+                                    max={maxAvailableQty}
                                     required
-                                    placeholder="e.g. 5000"
+                                    placeholder={`Max ${maxAvailableQty} bags`}
                                     value={goodOutputQty}
                                     onChange={(e) => setGoodOutputQty(e.target.value)}
-                                    className="w-full border border-sidebar-hover rounded-lg p-2 bg-card-bg text-text-main text-xs font-bold focus:outline-none focus:border-primary"
+                                    className={`w-full border rounded-lg p-2 bg-card-bg text-text-main text-xs font-bold focus:outline-none ${
+                                        isExceedingCap ? 'border-rose-500 focus:border-rose-500' : 'border-sidebar-hover focus:border-primary'
+                                    }`}
                                 />
+                                {isExceedingCap && (
+                                    <p className="text-[11px] font-bold text-rose-400 mt-1">
+                                        ⚠️ Good output cannot exceed previous stage passed quantity of {maxAvailableQty} bags.
+                                    </p>
+                                )}
                             </div>
 
                             <div>
                                 <label className="block text-xs font-bold uppercase tracking-wider text-white mb-1">
-                                    Rejected / Defect Bags *
+                                    Rejected / Defect Bags (Auto-Calculated)
                                 </label>
                                 <input
                                     type="number"
-                                    min="0"
-                                    required
-                                    placeholder="e.g. 25"
-                                    value={rejectedQty}
-                                    onChange={(e) => setRejectedQty(e.target.value)}
-                                    className="w-full border border-sidebar-hover rounded-lg p-2 bg-card-bg text-text-main text-xs font-bold focus:outline-none focus:border-primary"
+                                    readOnly
+                                    disabled
+                                    value={autoRejectedQty}
+                                    className="w-full border border-sidebar-hover rounded-lg p-2 bg-app-bg text-amber-400 text-xs font-mono font-bold focus:outline-none cursor-not-allowed opacity-90"
                                 />
+                                <span className="text-[10px] text-sidebar-text mt-1 block">
+                                    Auto-filled as ({maxAvailableQty} available − {numGoodOutput || 0} passed)
+                                </span>
                             </div>
                         </div>
 
                         <div className="pt-1 flex justify-end">
                             <button
                                 type="submit"
-                                disabled={isSubmitting}
+                                disabled={isSubmitting || isExceedingCap}
                                 className="bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold px-5 py-2 rounded-lg text-xs flex items-center gap-2 transition-all shadow-md cursor-pointer disabled:opacity-50"
                             >
                                 <span>{isSubmitting ? 'Advancing Stage...' : 'Advance Stage & Update Stock'}</span>

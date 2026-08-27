@@ -1755,11 +1755,102 @@ export default function TabbedResourcePage({
                         </div>
                     </div>
 
+                    {/* Industrial Specification Fields */}
+                    <div className="space-y-3 pt-2 border-t border-border">
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Grade / Specification
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. Virgin Raffia Grade 100"
+                                    value={formData.materialGrade || ''}
+                                    onChange={(e) => handleInputChange('materialGrade', e.target.value)}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Color
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. Natural White"
+                                    value={formData.color || ''}
+                                    onChange={(e) => handleInputChange('color', e.target.value)}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    HSN Code (GST)
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. 39012000"
+                                    value={formData.hsnCode || ''}
+                                    onChange={(e) => handleInputChange('hsnCode', e.target.value)}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-semibold"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Min Order Qty (MOQ)
+                                </label>
+                                <input
+                                    type="number"
+                                    placeholder="1000"
+                                    value={formData.moq || ''}
+                                    onChange={(e) => handleInputChange('moq', e.target.value)}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Standard / Valuation Cost (₹)
+                                </label>
+                                <input
+                                    type="number"
+                                    step="any"
+                                    placeholder="120.00"
+                                    value={formData.pricePerUnit || ''}
+                                    onChange={(e) => handleInputChange('pricePerUnit', e.target.value)}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold text-purple-900"
+                                />
+                                <p className="text-[10px] text-text-muted mt-0.5">Used for Inventory Asset Valuation calculations.</p>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Last GRN Purchase Price (₹)
+                                </label>
+                                <input
+                                    type="number"
+                                    step="any"
+                                    readOnly
+                                    disabled
+                                    value={formData.lastPurchasePrice || formData.pricePerUnit || 0}
+                                    className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-bold text-primary cursor-not-allowed font-mono opacity-90"
+                                />
+                                <p className="text-[10px] text-text-muted mt-0.5">Auto-updated from the most recent GRN invoice rate.</p>
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="grid grid-cols-2 gap-3">
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-muted mb-1 flex items-center justify-between">
                                 <span>Current Stock</span>
-                                <span className="text-[10px] text-amber-700 font-semibold normal-case">Read-only (Managed via GRN & Ledger)</span>
+                                <span className="text-[10px] text-amber-700 font-semibold normal-case">Read-only (GRN & Ledger)</span>
                             </label>
                             <input
                                 type="number"
@@ -1769,9 +1860,6 @@ export default function TabbedResourcePage({
                                 className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-bold text-text-muted cursor-not-allowed font-sans opacity-80"
                                 title="Stock levels cannot be edited manually. Use Goods Receipt (GRN) or Stock Adjustment in Inventory module."
                             />
-                            <p className="text-[10px] text-text-muted mt-1">
-                                Stock is updated automatically via GRN inward & ledger transactions.
-                            </p>
                         </div>
 
                         <div>
@@ -2017,17 +2105,80 @@ export default function TabbedResourcePage({
                             />
                         </div>
 
-                        <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Price / Bag (₹)
-                            </label>
-                            <input
-                                type="number"
-                                placeholder="18"
-                                value={formData.pricePerBag || formData.price || ''}
-                                onChange={(e) => handleInputChange('pricePerBag', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                            />
+                        <div className="space-y-3 pt-2 border-t border-border">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Bag Type / Description
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. Laminated PP Woven Sack"
+                                    value={formData.bagType || ''}
+                                    onChange={(e) => handleInputChange('bagType', e.target.value)}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Color & Print Specification
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. Milky White (2-Color Flexo)"
+                                        value={formData.colorAndPrint || ''}
+                                        onChange={(e) => handleInputChange('colorAndPrint', e.target.value)}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Warehouse Bay / Location
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. Finished Goods Warehouse - Bay 1"
+                                        value={formData.warehouseLocation || ''}
+                                        onChange={(e) => handleInputChange('warehouseLocation', e.target.value)}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Retail Price / Bag (₹)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="any"
+                                        placeholder="22.00"
+                                        value={formData.retailPrice || formData.pricePerBag || ''}
+                                        onChange={(e) => {
+                                            handleInputChange('retailPrice', e.target.value);
+                                            handleInputChange('pricePerBag', e.target.value);
+                                        }}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Wholesale Price / Bag (₹)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="any"
+                                        placeholder="18.50"
+                                        value={formData.wholesalePrice || ''}
+                                        onChange={(e) => handleInputChange('wholesalePrice', e.target.value)}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold text-primary"
+                                    />
+                                </div>
+                            </div>
                         </div>
                     </div>
 

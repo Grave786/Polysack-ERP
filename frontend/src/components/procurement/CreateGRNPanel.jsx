@@ -14,52 +14,62 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
     // Items array mapping PO items
     const [grnItems, setGrnItems] = useState([]);
 
-    // Initialize items when PO changes
-    useEffect(() => {
-        if (isOpen && po && Array.isArray(po.items)) {
-            setIsLoadingLocs(true);
+    const [activePoDetails, setActivePoDetails] = useState(null);
 
-            // Fetch locations for receiving
-            axiosInstance.get('/locations?isActive=true&limit=200')
-                .then((res) => {
-                    if (res.data?.success && Array.isArray(res.data.data)) {
-                        const locs = res.data.data;
+    // Initialize items & refetch fresh PO details whenever modal opens or po._id changes
+    useEffect(() => {
+        const poId = po?._id;
+        if (isOpen && poId) {
+            setIsLoadingLocs(true);
+            setNotes('');
+
+            // Fetch receiving locations & fresh PO details in parallel
+            Promise.all([
+                axiosInstance.get('/locations?isActive=true&limit=200').catch(() => ({ data: { data: [] } })),
+                axiosInstance.get(`/purchase-orders/${poId}`).catch(() => ({ data: { data: null } }))
+            ])
+                .then(([locRes, poRes]) => {
+                    if (locRes.data?.success && Array.isArray(locRes.data.data)) {
+                        const locs = locRes.data.data;
                         setLocations(locs);
                         if (locs.length > 0) setReceivingLocation(locs[0]._id);
                     }
-                })
-                .catch((err) => {
-                    console.error('Error loading locations for GRN:', err);
+
+                    const freshPo = poRes.data?.data || po;
+                    setActivePoDetails(freshPo);
+
+                    const itemsList = Array.isArray(freshPo?.items) ? freshPo.items : [];
+                    setGrnItems(
+                        itemsList.map((i) => {
+                            const rmId = typeof i.rawMaterial === 'object' ? i.rawMaterial?._id : i.rawMaterial;
+                            const rmName = typeof i.rawMaterial === 'object' ? i.rawMaterial?.name : 'Raw Material';
+                            const rmCode = typeof i.rawMaterial === 'object' ? i.rawMaterial?.code : '';
+                            
+                            const ordered = i.orderedQuantity || 0;
+                            const alreadyRecv = i.receivedQuantity || 0;
+                            const remaining = Math.max(0, ordered - alreadyRecv);
+
+                            return {
+                                rawMaterial: rmId,
+                                name: rmName,
+                                code: rmCode,
+                                orderedQuantity: ordered,
+                                alreadyReceivedQuantity: alreadyRecv,
+                                remainingAllowed: remaining,
+                                receivedQuantity: remaining,
+                                batchNumber: ''
+                            };
+                        })
+                    );
                 })
                 .finally(() => {
                     setIsLoadingLocs(false);
                 });
-
-            // Map PO items to GRN item inputs
-            setGrnItems(
-                po.items.map((i) => {
-                    const rmId = typeof i.rawMaterial === 'object' ? i.rawMaterial?._id : i.rawMaterial;
-                    const rmName = typeof i.rawMaterial === 'object' ? i.rawMaterial?.name : 'Raw Material';
-                    const rmCode = typeof i.rawMaterial === 'object' ? i.rawMaterial?.code : '';
-                    
-                    const ordered = i.orderedQuantity || 0;
-                    const alreadyRecv = i.receivedQuantity || 0;
-                    const remaining = Math.max(0, ordered - alreadyRecv);
-
-                    return {
-                        rawMaterial: rmId,
-                        name: rmName,
-                        code: rmCode,
-                        orderedQuantity: ordered,
-                        alreadyReceivedQuantity: alreadyRecv,
-                        remainingAllowed: remaining,
-                        receivedQuantity: remaining, // default to receiving remaining balance
-                        batchNumber: ''
-                    };
-                })
-            );
+        } else {
+            setActivePoDetails(null);
+            setGrnItems([]);
         }
-    }, [isOpen, po]);
+    }, [isOpen, po?._id]);
 
     const handleItemChange = (index, field, value) => {
         setGrnItems((prev) => {
@@ -72,8 +82,17 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
     const handleSubmit = async (e) => {
         e.preventDefault();
 
-        if (!po || !po._id) {
-            toast.error('Invalid Purchase Order');
+        const activePo = activePoDetails || po;
+        const targetPoId = activePo?._id || po?._id;
+
+        if (!targetPoId) {
+            toast.error('Invalid Purchase Order selected.');
+            return;
+        }
+
+        // Safety Check: ensure payload PO ID matches currently displayed PO prop ID
+        if (po?._id && String(targetPoId) !== String(po._id)) {
+            toast.error(`PO ID mismatch: Active PO (${targetPoId}) does not match panel header (${po._id}). Please re-open the panel.`);
             return;
         }
 
@@ -115,7 +134,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
             setIsSubmitting(true);
 
             const payload = {
-                purchaseOrder: po._id,
+                purchaseOrder: targetPoId,
                 receivingLocation,
                 notes: notes.trim() || undefined,
                 items: validItems
@@ -136,23 +155,24 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
         }
     };
 
-    if (!po) return null;
+    const activePo = activePoDetails || po;
+    if (!activePo) return null;
 
-    const supplierName = typeof po.supplier === 'object' ? (po.supplier?.companyName || po.supplier?.name) : 'Supplier';
+    const supplierName = typeof activePo.supplier === 'object' ? (activePo.supplier?.companyName || activePo.supplier?.name) : 'Supplier';
 
     return (
         <SlideOverPanel
             isOpen={isOpen}
             onClose={onClose}
             title="Create Goods Receipt Note (GRN)"
-            subtitle={`Inward raw materials to inventory for Purchase Order ${po.poNumber || ''}`}
+            subtitle={`Inward raw materials to inventory for Purchase Order ${activePo?.poNumber || ''}`}
         >
             <form onSubmit={handleSubmit} className="space-y-4 font-sans text-xs">
                 {/* Locked PO Summary Card */}
                 <div className="bg-app-bg border border-border rounded-lg p-3 space-y-1">
                     <div className="flex justify-between items-center text-xs">
                         <span className="text-[10px] font-extrabold uppercase text-text-muted">PURCHASE ORDER</span>
-                        <span className="font-mono font-bold text-primary">{po.poNumber}</span>
+                        <span className="font-mono font-bold text-primary">{activePo?.poNumber || ''}</span>
                     </div>
                     <div className="flex justify-between items-center text-xs">
                         <span className="text-text-muted">Supplier:</span>

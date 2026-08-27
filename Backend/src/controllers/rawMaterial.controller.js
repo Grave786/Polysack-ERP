@@ -120,8 +120,10 @@ const createRawMaterial = async (req, res) => {
         await rawMaterial.populate([
             { path: 'category', select: 'name type' },
             { path: 'uom', select: 'name symbol type' },
-            { path: 'defaultSupplier', select: 'name contactPerson phone' },
-            { path: 'defaultLocation', select: 'name code type' }
+            { path: 'defaultSupplier', select: 'name companyName contactPerson phone' },
+            { path: 'preferredSupplier', select: 'name companyName contactPerson phone' },
+            { path: 'defaultLocation', select: 'name code type' },
+            { path: 'warehouseLocation', select: 'name code type' }
         ]);
 
         return res.status(201).json({
@@ -194,8 +196,10 @@ const getRawMaterials = async (req, res) => {
             RawMaterial.find(filter)
                 .populate('category', 'name type')
                 .populate('uom', 'name symbol type')
-                .populate('defaultSupplier', 'name contactPerson phone')
+                .populate('defaultSupplier', 'name companyName contactPerson phone')
+                .populate('preferredSupplier', 'name companyName contactPerson phone')
                 .populate('defaultLocation', 'name code type')
+                .populate('warehouseLocation', 'name code type')
                 .sort({ name: 1 })
                 .skip(skip)
                 .limit(limitNum),

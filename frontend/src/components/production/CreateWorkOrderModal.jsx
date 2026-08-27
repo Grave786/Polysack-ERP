@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import SlideOverPanel from '../shared/SlideOverPanel';
 import axiosInstance from '../../api/axiosInstance';
+import WorkOrderShortageModal from './WorkOrderShortageModal';
 import toast from 'react-hot-toast';
 
 export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
@@ -15,6 +16,11 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [priority, setPriority] = useState('MEDIUM');
     const [assignedMachine, setAssignedMachine] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Shortage Modal State
+    const [shortageList, setShortageList] = useState([]);
+    const [isShortageModalOpen, setIsShortageModalOpen] = useState(false);
+    const [selectedFgObj, setSelectedFgObj] = useState(null);
 
     // Fetch dropdown options when modal opens
     useEffect(() => {
@@ -61,22 +67,74 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
 
     if (!isOpen) return null;
 
-    // Derived primary operator based on selected machine
     const selectedMachineObj = machines.find((m) => m._id === assignedMachine);
     const primaryOperator = selectedMachineObj?.currentOperator || (assignedMachine ? 'No Operator Assigned' : '');
-
     const isFormValid = customer && finishedGood && targetQuantity && Number(targetQuantity) >= 1;
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!isFormValid) return;
 
+        const targetQtyNum = Number(targetQuantity);
+        const targetFg = finishedGoods.find(fg => fg._id === finishedGood);
+        setSelectedFgObj(targetFg);
+
         try {
             setIsSubmitting(true);
+
+            // Step 1: Pre-flight shortage check using backend BOM & Raw Material stocks
+            const [bomRes, rmRes] = await Promise.all([
+                axiosInstance.get(`/boms?finishedGood=${finishedGood}`).catch(() => ({ data: { data: [] } })),
+                axiosInstance.get('/raw-materials?limit=100').catch(() => ({ data: { data: [] } }))
+            ]);
+
+            const boms = bomRes.data?.data || [];
+            const rawMaterials = rmRes.data?.data || [];
+            const activeBom = boms.find(b => b.isDefault || b.isActive) || boms[0];
+
+            if (activeBom && Array.isArray(activeBom.items) && activeBom.items.length > 0) {
+                const calculatedShortages = [];
+
+                for (const item of activeBom.items) {
+                    const rmId = typeof item.rawMaterial === 'object' ? item.rawMaterial?._id : item.rawMaterial;
+                    const rmDoc = rawMaterials.find(r => r._id === rmId) || (typeof item.rawMaterial === 'object' ? item.rawMaterial : null);
+
+                    if (rmDoc) {
+                        const requiredQty = Number(item.quantityPerUnit || 0) * targetQtyNum;
+                        const inStockQty = Number(rmDoc.currentStock || 0);
+
+                        if (requiredQty > inStockQty) {
+                            const shortageGap = requiredQty - inStockQty;
+                            const suppObj = typeof rmDoc.defaultSupplier === 'object' ? rmDoc.defaultSupplier : null;
+
+                            calculatedShortages.push({
+                                rawMaterialId: rmDoc._id,
+                                rawMaterialName: rmDoc.name,
+                                uom: rmDoc.uom?.name || rmDoc.uom?.symbol || 'KG',
+                                currentStock: inStockQty,
+                                requiredQty: Number(requiredQty.toFixed(2)),
+                                shortageQty: Number(shortageGap.toFixed(2)),
+                                unitPrice: rmDoc.pricePerUnit || 120,
+                                supplierId: suppObj?._id || (typeof rmDoc.defaultSupplier === 'string' ? rmDoc.defaultSupplier : null),
+                                supplierName: suppObj?.name || null
+                            });
+                        }
+                    }
+                }
+
+                if (calculatedShortages.length > 0) {
+                    setShortageList(calculatedShortages);
+                    setIsShortageModalOpen(true);
+                    setIsSubmitting(false);
+                    return; // Block WO creation until shortages resolved
+                }
+            }
+
+            // Step 2: Proceed with WO creation if no raw material shortage
             const payload = {
                 customer,
                 finishedGood,
-                targetQuantity: Number(targetQuantity),
+                targetQuantity: targetQtyNum,
                 priority: priority || 'MEDIUM',
                 assignedMachine: assignedMachine || null
             };
@@ -87,7 +145,6 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 const woNum = res.data.data?.workOrderNumber || 'Work Order';
                 toast.success(`Work Order ${woNum} created successfully!`);
 
-                // Reset state
                 setTargetQuantity('');
                 setAssignedMachine('');
                 setPriority('MEDIUM');
@@ -108,7 +165,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
             <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 border border-border rounded-lg text-xs font-semibold text-text-main hover:bg-sidebar-hover transition-colors cursor-pointer"
+                className="px-4 py-2 border border-border rounded-lg text-xs font-bold text-text-muted hover:text-text-main hover:bg-app-bg transition-colors cursor-pointer"
             >
                 Cancel
             </button>
@@ -118,116 +175,39 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 disabled={!isFormValid || isSubmitting}
                 className="px-5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer disabled:opacity-50"
             >
-                {isSubmitting ? 'Launching...' : 'Launch Work Order'}
+                {isSubmitting ? 'Checking Stock & Launching...' : 'Launch Work Order'}
             </button>
         </>
     );
 
     return (
-        <SlideOverPanel
-            isOpen={isOpen}
-            onClose={onClose}
-            title="Schedule New Production Work Order"
-            subtitle="Assign Product Specs, Machine Line & Production Operator"
-            widthClass="w-full max-w-full sm:max-w-lg"
-            footer={footerButtons}
-        >
-            <form id="create-work-order-form" onSubmit={handleSubmit} className="space-y-4 text-xs font-sans">
-                {/* 1. Select Customer / Client */}
-                <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                        Select Customer / Client *
-                    </label>
-                    <select
-                        required
-                        value={customer}
-                        onChange={(e) => setCustomer(e.target.value)}
-                        disabled={isLoadingDropdowns}
-                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50"
-                    >
-                        <option value="" disabled>
-                            {isLoadingDropdowns ? 'Loading Customers...' : '-- Select Customer --'}
-                        </option>
-                        {customers.map((c) => (
-                            <option key={c._id} value={c._id}>
-                                {c.companyName || c.name} ({c.customerCode || c.code || 'CUST'})
-                            </option>
-                        ))}
-                    </select>
-                </div>
-
-                {/* 2. Select Finished Bag Specification */}
-                <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                        Select Finished Bag Specification *
-                    </label>
-                    <select
-                        required
-                        value={finishedGood}
-                        onChange={(e) => setFinishedGood(e.target.value)}
-                        disabled={isLoadingDropdowns}
-                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50"
-                    >
-                        <option value="" disabled>
-                            {isLoadingDropdowns ? 'Loading Specifications...' : '-- Select Finished Good Spec --'}
-                        </option>
-                        {finishedGoods.map((fg) => (
-                            <option key={fg._id} value={fg._id}>
-                                {fg.code || 'FG'} - {fg.name}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-
-                {/* 3. Side by side: Target Quantity & Priority */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <>
+            <SlideOverPanel
+                isOpen={isOpen}
+                onClose={onClose}
+                title="Schedule New Production Work Order"
+                subtitle="Assign Product Specs, Machine Line & Production Operator"
+                widthClass="w-full max-w-full sm:max-w-lg"
+                footer={footerButtons}
+            >
+                <form id="create-work-order-form" onSubmit={handleSubmit} className="space-y-4 text-xs font-sans">
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                            Target Quantity (Bags) *
+                            Select Customer / Client *
                         </label>
-                        <input
-                            type="number"
+                        <select
                             required
-                            min="1"
-                            placeholder="e.g. 20000"
-                            value={targetQuantity}
-                            onChange={(e) => setTargetQuantity(e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-bold"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                            Priority *
-                        </label>
-                        <select
-                            value={priority}
-                            onChange={(e) => setPriority(e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-semibold"
-                        >
-                            <option value="LOW">Low</option>
-                            <option value="MEDIUM">Medium</option>
-                            <option value="HIGH">High</option>
-                        </select>
-                    </div>
-                </div>
-
-                {/* 4. Side by side: Machine Line Allocation & Primary Operator */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                            Machine Line Allocation
-                        </label>
-                        <select
-                            value={assignedMachine}
-                            onChange={(e) => setAssignedMachine(e.target.value)}
+                            value={customer}
+                            onChange={(e) => setCustomer(e.target.value)}
                             disabled={isLoadingDropdowns}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50 font-sans"
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50"
                         >
-                            <option value="">-- Optional Machine --</option>
-                            {machines.map((m) => (
-                                <option key={m._id} value={m._id}>
-                                    {m.code || 'MCH'} - {m.name}
+                            <option value="" disabled>
+                                {isLoadingDropdowns ? 'Loading Customers...' : '-- Select Customer --'}
+                            </option>
+                            {customers.map((c) => (
+                                <option key={c._id} value={c._id}>
+                                    {c.companyName || c.name} ({c.customerCode || c.code || 'CUST'})
                                 </option>
                             ))}
                         </select>
@@ -235,19 +215,104 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
 
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                            Primary Operator
+                            Select Finished Bag Specification *
                         </label>
-                        <input
-                            type="text"
-                            readOnly
-                            disabled
-                            placeholder="Select a machine first"
-                            value={primaryOperator}
-                            className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs text-text-muted font-medium focus:outline-none cursor-not-allowed"
-                        />
+                        <select
+                            required
+                            value={finishedGood}
+                            onChange={(e) => setFinishedGood(e.target.value)}
+                            disabled={isLoadingDropdowns}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50"
+                        >
+                            <option value="" disabled>
+                                {isLoadingDropdowns ? 'Loading Specifications...' : '-- Select Finished Good Spec --'}
+                            </option>
+                            {finishedGoods.map((fg) => (
+                                <option key={fg._id} value={fg._id}>
+                                    {fg.code || 'FG'} - {fg.name}
+                                </option>
+                            ))}
+                        </select>
                     </div>
-                </div>
-            </form>
-        </SlideOverPanel>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                Target Quantity (Bags) *
+                            </label>
+                            <input
+                                type="number"
+                                required
+                                min="1"
+                                placeholder="e.g. 20000"
+                                value={targetQuantity}
+                                onChange={(e) => setTargetQuantity(e.target.value)}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-bold"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                Priority *
+                            </label>
+                            <select
+                                value={priority}
+                                onChange={(e) => setPriority(e.target.value)}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-semibold"
+                            >
+                                <option value="LOW">Low</option>
+                                <option value="MEDIUM">Medium</option>
+                                <option value="HIGH">High</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                Machine Line Allocation
+                            </label>
+                            <select
+                                value={assignedMachine}
+                                onChange={(e) => setAssignedMachine(e.target.value)}
+                                disabled={isLoadingDropdowns}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50 font-sans"
+                            >
+                                <option value="">-- Optional Machine --</option>
+                                {machines.map((m) => (
+                                    <option key={m._id} value={m._id}>
+                                        {m.code || 'MCH'} - {m.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                Primary Operator
+                            </label>
+                            <input
+                                type="text"
+                                readOnly
+                                disabled
+                                placeholder="Select a machine first"
+                                value={primaryOperator}
+                                className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs text-text-muted font-medium focus:outline-none cursor-not-allowed"
+                            />
+                        </div>
+                    </div>
+                </form>
+            </SlideOverPanel>
+
+            <WorkOrderShortageModal
+                isOpen={isShortageModalOpen}
+                shortages={shortageList}
+                targetFgName={selectedFgObj?.name || 'Finished Product'}
+                onClose={() => setIsShortageModalOpen(false)}
+                onPoCreated={() => {
+                    toast.success('Draft PO issued. You can adjust Work Order quantity or await stock arrival.');
+                }}
+            />
+        </>
     );
 }

@@ -66,7 +66,7 @@ const PurchaseOrderSchema = new mongoose.Schema({
         type: String,
         default: 'DRAFT',
         enum: {
-            values: ['DRAFT', 'SENT_TO_SUPPLIER', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'],
+            values: ['DRAFT', 'PENDING_APPROVAL', 'SENT_TO_SUPPLIER', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'],
             message: '{VALUE} is not a valid PO status.'
         }
     },

@@ -5,6 +5,7 @@ const Customer = require('../models/customer.model');
 const User = require('../models/user.model');
 const SalesOrder = require('../models/salesOrder.model');
 const Invoice = require('../models/invoice.model');
+const { normalizeEnum } = require('../utils/enumNormalizer');
 
 /**
  * Auto-generates sequential complaint ticket number per tenant (COMP-YYYY-0001...)
@@ -92,11 +93,11 @@ const createInteraction = async (req, res) => {
             tenant: tenantId,
             customer,
             date: date ? new Date(date) : new Date(),
-            interactionType,
+            interactionType: normalizeEnum(interactionType, 'CALL'),
             subject: subject.trim(),
             notes: notes ? notes.trim() : undefined,
             assignedExecutive: assignedExecutive || req.user._id || req.user.id,
-            status: status || 'OPEN',
+            status: normalizeEnum(status, 'OPEN'),
             nextFollowUpDate: nextFollowUpDate ? new Date(nextFollowUpDate) : null,
             isActive: true
         });
@@ -525,10 +526,10 @@ const createComplaint = async (req, res) => {
             relatedSalesOrder: relatedSalesOrder || null,
             relatedInvoice: relatedInvoice || null,
             date: date ? new Date(date) : new Date(),
-            complaintType,
+            complaintType: normalizeEnum(complaintType, 'QUALITY_DEFECT'),
             description: description.trim(),
             assignedExecutive: assignedExecutive || req.user._id || req.user.id,
-            status: status || 'OPEN',
+            status: normalizeEnum(status, 'OPEN'),
             resolutionNotes: resolutionNotes ? resolutionNotes.trim() : undefined,
             resolvedAt: status === 'RESOLVED' ? new Date() : null,
             isActive: true

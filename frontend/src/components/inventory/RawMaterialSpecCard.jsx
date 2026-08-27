@@ -1,4 +1,4 @@
-import { Pencil, Layers, Tag } from 'lucide-react';
+import { Pencil, Tag, MapPin, Truck, Layers, Hash, Palette } from 'lucide-react';
 
 export default function RawMaterialSpecCard({ rawMaterial, onEdit }) {
     if (!rawMaterial) return null;
@@ -9,7 +9,20 @@ export default function RawMaterialSpecCard({ rawMaterial, onEdit }) {
     const uomSymbol = typeof rawMaterial.uom === 'object' ? (rawMaterial.uom?.symbol || rawMaterial.uom?.name) : 'Kg';
     const currentStock = rawMaterial.currentStock || 0;
     const reorderLevel = rawMaterial.reorderLevel || 0;
-    const pricePerUnit = rawMaterial.pricePerUnit || 0;
+    
+    // 7 New Industrial Spec Fields
+    const materialGrade = rawMaterial.materialGrade || 'Virgin Grade 100';
+    const color = rawMaterial.color || 'Natural White';
+    const hsnCode = rawMaterial.hsnCode || '39012000';
+    const moq = rawMaterial.moq || 1000;
+    const standardCost = rawMaterial.pricePerUnit || 0;
+    const lastPurchasePrice = rawMaterial.lastPurchasePrice || standardCost;
+    
+    const supplierObj = rawMaterial.preferredSupplier || rawMaterial.defaultSupplier;
+    const supplierName = typeof supplierObj === 'object' ? (supplierObj?.companyName || supplierObj?.name) : 'Unassigned';
+
+    const locationObj = rawMaterial.warehouseLocation || rawMaterial.defaultLocation;
+    const locationName = typeof locationObj === 'object' ? locationObj?.name : 'Raw Material Warehouse Bay A';
 
     const isLowStock = currentStock <= reorderLevel;
 
@@ -40,7 +53,7 @@ export default function RawMaterialSpecCard({ rawMaterial, onEdit }) {
                 </h3>
             </div>
 
-            {/* 2x2 Grid of Small Stat Blocks */}
+            {/* 2x2 Grid of Primary Technical Specs */}
             <div className="grid grid-cols-2 gap-2 text-xs">
                 {/* CATEGORY Block */}
                 <div className="bg-purple-50/80 border border-purple-200/80 rounded-lg p-2 flex flex-col">
@@ -74,7 +87,7 @@ export default function RawMaterialSpecCard({ rawMaterial, onEdit }) {
                     <span className={`text-xs font-bold font-mono mt-0.5 ${
                         isLowStock ? 'text-rose-950' : 'text-emerald-950'
                     }`}>
-                        {currentStock} {uomSymbol}
+                        {currentStock.toLocaleString('en-IN')} {uomSymbol}
                     </span>
                 </div>
 
@@ -84,21 +97,68 @@ export default function RawMaterialSpecCard({ rawMaterial, onEdit }) {
                         REORDER LEVEL
                     </span>
                     <span className="text-xs font-bold text-slate-900 mt-0.5 font-mono">
-                        {reorderLevel} {uomSymbol}
+                        {reorderLevel.toLocaleString('en-IN')} {uomSymbol}
                     </span>
                 </div>
             </div>
 
-            {/* Pricing Footer */}
+            {/* Industrial Attributes Detail List */}
+            <div className="bg-app-bg/60 border border-border/80 rounded-lg p-2.5 space-y-1.5 text-[11px]">
+                <div className="flex items-center gap-1.5 text-text-muted">
+                    <Layers size={13} className="text-primary shrink-0" />
+                    <span className="font-semibold text-text-muted shrink-0">Grade/Spec:</span>
+                    <span className="font-bold text-text-main truncate">{materialGrade}</span>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-text-muted">
+                    <Palette size={13} className="text-amber-600 shrink-0" />
+                    <span className="font-semibold text-text-muted shrink-0">Color:</span>
+                    <span className="font-bold text-text-main truncate">{color}</span>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-text-muted">
+                    <Hash size={13} className="text-slate-600 shrink-0" />
+                    <span className="font-semibold text-text-muted shrink-0">HSN Code:</span>
+                    <span className="font-mono font-bold text-text-main shrink-0">{hsnCode}</span>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-text-muted">
+                    <Truck size={13} className="text-emerald-600 shrink-0" />
+                    <span className="font-semibold text-text-muted shrink-0">Supplier:</span>
+                    <span className="font-bold text-text-main truncate">{supplierName}</span>
+                </div>
+            </div>
+
+            {/* Pricing & MOQ Banner */}
+            <div className="bg-purple-50/50 border border-purple-200/60 rounded-lg p-2 flex items-center justify-between text-xs font-mono font-bold">
+                <div>
+                    <span className="text-[9px] text-text-muted uppercase font-sans font-extrabold block">VALUATION COST</span>
+                    <span className="text-xs text-purple-900">₹{Number(standardCost).toFixed(2)}</span>
+                </div>
+                <div className="text-center">
+                    <span className="text-[9px] text-text-muted uppercase font-sans font-extrabold block">LAST GRN PRICE</span>
+                    <span className="text-xs text-primary">₹{Number(lastPurchasePrice).toFixed(2)}</span>
+                </div>
+                <div className="text-right font-sans">
+                    <span className="text-[9px] text-text-muted uppercase font-extrabold block">MOQ</span>
+                    <span className="text-xs font-mono font-bold text-slate-800">{moq} {uomSymbol}</span>
+                </div>
+            </div>
+
+            {/* Storage Location & Alert Footer */}
             <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-text-muted">
-                <span className="flex items-center gap-1 font-medium text-text-main">
-                    <Tag size={13} className="text-text-muted" />
-                    Unit Price: <strong className="font-mono text-primary">₹{pricePerUnit}</strong> / {uomSymbol}
+                <span className="flex items-center gap-1 font-medium text-text-main truncate">
+                    <MapPin size={13} className="text-amber-600 shrink-0" />
+                    <span className="truncate">{locationName}</span>
                 </span>
 
-                {isLowStock && (
-                    <span className="text-[10px] font-bold text-rose-600 bg-rose-100 px-1.5 py-0.5 rounded">
+                {isLowStock ? (
+                    <span className="text-[10px] font-extrabold text-rose-600 bg-rose-100 px-1.5 py-0.5 rounded shrink-0">
                         Low Stock Alert
+                    </span>
+                ) : (
+                    <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded shrink-0">
+                        In Stock
                     </span>
                 )}
             </div>

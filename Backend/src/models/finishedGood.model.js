@@ -49,6 +49,26 @@ const FinishedGoodSchema = new mongoose.Schema({
         type: Number,
         min: [0, 'Bag capacity cannot be negative']
     },
+    laminationType: {
+        type: String,
+        trim: true,
+        default: 'UNLAMINATED'
+    },
+    printingSpec: {
+        type: String,
+        trim: true,
+        default: 'UNPRINTED'
+    },
+    meshCount: {
+        type: String,
+        trim: true,
+        default: '10x10'
+    },
+    tareWeightGram: {
+        type: Number,
+        min: 0,
+        default: 0
+    },
     pendingQCStock: {
         type: Number,
         default: 0,
@@ -59,10 +79,35 @@ const FinishedGoodSchema = new mongoose.Schema({
         default: 0,
         min: [0, 'Current stock cannot be negative']
     },
+    bagType: {
+        type: String,
+        trim: true,
+        default: 'Laminated PP Woven Sack'
+    },
+    colorAndPrint: {
+        type: String,
+        trim: true,
+        default: 'Milky White (2-Color Flexo)'
+    },
+    warehouseLocation: {
+        type: String,
+        trim: true,
+        default: 'Finished Goods Warehouse - Bay 1'
+    },
     pricePerBag: {
         type: Number,
         default: 0,
         min: [0, 'Price per bag cannot be negative']
+    },
+    retailPrice: {
+        type: Number,
+        default: 0,
+        min: [0, 'Retail price cannot be negative']
+    },
+    wholesalePrice: {
+        type: Number,
+        default: 0,
+        min: [0, 'Wholesale price cannot be negative']
     },
     isActive: {
         type: Boolean,

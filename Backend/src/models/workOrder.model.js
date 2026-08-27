@@ -10,6 +10,8 @@ const WorkOrderStageSchema = new mongoose.Schema({
             'EXTRUSION_LAMINATION',
             'FLEXO_PRINTING',
             'CUTTING_SEWING',
+            'STITCHING',
+            'HANDLE_ATTACHMENT',
             'BALING_PACKING'
         ]
     },
@@ -17,12 +19,12 @@ const WorkOrderStageSchema = new mongoose.Schema({
         type: Number,
         required: true,
         min: 1,
-        max: 6
+        max: 8
     },
     status: {
         type: String,
         default: 'PENDING',
-        enum: ['PENDING', 'ACTIVE', 'COMPLETED']
+        enum: ['PENDING', 'SKIPPED', 'ACTIVE', 'COMPLETED']
     },
     machine: {
         type: mongoose.Schema.Types.ObjectId,
@@ -111,9 +113,9 @@ const WorkOrderSchema = new mongoose.Schema({
         type: [WorkOrderStageSchema],
         validate: {
             validator: function (v) {
-                return Array.isArray(v) && v.length === 6;
+                return Array.isArray(v) && v.length === 8;
             },
-            message: 'WorkOrder must have exactly 6 stages.'
+            message: 'WorkOrder must have exactly 8 stages.'
         }
     },
     isActive: {
@@ -123,9 +125,10 @@ const WorkOrderSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 WorkOrderSchema.methods.recalculateProgress = function () {
-    const total = this.stages?.length || 6;
-    const completed = (this.stages || []).filter((s) => s.status === 'COMPLETED').length;
-    this.progressPercentage = Math.min(100, Math.round((completed / total) * 100));
+    const activeOrCompleted = (this.stages || []).filter((s) => s.status !== 'SKIPPED');
+    const totalActiveCount = activeOrCompleted.length || 1;
+    const completedCount = activeOrCompleted.filter((s) => s.status === 'COMPLETED').length;
+    this.progressPercentage = Math.min(100, Math.round((completedCount / totalActiveCount) * 100));
     return this.progressPercentage;
 };
 

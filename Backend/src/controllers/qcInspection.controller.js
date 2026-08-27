@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 const QCInspection = require('../models/qcInspection.model');
 const WorkOrder = require('../models/workOrder.model');
 const FinishedGood = require('../models/finishedGood.model');
+const RawMaterial = require('../models/rawMaterial.model');
+const GRN = require('../models/grn.model');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
 
 /**
@@ -30,7 +32,7 @@ const generateQcCertificateNumber = async (tenantId) => {
 };
 
 /**
- * @desc    Create a new Quality Control Inspection record
+ * @desc    Create a new Quality Control Inspection record (INBOUND or OUTBOUND)
  * @route   POST /api/qc-inspections
  * @access  Private (QUALITY:CREATE permission)
  */
@@ -47,14 +49,16 @@ const createQCInspection = async (req, res) => {
             });
         }
 
-        // Strip read-only and system fields
         delete req.body.tenant;
         delete req.body.qcCertificateNumber;
         delete req.body.qcStatus;
         delete req.body.inspectedBy;
 
         const {
+            inspectionType = 'OUTBOUND',
             workOrder,
+            grn,
+            rawMaterial,
             sampleSize,
             passedQty,
             rejectedQty,
@@ -63,15 +67,7 @@ const createQCInspection = async (req, res) => {
             defects
         } = req.body;
 
-        // 1. Basic Validation
-        if (!workOrder || sampleSize === undefined || passedQty === undefined || rejectedQty === undefined) {
-            return res.status(400).json({
-                success: false,
-                message: 'Please provide workOrder, sampleSize, passedQty, and rejectedQty.'
-            });
-        }
-
-        const numSampleSize = Number(sampleSize);
+        const numSampleSize = Number(sampleSize || 1);
         const numPassedQty = Number(passedQty);
         const numRejectedQty = Number(rejectedQty);
 
@@ -90,104 +86,177 @@ const createQCInspection = async (req, res) => {
             });
         }
 
-        // 2. Load WorkOrder and FinishedGood within tenant scope
-        const workOrderDoc = await WorkOrder.findOne({ _id: workOrder, tenant: tenantId });
-        if (!workOrderDoc) {
-            return res.status(400).json({
-                success: false,
-                message: 'Work Order does not exist or does not belong to your organization.'
-            });
-        }
-
-        const fgDoc = await FinishedGood.findOne({ _id: workOrderDoc.finishedGood, tenant: tenantId });
-        if (!fgDoc) {
-            return res.status(400).json({
-                success: false,
-                message: 'Finished Good reference on Work Order not found in your organization.'
-            });
-        }
-
-        // Validate available pending QC stock
-        const availablePending = fgDoc.pendingQCStock || 0;
-        if (totalTested > availablePending) {
-            return res.status(400).json({
-                success: false,
-                message: `Cannot inspect ${totalTested} units. Only ${availablePending} units are currently pending QC for '${fgDoc.name}'.`
-            });
-        }
-
-        // 3. Compute qcStatus server-side
         let computedQcStatus = 'PASSED';
-        if (numRejectedQty === 0) {
-            computedQcStatus = 'PASSED';
-        } else if (numPassedQty === 0) {
-            computedQcStatus = 'FAILED';
-        } else {
-            computedQcStatus = 'PARTIAL';
-        }
+        if (numRejectedQty === 0) computedQcStatus = 'PASSED';
+        else if (numPassedQty === 0) computedQcStatus = 'FAILED';
+        else computedQcStatus = 'PARTIAL';
 
         const qcCertificateNumber = await generateQcCertificateNumber(tenantId);
 
-        // 4. Setup Mongoose Session Transaction for atomic execution
         try {
             session = await mongoose.startSession();
             session.startTransaction();
-        } catch (sessionErr) {
-            useTransaction = false; // Fallback for standalone MongoDB
+        } catch {
+            useTransaction = false;
         }
 
         const sessionOption = useTransaction ? { session } : {};
-
-        // Step A: Create QCInspection Document
-        const qcDocs = await QCInspection.create([{
-            tenant: tenantId,
-            qcCertificateNumber,
-            workOrder: workOrderDoc._id,
-            finishedGood: fgDoc._id,
-            sampleSize: numSampleSize,
-            passedQty: numPassedQty,
-            rejectedQty: numRejectedQty,
-            tensileStrength: tensileStrength !== undefined ? Number(tensileStrength) : undefined,
-            gsmTested: gsmTested !== undefined ? Number(gsmTested) : undefined,
-            defects,
-            qcStatus: computedQcStatus,
-            inspectedBy: req.user._id || req.user.id
-        }], sessionOption);
-
-        const qcInspection = qcDocs[0];
         const createdStockTransactions = [];
+        let qcInspection = null;
 
-        // Step B: Update FinishedGood stocks via StockTransaction audit entries
-        // If passedQty > 0, execute QC_PASSED stock transaction (moves passedQty from pendingQCStock -> currentStock)
-        if (numPassedQty > 0) {
-            const passedResult = await executeStockTransactionCore({
-                tenantId,
-                referenceNumber: qcCertificateNumber,
-                itemType: 'FINISHED_GOOD',
-                item: fgDoc._id,
-                transactionType: 'QC_PASSED',
-                quantity: numPassedQty,
-                notes: `QC approved ${numPassedQty} units (Certificate: ${qcCertificateNumber})`,
-                performedBy: req.user._id || req.user.id
-            }, sessionOption);
+        if (inspectionType === 'INBOUND') {
+            // INBOUND RAW MATERIAL INSPECTION
+            if (!rawMaterial) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Please provide rawMaterial for Inbound QC Inspection.'
+                });
+            }
 
-            createdStockTransactions.push(passedResult.transaction);
-        }
+            const rmDoc = await RawMaterial.findOne({ _id: rawMaterial, tenant: tenantId });
+            if (!rmDoc) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Raw Material not found in your organization.'
+                });
+            }
 
-        // If rejectedQty > 0, execute QC_REJECTED stock transaction (deducts rejectedQty from pendingQCStock with audit log)
-        if (numRejectedQty > 0) {
-            const rejectedResult = await executeStockTransactionCore({
-                tenantId,
-                referenceNumber: qcCertificateNumber,
-                itemType: 'FINISHED_GOOD',
-                item: fgDoc._id,
-                transactionType: 'QC_REJECTED',
-                quantity: numRejectedQty,
-                notes: `QC rejected ${numRejectedQty} units (Certificate: ${qcCertificateNumber})${defects ? `. Defects: ${defects}` : ''}`,
-                performedBy: req.user._id || req.user.id
-            }, sessionOption);
+            let grnDoc = null;
+            if (grn) {
+                grnDoc = await GRN.findOne({ _id: grn, tenant: tenantId });
+            }
 
-            createdStockTransactions.push(rejectedResult.transaction);
+            const qcDocs = await QCInspection.create([{
+                tenant: tenantId,
+                inspectionType: 'INBOUND',
+                qcCertificateNumber,
+                grn: grnDoc?._id || undefined,
+                po: grnDoc?.purchaseOrder || undefined,
+                rawMaterial: rmDoc._id,
+                supplier: grnDoc?.supplier || rmDoc.defaultSupplier || undefined,
+                receivedQty: totalTested,
+                sampleSize: numSampleSize,
+                passedQty: numPassedQty,
+                rejectedQty: numRejectedQty,
+                tensileStrength: tensileStrength !== undefined ? Number(tensileStrength) : undefined,
+                gsmTested: gsmTested !== undefined ? Number(gsmTested) : undefined,
+                defects,
+                qcStatus: computedQcStatus,
+                inspectedBy: req.user._id || req.user.id
+            }], sessionOption);
+
+            qcInspection = qcDocs[0];
+
+            // Inbound stock gate: only passedQty increments usable RawMaterial.currentStock
+            if (numPassedQty > 0) {
+                const passedResult = await executeStockTransactionCore({
+                    tenantId,
+                    referenceNumber: qcCertificateNumber,
+                    itemType: 'RAW_MATERIAL',
+                    item: rmDoc._id,
+                    transactionType: 'QC_PASSED',
+                    quantity: numPassedQty,
+                    notes: `Inbound QC approved ${numPassedQty} units (Certificate: ${qcCertificateNumber})`,
+                    performedBy: req.user._id || req.user.id
+                }, sessionOption);
+
+                createdStockTransactions.push(passedResult.transaction);
+            }
+
+            if (numRejectedQty > 0) {
+                const rejectedResult = await executeStockTransactionCore({
+                    tenantId,
+                    referenceNumber: qcCertificateNumber,
+                    itemType: 'RAW_MATERIAL',
+                    item: rmDoc._id,
+                    transactionType: 'QC_REJECTED',
+                    quantity: numRejectedQty,
+                    notes: `Inbound QC rejected ${numRejectedQty} units (Certificate: ${qcCertificateNumber})${defects ? `. Defects: ${defects}` : ''}`,
+                    performedBy: req.user._id || req.user.id
+                }, sessionOption);
+
+                createdStockTransactions.push(rejectedResult.transaction);
+            }
+        } else {
+            // OUTBOUND FINISHED GOODS INSPECTION
+            if (!workOrder) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Please provide workOrder for Outbound QC Inspection.'
+                });
+            }
+
+            const workOrderDoc = await WorkOrder.findOne({ _id: workOrder, tenant: tenantId });
+            if (!workOrderDoc) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Work Order not found in your organization.'
+                });
+            }
+
+            const fgDoc = await FinishedGood.findOne({ _id: workOrderDoc.finishedGood, tenant: tenantId });
+            if (!fgDoc) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Finished Good reference on Work Order not found.'
+                });
+            }
+
+            const availablePending = fgDoc.pendingQCStock || 0;
+            if (totalTested > availablePending) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot inspect ${totalTested} units. Only ${availablePending} units are currently pending QC for '${fgDoc.name}'.`
+                });
+            }
+
+            const qcDocs = await QCInspection.create([{
+                tenant: tenantId,
+                inspectionType: 'OUTBOUND',
+                qcCertificateNumber,
+                workOrder: workOrderDoc._id,
+                finishedGood: fgDoc._id,
+                sampleSize: numSampleSize,
+                passedQty: numPassedQty,
+                rejectedQty: numRejectedQty,
+                tensileStrength: tensileStrength !== undefined ? Number(tensileStrength) : undefined,
+                gsmTested: gsmTested !== undefined ? Number(gsmTested) : undefined,
+                defects,
+                qcStatus: computedQcStatus,
+                inspectedBy: req.user._id || req.user.id
+            }], sessionOption);
+
+            qcInspection = qcDocs[0];
+
+            if (numPassedQty > 0) {
+                const passedResult = await executeStockTransactionCore({
+                    tenantId,
+                    referenceNumber: qcCertificateNumber,
+                    itemType: 'FINISHED_GOOD',
+                    item: fgDoc._id,
+                    transactionType: 'QC_PASSED',
+                    quantity: numPassedQty,
+                    notes: `Outbound QC approved ${numPassedQty} units (Certificate: ${qcCertificateNumber})`,
+                    performedBy: req.user._id || req.user.id
+                }, sessionOption);
+
+                createdStockTransactions.push(passedResult.transaction);
+            }
+
+            if (numRejectedQty > 0) {
+                const rejectedResult = await executeStockTransactionCore({
+                    tenantId,
+                    referenceNumber: qcCertificateNumber,
+                    itemType: 'FINISHED_GOOD',
+                    item: fgDoc._id,
+                    transactionType: 'QC_REJECTED',
+                    quantity: numRejectedQty,
+                    notes: `Outbound QC rejected ${numRejectedQty} units (Certificate: ${qcCertificateNumber})${defects ? `. Defects: ${defects}` : ''}`,
+                    performedBy: req.user._id || req.user.id
+                }, sessionOption);
+
+                createdStockTransactions.push(rejectedResult.transaction);
+            }
         }
 
         if (useTransaction && session) {
@@ -198,6 +267,9 @@ const createQCInspection = async (req, res) => {
         await qcInspection.populate([
             { path: 'workOrder', select: 'workOrderNumber status targetQuantity completedQuantity' },
             { path: 'finishedGood', select: 'name code uom currentStock pendingQCStock' },
+            { path: 'grn', select: 'grnNumber' },
+            { path: 'rawMaterial', select: 'name code uom currentStock' },
+            { path: 'supplier', select: 'name' },
             { path: 'inspectedBy', select: 'name email' }
         ]);
 
@@ -211,20 +283,10 @@ const createQCInspection = async (req, res) => {
         });
     } catch (error) {
         if (useTransaction && session) {
-            if (session.inTransaction()) {
-                await session.abortTransaction();
-            }
+            if (session.inTransaction()) await session.abortTransaction();
             session.endSession();
         }
         console.error('Error in createQCInspection:', error);
-
-        if (error.name === 'CastError') {
-            return res.status(400).json({
-                success: false,
-                message: `Invalid ID format provided for field '${error.path}'.`
-            });
-        }
-
         return res.status(400).json({
             success: false,
             message: error.message || 'Failed to process QC Inspection.'
@@ -247,12 +309,14 @@ const getQCInspections = async (req, res) => {
             });
         }
 
-        const { workOrder, finishedGood, qcStatus, search, page = 1, limit = 20 } = req.query;
+        const { inspectionType, workOrder, finishedGood, rawMaterial, qcStatus, search, page = 1, limit = 20 } = req.query;
 
         const filter = { tenant: tenantId };
 
+        if (inspectionType) filter.inspectionType = inspectionType;
         if (workOrder) filter.workOrder = workOrder;
         if (finishedGood) filter.finishedGood = finishedGood;
+        if (rawMaterial) filter.rawMaterial = rawMaterial;
         if (qcStatus) filter.qcStatus = qcStatus;
 
         if (search) {
@@ -267,6 +331,9 @@ const getQCInspections = async (req, res) => {
             QCInspection.find(filter)
                 .populate('workOrder', 'workOrderNumber status')
                 .populate('finishedGood', 'name code uom')
+                .populate('grn', 'grnNumber')
+                .populate('rawMaterial', 'name code uom')
+                .populate('supplier', 'name')
                 .populate('inspectedBy', 'name email')
                 .sort({ createdAt: -1 })
                 .skip(skip)
@@ -287,14 +354,6 @@ const getQCInspections = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in getQCInspections:', error);
-
-        if (error.name === 'CastError') {
-            return res.status(400).json({
-                success: false,
-                message: `Invalid ID format provided for field '${error.path}'.`
-            });
-        }
-
         return res.status(500).json({
             success: false,
             message: 'Failed to fetch QC Inspections.',
@@ -321,6 +380,9 @@ const getQCInspectionById = async (req, res) => {
         const inspection = await QCInspection.findOne({ _id: req.params.id, tenant: tenantId })
             .populate('workOrder', 'workOrderNumber status targetQuantity completedQuantity')
             .populate('finishedGood', 'name code uom currentStock pendingQCStock')
+            .populate('grn', 'grnNumber')
+            .populate('rawMaterial', 'name code uom currentStock')
+            .populate('supplier', 'name')
             .populate('inspectedBy', 'name email');
 
         if (!inspection) {
@@ -336,14 +398,6 @@ const getQCInspectionById = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in getQCInspectionById:', error);
-
-        if (error.name === 'CastError') {
-            return res.status(400).json({
-                success: false,
-                message: `Invalid ID format provided for field '${error.path}'.`
-            });
-        }
-
         return res.status(500).json({
             success: false,
             message: 'Failed to retrieve QC Inspection.',

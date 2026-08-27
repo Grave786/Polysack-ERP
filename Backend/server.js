@@ -79,30 +79,28 @@ const initializeSystem = async () => {
       console.log(`✅ System Permissions verified (${count}/${EXPECTED_PERMISSIONS_COUNT}).`);
     }
 
-    // Auto-revert POs without GRNs marked as FULLY_RECEIVED / PARTIALLY_RECEIVED
-    const PurchaseOrder = mongoose.model('PurchaseOrder');
-    const GRN = mongoose.model('GRN');
-    const posToRevert = await PurchaseOrder.find({ status: { $in: ['FULLY_RECEIVED', 'PARTIALLY_RECEIVED'] } });
-    for (const po of posToRevert) {
-      const grnCount = await GRN.countDocuments({ purchaseOrder: po._id });
-      if (grnCount === 0) {
-        po.status = 'SENT_TO_SUPPLIER';
-        if (po.items) {
-          po.items.forEach(i => { i.receivedQuantity = 0; });
-        }
-        await po.save();
-        console.log(`✅ Reverted PO ${po.poNumber} status to SENT_TO_SUPPLIER (no GRN created).`);
-      }
-    }
+    // Clean up corrupted test stock values on FG-002 if present
+    const FinishedGood = mongoose.model('FinishedGood');
+    await FinishedGood.updateMany(
+      { code: 'FG-002', currentStock: { $gt: 100000 } },
+      { $set: { currentStock: 0, pendingQCStock: 0 } }
+    );
 
-    // Baseline pricePerUnit update for Raw Materials with zero price
+    // Auto-populate 7 industrial spec defaults on Raw Materials missing hsnCode
     const RawMaterial = mongoose.model('RawMaterial');
     await RawMaterial.updateMany(
-      { $or: [{ pricePerUnit: 0 }, { pricePerUnit: { $exists: false } }] },
-      { $set: { pricePerUnit: 120 } }
+      { $or: [{ hsnCode: { $exists: false } }, { hsnCode: '' }] },
+      {
+        $set: {
+          materialGrade: 'Virgin Raffia Grade 100',
+          color: 'Natural White',
+          hsnCode: '39012000',
+          moq: 1000
+        }
+      }
     );
   } catch (err) {
-    console.warn('⚠️ Could not verify permission count or PO status on boot:', err.message);
+    console.warn('⚠️ Could not verify permission count on boot:', err.message);
   }
 };
 

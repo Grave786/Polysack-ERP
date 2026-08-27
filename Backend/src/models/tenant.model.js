@@ -61,6 +61,26 @@ const TenantSchema = new mongoose.Schema({
     isActive: {
         type: Boolean,
         default: true
+    },
+    productionSettings: {
+        activeStartingStage: {
+            type: String,
+            default: 'FLEXO_PRINTING',
+            enum: [
+                'TAPE_EXTRUSION',
+                'CIRCULAR_WEAVING',
+                'EXTRUSION_LAMINATION',
+                'FLEXO_PRINTING',
+                'CUTTING_SEWING',
+                'STITCHING',
+                'HANDLE_ATTACHMENT',
+                'BALING_PACKING'
+            ]
+        },
+        stageConfigs: [{
+            stageName: { type: String, required: true },
+            isEnabled: { type: Boolean, default: true }
+        }]
     }
 }, { timestamps: true });
 

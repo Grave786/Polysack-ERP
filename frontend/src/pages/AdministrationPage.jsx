@@ -101,6 +101,9 @@ export default function AdministrationPage() {
                                 line2: profile.registeredAddress?.line2 || '',
                                 city: profile.registeredAddress?.city || '',
                                 pincode: profile.registeredAddress?.pincode || ''
+                            },
+                            productionSettings: {
+                                activeStartingStage: profile.productionSettings?.activeStartingStage || 'FLEXO_PRINTING'
                             }
                         });
                     }
@@ -249,7 +252,8 @@ export default function AdministrationPage() {
                 pan: formData.pan.trim().toUpperCase(),
                 contactEmail: formData.contactEmail.trim(),
                 contactPhone: formData.contactPhone.trim(),
-                registeredAddress: formData.registeredAddress
+                registeredAddress: formData.registeredAddress,
+                productionSettings: formData.productionSettings
             };
 
             const res = await axiosInstance.put('/admin/company-profile', payload);
@@ -893,6 +897,44 @@ export default function AdministrationPage() {
                     </div>
                 </div>
 
+                {/* Production Pipeline Settings Header */}
+                <div className="pt-3 border-t border-border space-y-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-text-main">
+                        Production Pipeline & Active Starting Stage Settings
+                    </h3>
+                    <p className="text-[11px] text-text-muted">
+                        Configure which stage newly launched Work Orders will start from. Stages preceding your active starting stage will automatically be marked as <span className="font-bold text-gray-500">Skipped — Not in Use</span> while remaining available for future machine expansion.
+                    </p>
+
+                    <div className="max-w-md">
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            Active Facility Starting Stage *
+                        </label>
+                        <select
+                            value={formData.productionSettings?.activeStartingStage || 'FLEXO_PRINTING'}
+                            onChange={(e) =>
+                                setFormData({
+                                    ...formData,
+                                    productionSettings: {
+                                        ...formData.productionSettings,
+                                        activeStartingStage: e.target.value
+                                    }
+                                })
+                            }
+                            className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                        >
+                            <option value="TAPE_EXTRUSION">Stage 1: Tape Extrusion</option>
+                            <option value="CIRCULAR_WEAVING">Stage 2: Circular Weaving</option>
+                            <option value="EXTRUSION_LAMINATION">Stage 3: Extrusion Lamination</option>
+                            <option value="FLEXO_PRINTING">Stage 4: Flexo Printing (Default - Skips Stages 1-3)</option>
+                            <option value="CUTTING_SEWING">Stage 5: Cutting & Sewing</option>
+                            <option value="STITCHING">Stage 6: Stitching</option>
+                            <option value="HANDLE_ATTACHMENT">Stage 7: Handle Attachment</option>
+                            <option value="BALING_PACKING">Stage 8: Baling & Packing</option>
+                        </select>
+                    </div>
+                </div>
+
                 {/* Save Button */}
                 <div className="pt-4 border-t border-border flex justify-end">
                     <button
@@ -901,7 +943,7 @@ export default function AdministrationPage() {
                         className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
                     >
                         <Save size={16} />
-                        <span>{isSaving ? 'Saving Profile & GST Settings...' : 'Save Company Profile & GST Settings'}</span>
+                        <span>{isSaving ? 'Saving Profile & Settings...' : 'Save Company Profile & Settings'}</span>
                     </button>
                 </div>
             </form>

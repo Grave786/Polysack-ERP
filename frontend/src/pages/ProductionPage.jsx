@@ -10,6 +10,8 @@ const STAGE_LABELS = {
     EXTRUSION_LAMINATION: 'Extrusion Lamination',
     FLEXO_PRINTING: 'Flexo Printing',
     CUTTING_SEWING: 'Cutting & Sewing',
+    STITCHING: 'Stitching',
+    HANDLE_ATTACHMENT: 'Handle Attachment',
     BALING_PACKING: 'Baling & Packing'
 };
 
@@ -59,16 +61,17 @@ export default function ProductionPage() {
                         const completedQty = Number(row.completedQuantity || 0);
                         const targetQty = Number(row.targetQuantity || 1);
                         const completedStagesCount = Array.isArray(row.stages) ? row.stages.filter((s) => s.status === 'COMPLETED').length : 0;
-                        const pct = row.progressPercentage !== undefined 
-                            ? row.progressPercentage 
-                            : Math.min(100, Math.round((completedStagesCount / 6) * 100));
+                        const activeStagesCount = Array.isArray(row.stages) ? row.stages.filter((s) => s.status !== 'SKIPPED').length : 8;
+                        const pct = row.progressPercentage !== undefined
+                            ? row.progressPercentage
+                            : Math.min(100, Math.round((completedStagesCount / Math.max(1, activeStagesCount)) * 100));
 
                         const activeStage = Array.isArray(row.stages) ? row.stages.find((s) => s.status === 'ACTIVE') : null;
                         const activeLabel = activeStage
                             ? (STAGE_LABELS[activeStage.stageName] || activeStage.stageName)
                             : row.status === 'COMPLETED'
-                            ? 'Completed'
-                            : 'Pending';
+                                ? 'Completed'
+                                : 'Pending';
 
                         return (
                             <div className="w-36 space-y-1 font-sans">
@@ -100,10 +103,10 @@ export default function ProductionPage() {
                             status === 'IN_PROGRESS'
                                 ? 'bg-amber-100 text-amber-800 border border-amber-300'
                                 : status === 'COMPLETED'
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                : status === 'CANCELLED'
-                                ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                                : 'bg-gray-100 text-gray-700 border border-gray-300';
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    : status === 'CANCELLED'
+                                        ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                        : 'bg-gray-100 text-gray-700 border border-gray-300';
                         const label = status === 'IN_PROGRESS' ? 'In Progress' : status;
 
                         return (
@@ -116,21 +119,33 @@ export default function ProductionPage() {
                 {
                     header: 'ACTIONS',
                     render: (row) => (
-                        <button
-                            type="button"
-                            onClick={() => handleTrackJob(row._id)}
-                            className="bg-sidebar-bg hover:bg-black text-white px-3 py-1 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
-                        >
-                            <Activity size={13} />
-                            <span>Track Job</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => handleTrackJob(row._id)}
+                                className="bg-sidebar-bg hover:bg-black text-white px-3 py-1 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
+                            >
+                                <Activity size={13} />
+                                <span>Track Job</span>
+                            </button>
+                            {row.status !== 'COMPLETED' && row.status !== 'CANCELLED' && (
+                                <button
+                                    type="button"
+                                    onClick={() => handleCancelWorkOrder(row._id)}
+                                    className="border border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-900 px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer"
+                                    title="Cancel Work Order"
+                                >
+                                    Cancel Order
+                                </button>
+                            )}
+                        </div>
                     )
                 }
             ]
         },
         {
             key: 'stage-monitor',
-            label: 'Live 6-Stage Process Monitor',
+            label: 'Live Production Pipeline Monitor',
             icon: Activity,
             customRender: () => (
                 <ProductionStageMonitor
@@ -138,55 +153,6 @@ export default function ProductionPage() {
                     onSelectWorkOrder={(id) => setSelectedWorkOrderId(id)}
                 />
             )
-        },
-        {
-            key: 'boms',
-            label: 'Bill of Materials (BOM)',
-            icon: FileText,
-            resourcePath: '/boms',
-            columns: [
-                {
-                    header: 'RECIPE NAME',
-                    render: (row) => row.name || (row.finishedGood?.name ? `Recipe for ${row.finishedGood.name}` : 'BOM Recipe'),
-                    sortable: true
-                },
-                {
-                    header: 'TARGET FINISHED GOOD',
-                    render: (row) => row.finishedGood?.name || '-'
-                },
-                {
-                    header: 'INGREDIENTS',
-                    render: (row) => {
-                        const items = row.items || [];
-                        const count = items.length;
-                        if (count === 0) return <span className="text-text-muted">-</span>;
-                        const names = items.map((i) => i.rawMaterial?.name || i.rawMaterial).filter(Boolean);
-                        const preview = names.slice(0, 2).join(', ');
-                        const extra = count > 2 ? ` +${count - 2} more` : '';
-                        return (
-                            <div className="max-w-[280px] truncate font-sans" title={names.join(', ')}>
-                                <span className="font-semibold text-xs text-text-main">
-                                    {count} items {preview ? `(${preview}${extra})` : ''}
-                                </span>
-                            </div>
-                        );
-                    }
-                },
-                {
-                    header: 'STATUS',
-                    render: (row) => (
-                        <span
-                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${
-                                row.isActive !== false
-                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                    : 'bg-gray-100 text-gray-700 border border-gray-300'
-                            }`}
-                        >
-                            {row.isActive !== false ? 'Active' : 'Inactive'}
-                        </span>
-                    )
-                }
-            ]
         }
     ];
 
@@ -206,7 +172,7 @@ export default function ProductionPage() {
             <TabbedResourcePage
                 key={refreshKey}
                 title="Shop Floor Manufacturing Engine"
-                description="Manage factory Work Orders, monitor live 6-stage production progress, and configure Bill of Materials (BOM) recipes."
+                description="Manage factory Work Orders, monitor live production pipeline stage progress, and configure Bill of Materials (BOM) recipes."
                 tabs={tabs}
                 activeTabKey={activeTabKey}
                 onTabChange={setActiveTabKey}

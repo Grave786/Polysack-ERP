@@ -2,16 +2,17 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import GlobalSearchBar from './GlobalSearchBar';
-import { Building2, ChevronDown, ShieldCheck, Bell, BellOff, LogOut, Loader2, Check, Menu, User, Settings, Users } from 'lucide-react';
+import { Building2, ChevronDown, ShieldCheck, Bell, BellOff, LogOut, Loader2, Check, Menu, User, Settings, Users, ShoppingCart, CheckCircle } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import { hasModulePermission } from '../../utils/permissionUtils';
+import toast from 'react-hot-toast';
 
 // Helper to detect 24-character hexadecimal MongoDB ObjectId
 const isMongoObjectId = (val) => {
     return typeof val === 'string' && /^[0-9a-fA-F]{24}$/.test(val);
 };
 
-// Helper to compute initials from full name (e.g., "Rajesh Sharma" -> "RS")
+// Helper to compute initials from full name
 const getInitials = (name) => {
     if (!name) return 'AU';
     const parts = name.trim().split(' ');
@@ -44,7 +45,9 @@ export default function Topbar({ onToggleSidebar }) {
     const [locations, setLocations] = useState([]);
     const [isLocationsLoading, setIsLocationsLoading] = useState(false);
 
-    const notificationCount = 0;
+    // Pending Approval Notifications State
+    const [pendingApprovalPos, setPendingApprovalPos] = useState([]);
+    const [isApproving, setIsApproving] = useState(null);
 
     const facilityRef = useRef(null);
     const notificationRef = useRef(null);
@@ -54,10 +57,28 @@ export default function Topbar({ onToggleSidebar }) {
     const roleDisplayName = getRoleDisplayName(user);
     const userEmail = user?.email || 'user@polysack.com';
 
-    // Module permission visibility checks for profile menu items
+    // Module permission visibility checks
     const canSeeCompanySettings = hasModulePermission(user, 'USERS') || hasModulePermission(user, 'TENANTS');
     const canSeeRoles = hasModulePermission(user, 'ROLES');
     const canSeeUsers = hasModulePermission(user, 'USERS');
+
+    // Fetch Pending Approval POs for notifications
+    const fetchPendingNotifications = () => {
+        axiosInstance.get('/purchase-orders?limit=50')
+            .then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    const pending = res.data.data.filter(po => po.status === 'PENDING_APPROVAL');
+                    setPendingApprovalPos(pending);
+                }
+            })
+            .catch(() => setPendingApprovalPos([]));
+    };
+
+    useEffect(() => {
+        fetchPendingNotifications();
+        const interval = setInterval(fetchPendingNotifications, 15000);
+        return () => clearInterval(interval);
+    }, []);
 
     // Close popovers on outside click
     useEffect(() => {
@@ -76,7 +97,6 @@ export default function Topbar({ onToggleSidebar }) {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    // Fetch tenant locations when opening facility switcher dropdown
     const handleToggleFacilityDropdown = async () => {
         const nextState = !showFacilityDropdown;
         setShowFacilityDropdown(nextState);
@@ -105,13 +125,29 @@ export default function Topbar({ onToggleSidebar }) {
         setShowFacilityDropdown(false);
     };
 
+    const handleApprovePo = async (poId, poNum) => {
+        try {
+            setIsApproving(poId);
+            const res = await axiosInstance.patch(`/purchase-orders/${poId}/status`, { status: 'SENT_TO_SUPPLIER' });
+            if (res.data?.success) {
+                toast.success(`Purchase Order ${poNum} approved & sent to supplier!`);
+                fetchPendingNotifications();
+            }
+        } catch (err) {
+            console.error('Error approving PO:', err);
+            toast.error(err.response?.data?.message || 'Failed to approve PO');
+        } finally {
+            setIsApproving(null);
+        }
+    };
+
     const displayFacilityName = currentFacility || user?.facilityName || 'Vapi Unit #1 (GIDC Phase 3)';
+    const notificationCount = pendingApprovalPos.length;
 
     return (
         <header className="h-16 bg-sidebar-bg border-b border-sidebar-hover flex items-center justify-between px-3 sm:px-6 text-sidebar-text-active font-sans gap-2 sm:gap-6 shadow-xs shrink-0 relative z-30">
-            {/* Left Group: Hamburger Toggle (below lg) + Brand Logo */}
+            {/* Left Group */}
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                {/* Hamburger Toggle Button (mobile/tablet only) */}
                 <button
                     type="button"
                     onClick={onToggleSidebar}
@@ -129,14 +165,14 @@ export default function Topbar({ onToggleSidebar }) {
                 </div>
             </div>
 
-            {/* Middle: Functional Global Search Bar (Hidden on mobile, visible from md) */}
+            {/* Middle: Global Search Bar */}
             <div className="hidden md:block flex-1 max-w-xs md:max-w-md">
                 <GlobalSearchBar />
             </div>
 
-            {/* Right Group: Facility Selector, Role Badge, Notifications & User Avatar */}
+            {/* Right Group */}
             <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-                {/* Facility Selector Pill (Hidden below lg) */}
+                {/* Facility Selector */}
                 <div className="relative" ref={facilityRef}>
                     <button
                         type="button"
@@ -148,7 +184,6 @@ export default function Topbar({ onToggleSidebar }) {
                         <ChevronDown size={12} className="text-sidebar-text ml-0.5 shrink-0" />
                     </button>
 
-                    {/* Facility Switcher Dropdown Popover */}
                     {showFacilityDropdown && (
                         <div className="absolute right-0 mt-2 w-64 bg-card-bg border border-border shadow-2xl rounded-xl z-50 p-3 font-sans text-xs text-text-main">
                             <div className="text-[10px] font-bold text-text-muted mb-2 uppercase tracking-wider px-1">
@@ -159,7 +194,7 @@ export default function Topbar({ onToggleSidebar }) {
                                     <Loader2 className="animate-spin text-primary" size={16} />
                                     <span>Loading units...</span>
                                 </div>
-                            ) : locations.length === 0 ? (
+                            ) : (
                                 <div className="space-y-1">
                                     {['Vapi Unit #1 (GIDC Phase 3)', 'Surat Extrusion Plant #2', 'Ahmedabad Lamination Facility'].map((unit) => {
                                         const isSelected = displayFacilityName === unit;
@@ -177,33 +212,12 @@ export default function Topbar({ onToggleSidebar }) {
                                         );
                                     })}
                                 </div>
-                            ) : (
-                                <div className="space-y-1 max-h-56 overflow-y-auto">
-                                    {locations.map((loc) => {
-                                        const isSelected = displayFacilityName === loc.name;
-                                        return (
-                                            <div
-                                                key={loc._id}
-                                                onClick={() => handleSelectLocation(loc)}
-                                                className={`px-3 py-2 rounded-lg cursor-pointer flex items-center justify-between transition-colors ${
-                                                    isSelected ? 'bg-primary/10 text-primary font-bold' : 'hover:bg-app-bg text-text-main'
-                                                }`}
-                                            >
-                                                <div>
-                                                    <div className="font-semibold truncate">{loc.name}</div>
-                                                    {loc.code && <div className="text-[10px] text-text-muted">{loc.code}</div>}
-                                                </div>
-                                                {isSelected && <Check size={14} className="text-primary shrink-0" />}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
                             )}
                         </div>
                     )}
                 </div>
 
-                {/* Role Badge Pill (Hidden below md) */}
+                {/* Role Badge */}
                 <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/15 border border-primary/40 text-primary text-xs font-bold shadow-2xs select-none">
                     <ShieldCheck size={13} />
                     <span>Role: {roleDisplayName}</span>
@@ -219,26 +233,63 @@ export default function Topbar({ onToggleSidebar }) {
                     >
                         <Bell size={17} />
                         {notificationCount > 0 && (
-                            <span className="w-2 h-2 rounded-full bg-primary absolute top-1.5 right-1.5 border border-sidebar-bg" />
+                            <span className="min-w-[18px] h-4 px-1 rounded-full bg-amber-500 text-sidebar-bg font-extrabold text-[10px] flex items-center justify-center absolute -top-0.5 -right-0.5 border border-sidebar-bg animate-pulse">
+                                {notificationCount}
+                            </span>
                         )}
                     </button>
 
-                    {/* Notification Dropdown Popover */}
                     {showNotificationDropdown && (
-                        <div className="absolute right-0 mt-2 w-72 bg-card-bg border border-border shadow-2xl rounded-xl z-50 p-4 font-sans text-xs text-text-main">
-                            <div className="text-xs font-bold text-text-main mb-3 uppercase tracking-wider border-b border-border pb-2">
-                                SYSTEM NOTIFICATIONS
+                        <div className="absolute right-0 mt-2 w-80 bg-card-bg border border-border shadow-2xl rounded-xl z-50 p-4 font-sans text-xs text-text-main">
+                            <div className="flex items-center justify-between text-xs font-bold text-text-main mb-3 uppercase tracking-wider border-b border-border pb-2">
+                                <span>SYSTEM NOTIFICATIONS</span>
+                                {notificationCount > 0 && (
+                                    <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded-full text-[10px]">
+                                        {notificationCount} Pending
+                                    </span>
+                                )}
                             </div>
-                            <div className="flex flex-col items-center justify-center py-6 text-center text-text-muted">
-                                <BellOff size={28} className="mb-2 opacity-40 text-text-muted" />
-                                <span className="font-semibold text-text-main">No new notifications</span>
-                                <span className="text-[11px] text-text-muted mt-1">You are all caught up!</span>
-                            </div>
+
+                            {notificationCount === 0 ? (
+                                <div className="flex flex-col items-center justify-center py-6 text-center text-text-muted">
+                                    <BellOff size={28} className="mb-2 opacity-40 text-text-muted" />
+                                    <span className="font-semibold text-text-main">No pending approvals</span>
+                                    <span className="text-[11px] text-text-muted mt-1">You are all caught up!</span>
+                                </div>
+                            ) : (
+                                <div className="space-y-2.5 max-h-72 overflow-y-auto">
+                                    {pendingApprovalPos.map((po) => (
+                                        <div key={po._id} className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-start justify-between gap-2">
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center gap-1.5 font-bold text-text-main">
+                                                    <ShoppingCart size={13} className="text-amber-600 shrink-0" />
+                                                    <span className="font-mono">{po.poNumber}</span>
+                                                </div>
+                                                <p className="text-[11px] text-text-muted mt-0.5 truncate">
+                                                    Supplier: {po.supplier?.name || 'Assigned Supplier'}
+                                                </p>
+                                                <p className="text-[10px] text-amber-700 font-semibold mt-0.5">
+                                                    Status: PENDING APPROVAL
+                                                </p>
+                                            </div>
+
+                                            <button
+                                                type="button"
+                                                disabled={isApproving === po._id}
+                                                onClick={() => handleApprovePo(po._id, po.poNumber)}
+                                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] rounded transition-all cursor-pointer shrink-0"
+                                            >
+                                                {isApproving === po._id ? 'Approving...' : 'Approve'}
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
 
-                {/* Clickable Profile Dropdown Block */}
+                {/* Profile Menu */}
                 <div className="relative" ref={profileDropdownRef}>
                     <button
                         type="button"
@@ -261,10 +312,8 @@ export default function Topbar({ onToggleSidebar }) {
                         <ChevronDown size={14} className="text-sidebar-text shrink-0 hidden sm:block" />
                     </button>
 
-                    {/* Professional Profile Dropdown Menu */}
                     {isProfileMenuOpen && (
                         <div className="absolute right-0 mt-2 w-60 bg-card-bg border border-border shadow-2xl rounded-xl z-[100] py-2 font-sans text-xs text-text-main divide-y divide-border animate-in fade-in zoom-in-95 duration-100">
-                            {/* Profile Header Summary */}
                             <div className="px-4 py-3 bg-app-bg/50">
                                 <p className="font-bold text-text-main truncate text-xs">
                                     {user?.name || 'User Account'}
@@ -277,7 +326,6 @@ export default function Topbar({ onToggleSidebar }) {
                                 </div>
                             </div>
 
-                            {/* Navigation Options */}
                             <div className="py-1">
                                 <button
                                     type="button"
@@ -334,7 +382,6 @@ export default function Topbar({ onToggleSidebar }) {
                                 )}
                             </div>
 
-                            {/* Logout Action */}
                             <div className="pt-1">
                                 <button
                                     type="button"

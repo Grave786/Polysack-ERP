@@ -4,13 +4,18 @@ import SlideOverPanel from '../shared/SlideOverPanel';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
-export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess }) {
+export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, defaultType = 'INBOUND' }) {
+    const [inspectionType, setInspectionType] = useState(defaultType);
     const [workOrders, setWorkOrders] = useState([]);
-    const [isLoadingWO, setIsLoadingWO] = useState(false);
+    const [rawMaterials, setRawMaterials] = useState([]);
+    const [grns, setGrns] = useState([]);
+    const [isLoadingOptions, setIsLoadingOptions] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const [formData, setFormData] = useState({
         workOrder: '',
+        rawMaterial: '',
+        grn: '',
         sampleSize: 50,
         passedQty: 50,
         rejectedQty: 0,
@@ -19,58 +24,62 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess }) 
         defects: ''
     });
 
-    // Fetch active/in-progress Work Orders for selection
     useEffect(() => {
         if (isOpen) {
-            setIsLoadingWO(true);
-            axiosInstance.get('/work-orders?limit=100')
-                .then((res) => {
-                    if (res.data?.success && Array.isArray(res.data.data)) {
-                        const list = res.data.data;
-                        setWorkOrders(list);
-                        if (list.length > 0) {
-                            setFormData((prev) => ({
-                                ...prev,
-                                workOrder: prev.workOrder || list[0]._id
-                            }));
-                        }
-                    }
+            setInspectionType(defaultType);
+            setIsLoadingOptions(true);
+
+            Promise.all([
+                axiosInstance.get('/work-orders?limit=100').catch(() => ({ data: { data: [] } })),
+                axiosInstance.get('/raw-materials?limit=100').catch(() => ({ data: { data: [] } })),
+                axiosInstance.get('/grns?limit=100').catch(() => ({ data: { data: [] } }))
+            ])
+                .then(([woRes, rmRes, grnRes]) => {
+                    const woList = woRes.data?.data || [];
+                    const rmList = rmRes.data?.data || [];
+                    const grnList = grnRes.data?.data || [];
+
+                    setWorkOrders(woList);
+                    setRawMaterials(rmList);
+                    setGrns(grnList);
+
+                    setFormData((prev) => ({
+                        ...prev,
+                        workOrder: prev.workOrder || (woList[0]?._id || ''),
+                        rawMaterial: prev.rawMaterial || (rmList[0]?._id || ''),
+                        grn: prev.grn || (grnList[0]?._id || '')
+                    }));
                 })
-                .catch((err) => {
-                    console.error('Error fetching Work Orders for QC:', err);
-                })
-                .finally(() => {
-                    setIsLoadingWO(false);
-                });
+                .finally(() => setIsLoadingOptions(false));
         }
-    }, [isOpen]);
+    }, [isOpen, defaultType]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
 
-        if (!formData.workOrder) {
+        if (inspectionType === 'OUTBOUND' && !formData.workOrder) {
             toast.error('Please select a Work Order');
             return;
         }
 
-        const sampleSizeNum = Number(formData.sampleSize);
-        const passedQtyNum = Number(formData.passedQty);
-        const rejectedQtyNum = Number(formData.rejectedQty);
-
-        if (isNaN(sampleSizeNum) || sampleSizeNum < 1) {
-            toast.error('Sample size must be at least 1');
+        if (inspectionType === 'INBOUND' && !formData.rawMaterial) {
+            toast.error('Please select a Raw Material');
             return;
         }
 
-        if (isNaN(passedQtyNum) || passedQtyNum < 0 || isNaN(rejectedQtyNum) || rejectedQtyNum < 0) {
-            toast.error('Passed and Rejected quantities must be valid non-negative numbers');
+        const sampleSizeNum = Number(formData.sampleSize || 1);
+        const passedQtyNum = Number(formData.passedQty || 0);
+        const rejectedQtyNum = Number(formData.rejectedQty || 0);
+
+        if (passedQtyNum + rejectedQtyNum <= 0) {
+            toast.error('Passed Qty + Rejected Qty must be greater than 0');
             return;
         }
 
         try {
             setIsSubmitting(true);
             const payload = {
-                workOrder: formData.workOrder,
+                inspectionType,
                 sampleSize: sampleSizeNum,
                 passedQty: passedQtyNum,
                 rejectedQty: rejectedQtyNum,
@@ -79,10 +88,17 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess }) 
                 defects: formData.defects || undefined
             };
 
+            if (inspectionType === 'INBOUND') {
+                payload.rawMaterial = formData.rawMaterial;
+                if (formData.grn) payload.grn = formData.grn;
+            } else {
+                payload.workOrder = formData.workOrder;
+            }
+
             const res = await axiosInstance.post('/qc-inspections', payload);
 
             if (res.data?.success) {
-                toast.success('QC Inspection logged & certified successfully!');
+                toast.success(`QC Inspection logged & certified (${inspectionType}) successfully!`);
                 if (onSuccess) onSuccess();
                 onClose();
             }
@@ -98,53 +114,149 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess }) 
         <SlideOverPanel
             isOpen={isOpen}
             onClose={onClose}
-            title="New Quality Control Lab Inspection"
-            subtitle="Record lab tensile test findings, sample pass/fail counts & release batch stock"
+            title={
+                <div className="flex items-center gap-2">
+                    <ShieldCheck className="text-primary" size={20} />
+                    <span>New Quality Control (QC) Certificate</span>
+                </div>
+            }
+            subtitle="Record laboratory testing metrics, passed/rejected batches, and release stock"
         >
-            <form onSubmit={handleSubmit} className="space-y-4 font-sans text-xs">
-                {/* Work Order Selection */}
+            <form onSubmit={handleSubmit} className="space-y-4 text-xs font-sans p-1">
+                {/* Inspection Type Selector */}
                 <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                        Select Active Work Order / Batch Job *
+                        Inspection Gate Category *
                     </label>
-                    {isLoadingWO ? (
-                        <div className="flex items-center gap-2 text-xs text-text-muted p-2 border border-border rounded-md">
-                            <RefreshCw size={14} className="animate-spin text-primary" />
-                            <span>Loading Work Orders...</span>
+                    <div className="grid grid-cols-2 gap-2 p-1 bg-app-bg rounded-lg border border-border">
+                        <button
+                            type="button"
+                            onClick={() => setInspectionType('INBOUND')}
+                            className={`py-2 px-3 text-xs font-extrabold rounded-md transition-all cursor-pointer ${
+                                inspectionType === 'INBOUND'
+                                    ? 'bg-primary text-sidebar-bg shadow-xs'
+                                    : 'text-text-muted hover:text-text-main'
+                            }`}
+                        >
+                            Inbound (Raw Materials)
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setInspectionType('OUTBOUND')}
+                            className={`py-2 px-3 text-xs font-extrabold rounded-md transition-all cursor-pointer ${
+                                inspectionType === 'OUTBOUND'
+                                    ? 'bg-primary text-sidebar-bg shadow-xs'
+                                    : 'text-text-muted hover:text-text-main'
+                            }`}
+                        >
+                            Outbound (Finished Goods)
+                        </button>
+                    </div>
+                </div>
+
+                {inspectionType === 'INBOUND' ? (
+                    <>
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                Target Raw Material *
+                            </label>
+                            <select
+                                required
+                                value={formData.rawMaterial}
+                                onChange={(e) => setFormData({ ...formData, rawMaterial: e.target.value })}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
+                            >
+                                <option value="">-- Select Raw Material --</option>
+                                {rawMaterials.map((rm) => (
+                                    <option key={rm._id} value={rm._id}>
+                                        {rm.name} ({rm.code || rm.uom?.name || 'KG'})
+                                    </option>
+                                ))}
+                            </select>
                         </div>
-                    ) : (
+
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                Associated GRN # (Optional)
+                            </label>
+                            <select
+                                value={formData.grn}
+                                onChange={(e) => setFormData({ ...formData, grn: e.target.value })}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
+                            >
+                                <option value="">-- Direct Inward / No GRN --</option>
+                                {grns.map((g) => (
+                                    <option key={g._id} value={g._id}>
+                                        {g.grnNumber}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    </>
+                ) : (
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            Target Work Order *
+                        </label>
                         <select
                             required
                             value={formData.workOrder}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, workOrder: e.target.value }))}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                            onChange={(e) => setFormData({ ...formData, workOrder: e.target.value })}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
                         >
                             <option value="">-- Select Work Order --</option>
                             {workOrders.map((wo) => (
                                 <option key={wo._id} value={wo._id}>
-                                    {wo.workOrderNumber} - {wo.finishedGood?.name || 'Bag Spec'} ({wo.customer?.companyName || 'Client'}) [{wo.status}]
+                                    {wo.workOrderNumber} — {wo.finishedGood?.name || 'Finished Product'}
                                 </option>
                             ))}
                         </select>
-                    )}
-                </div>
+                    </div>
+                )}
 
-                {/* Sample Size & Tensile Strength */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Sample Size (Units) *
+                            Sample Size
                         </label>
                         <input
                             type="number"
-                            min="1"
                             required
+                            min="1"
                             value={formData.sampleSize}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, sampleSize: e.target.value }))}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-semibold"
+                            onChange={(e) => setFormData({ ...formData, sampleSize: e.target.value })}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
                         />
                     </div>
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-emerald-800 mb-1">
+                            Passed Qty *
+                        </label>
+                        <input
+                            type="number"
+                            required
+                            min="0"
+                            value={formData.passedQty}
+                            onChange={(e) => setFormData({ ...formData, passedQty: e.target.value })}
+                            className="w-full border border-emerald-300 rounded-md p-2.5 bg-emerald-50/50 text-xs font-bold text-emerald-900 focus:outline-none focus:border-emerald-500 font-mono"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-rose-800 mb-1">
+                            Rejected Qty *
+                        </label>
+                        <input
+                            type="number"
+                            required
+                            min="0"
+                            value={formData.rejectedQty}
+                            onChange={(e) => setFormData({ ...formData, rejectedQty: e.target.value })}
+                            className="w-full border border-rose-300 rounded-md p-2.5 bg-rose-50/50 text-xs font-bold text-rose-900 focus:outline-none focus:border-rose-500 font-mono"
+                        />
+                    </div>
+                </div>
 
+                <div className="grid grid-cols-2 gap-3">
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                             Tensile Strength (N)
@@ -153,87 +265,61 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess }) 
                             type="number"
                             placeholder="e.g. 250"
                             value={formData.tensileStrength}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, tensileStrength: e.target.value }))}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-semibold"
+                            onChange={(e) => setFormData({ ...formData, tensileStrength: e.target.value })}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
                         />
                     </div>
-                </div>
-
-                {/* Passed Qty & Rejected Qty */}
-                <div className="grid grid-cols-2 gap-3">
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Passed Units Count *
+                            GSM Tested
                         </label>
                         <input
                             type="number"
-                            min="0"
-                            required
-                            value={formData.passedQty}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, passedQty: e.target.value }))}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-bold text-emerald-800 focus:outline-none focus:border-primary"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Rejected / Scrap Units *
-                        </label>
-                        <input
-                            type="number"
-                            min="0"
-                            required
-                            value={formData.rejectedQty}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, rejectedQty: e.target.value }))}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-bold text-rose-800 focus:outline-none focus:border-primary"
+                            placeholder="e.g. 65"
+                            value={formData.gsmTested}
+                            onChange={(e) => setFormData({ ...formData, gsmTested: e.target.value })}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
                         />
                     </div>
                 </div>
 
-                {/* Tested Fabric GSM */}
                 <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                        Tested Fabric GSM
-                    </label>
-                    <input
-                        type="number"
-                        placeholder="e.g. 65"
-                        value={formData.gsmTested}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, gsmTested: e.target.value }))}
-                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary"
-                    />
-                </div>
-
-                {/* Defects & Lab Comments */}
-                <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                        Defects & Lab Inspector Observations
+                        Defects / Failure Notes
                     </label>
                     <textarea
-                        rows={3}
-                        placeholder="Describe any seam bursting, lamination peeling, or color mismatch defects..."
+                        rows={2}
+                        placeholder="Log any weave defects, color mismatch, or tensile failure details..."
                         value={formData.defects}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, defects: e.target.value }))}
+                        onChange={(e) => setFormData({ ...formData, defects: e.target.value })}
                         className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                     />
                 </div>
 
-                {/* Submit Action Button */}
-                <div className="pt-3 border-t border-border flex justify-end gap-3">
+                <div className="pt-4 flex items-center justify-end gap-2 border-t border-border">
                     <button
                         type="button"
                         onClick={onClose}
-                        className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+                        className="px-4 py-2 border border-border text-text-muted hover:text-text-main rounded-md text-xs font-bold cursor-pointer"
                     >
                         Cancel
                     </button>
                     <button
                         type="submit"
                         disabled={isSubmitting}
-                        className="px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        className="px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg rounded-md text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
                     >
-                        <ShieldCheck size={15} />
-                        <span>{isSubmitting ? 'Logging QC Test...' : 'Save & Certify QC Inspection'}</span>
+                        {isSubmitting ? (
+                            <>
+                                <RefreshCw size={14} className="animate-spin" />
+                                <span>Certifying...</span>
+                            </>
+                        ) : (
+                            <>
+                                <ShieldCheck size={14} />
+                                <span>Save & Certify QC Inspection</span>
+                            </>
+                        )}
                     </button>
                 </div>
             </form>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Download, Truck, FileText } from 'lucide-react';
+import { Plus, Download, Truck, FileText, Check } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreatePurchaseOrderPanel from '../components/procurement/CreatePurchaseOrderPanel';
 import CreateGRNPanel from '../components/procurement/CreateGRNPanel';
@@ -113,6 +113,10 @@ export default function ProcurementPage() {
                         badgeStyle = 'bg-slate-100 text-slate-800 border-slate-300';
                         label = 'DRAFT';
                         break;
+                    case 'PENDING_APPROVAL':
+                        badgeStyle = 'bg-amber-100 text-amber-800 border-amber-300';
+                        label = 'Pending Approval';
+                        break;
                     case 'SENT_TO_SUPPLIER':
                         badgeStyle = 'bg-amber-100 text-amber-800 border-amber-300';
                         label = 'Sent to Supplier';
@@ -144,9 +148,32 @@ export default function ProcurementPage() {
             header: 'ACTIONS',
             render: (row) => {
                 const canReceive = row.status === 'SENT_TO_SUPPLIER' || row.status === 'PARTIALLY_RECEIVED';
+                const isPendingApproval = row.status === 'PENDING_APPROVAL';
 
                 return (
                     <div className="flex items-center gap-2">
+                        {isPendingApproval && (
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    try {
+                                        const res = await axiosInstance.patch(`/purchase-orders/${row._id}/status`, { status: 'SENT_TO_SUPPLIER' });
+                                        if (res.data?.success) {
+                                            toast.success(`PO ${row.poNumber} approved & sent to supplier!`);
+                                            setRefreshKey(prev => prev + 1);
+                                        }
+                                    } catch (err) {
+                                        toast.error(err.response?.data?.message || 'Failed to approve PO');
+                                    }
+                                }}
+                                className="flex items-center gap-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold shadow-2xs transition-colors cursor-pointer"
+                                title="Approve & issue PO to supplier"
+                            >
+                                <Check size={13} />
+                                <span>Approve PO</span>
+                            </button>
+                        )}
+
                         {canReceive && (
                             <button
                                 type="button"
@@ -220,7 +247,10 @@ export default function ProcurementPage() {
             {/* Create GRN Panel */}
             <CreateGRNPanel
                 isOpen={isGrnPanelOpen}
-                onClose={() => setIsGrnPanelOpen(false)}
+                onClose={() => {
+                    setIsGrnPanelOpen(false);
+                    setSelectedPoForGrn(null);
+                }}
                 po={selectedPoForGrn}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />

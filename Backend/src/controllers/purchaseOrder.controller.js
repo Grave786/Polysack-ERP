@@ -59,11 +59,22 @@ const createPurchaseOrder = async (req, res) => {
         } = req.body;
 
         // 1. Validation
-        if (!supplier || !expectedDelivery || !Array.isArray(items) || items.length === 0) {
+        if (!supplier || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'Please provide supplier, expectedDelivery date, and at least one item.'
+                message: 'Please provide supplier and at least one item.'
             });
+        }
+
+        if (expectedDelivery) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            if (new Date(expectedDelivery) < today) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Expected Delivery date cannot be in the past.'
+                });
+            }
         }
 
         // 2. Validate tenant-ownership of Supplier
@@ -133,14 +144,14 @@ const createPurchaseOrder = async (req, res) => {
         }
 
         const poNumber = await generatePoNumber(tenantId);
-        const initialStatus = (status === 'SENT_TO_SUPPLIER') ? 'SENT_TO_SUPPLIER' : 'DRAFT';
+        const initialStatus = ['SENT_TO_SUPPLIER', 'PENDING_APPROVAL'].includes(status) ? status : 'DRAFT';
 
         const purchaseOrder = new PurchaseOrder({
             tenant: tenantId,
             poNumber,
             supplier,
             poDate: poDate || new Date(),
-            expectedDelivery,
+            expectedDelivery: expectedDelivery || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
             items: cleanedItems,
             totalValue: computedTotalValue,
             status: initialStatus,
@@ -499,10 +510,10 @@ const updateStatus = async (req, res) => {
             }
             purchaseOrder.status = 'CANCELLED';
         } else if (status === 'SENT_TO_SUPPLIER') {
-            if (purchaseOrder.status !== 'DRAFT') {
+            if (purchaseOrder.status !== 'DRAFT' && purchaseOrder.status !== 'PENDING_APPROVAL') {
                 return res.status(400).json({
                     success: false,
-                    message: `Can only mark as SENT_TO_SUPPLIER when current status is DRAFT. Current status is ${purchaseOrder.status}.`
+                    message: `Can only mark as SENT_TO_SUPPLIER when current status is DRAFT or PENDING_APPROVAL. Current status is ${purchaseOrder.status}.`
                 });
             }
             purchaseOrder.status = 'SENT_TO_SUPPLIER';

@@ -1,23 +1,108 @@
 import { useState } from 'react';
-import { Plus, ShieldCheck } from 'lucide-react';
+import { Plus, ShieldCheck, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreateQCInspectionModal from '../components/quality/CreateQCInspectionModal';
 
 export default function QualityPage() {
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+    const [modalType, setModalType] = useState('INBOUND');
     const [refreshKey, setRefreshKey] = useState(0);
 
     const tabs = [
         {
-            key: 'qc-inspections',
-            label: 'QC Inspections Lab Ledger',
-            resourcePath: '/qc-inspections',
+            key: 'inbound-qc',
+            label: 'Inbound QC (Raw Materials & GRN)',
+            icon: ArrowDownLeft,
+            resourcePath: '/qc-inspections?inspectionType=INBOUND',
             columns: [
                 {
                     header: 'QC CERTIFICATE #',
                     render: (row) => (
                         <span className="font-mono font-bold text-primary uppercase">
-                            {row.qcCertificateNumber || row.inspectionNumber || '-'}
+                            {row.qcCertificateNumber || '-'}
+                        </span>
+                    ),
+                    sortable: true
+                },
+                {
+                    header: 'GRN / PO #',
+                    render: (row) => (
+                        <span className="font-mono font-semibold text-text-main">
+                            {row.grn?.grnNumber || (row.po ? `PO-${row.po}` : 'Direct Receipt')}
+                        </span>
+                    )
+                },
+                {
+                    header: 'RAW MATERIAL',
+                    render: (row) => (
+                        <span className="font-semibold text-xs text-text-main max-w-[220px] truncate block" title={row.rawMaterial?.name || ''}>
+                            {row.rawMaterial?.name || '-'}
+                        </span>
+                    )
+                },
+                {
+                    header: 'RECEIVED QTY',
+                    render: (row) => <span className="font-mono font-bold">{row.receivedQty || (row.passedQty + row.rejectedQty) || 0}</span>
+                },
+                {
+                    header: 'PASSED QTY',
+                    render: (row) => (
+                        <span className="font-mono font-bold text-emerald-700">
+                            {row.passedQty !== undefined ? row.passedQty : 0}
+                        </span>
+                    )
+                },
+                {
+                    header: 'REJECTED QTY',
+                    render: (row) => (
+                        <span className="font-mono font-bold text-rose-700">
+                            {row.rejectedQty !== undefined ? row.rejectedQty : 0}
+                        </span>
+                    )
+                },
+                {
+                    header: 'GSM TESTED',
+                    render: (row) => (
+                        <span className="font-mono font-medium">
+                            {row.gsmTested ? `${row.gsmTested} GSM` : '-'}
+                        </span>
+                    )
+                },
+                {
+                    header: 'QC STATUS',
+                    render: (row) => {
+                        const status = row.qcStatus || 'PASSED';
+                        const isPassed = status === 'PASSED';
+                        const isRejected = status === 'FAILED' || status === 'REJECTED';
+
+                        return (
+                            <span
+                                className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${
+                                    isPassed
+                                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                        : isRejected
+                                        ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                        : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                }`}
+                            >
+                                • {status}
+                            </span>
+                        );
+                    }
+                }
+            ]
+        },
+        {
+            key: 'outbound-qc',
+            label: 'Outbound QC (Finished Bags & Production)',
+            icon: ArrowUpRight,
+            resourcePath: '/qc-inspections?inspectionType=OUTBOUND',
+            columns: [
+                {
+                    header: 'QC CERTIFICATE #',
+                    render: (row) => (
+                        <span className="font-mono font-bold text-primary uppercase">
+                            {row.qcCertificateNumber || '-'}
                         </span>
                     ),
                     sortable: true
@@ -31,7 +116,7 @@ export default function QualityPage() {
                     )
                 },
                 {
-                    header: 'PRODUCT SPEC',
+                    header: 'FINISHED GOOD',
                     render: (row) => (
                         <span className="font-semibold text-xs text-text-main max-w-[220px] truncate block" title={row.finishedGood?.name || ''}>
                             {row.finishedGood?.name || '-'}
@@ -46,7 +131,7 @@ export default function QualityPage() {
                     header: 'PASSED QTY',
                     render: (row) => (
                         <span className="font-mono font-bold text-emerald-700">
-                            {row.passedQty !== undefined ? row.passedQty : (row.passedQuantity || 0)}
+                            {row.passedQty !== undefined ? row.passedQty : 0}
                         </span>
                     )
                 },
@@ -54,7 +139,7 @@ export default function QualityPage() {
                     header: 'REJECTED QTY',
                     render: (row) => (
                         <span className="font-mono font-bold text-rose-700">
-                            {row.rejectedQty !== undefined ? row.rejectedQty : (row.failedQuantity || 0)}
+                            {row.rejectedQty !== undefined ? row.rejectedQty : 0}
                         </span>
                     )
                 },
@@ -69,9 +154,9 @@ export default function QualityPage() {
                 {
                     header: 'QC STATUS',
                     render: (row) => {
-                        const status = row.qcStatus || row.result || 'PENDING';
+                        const status = row.qcStatus || 'PASSED';
                         const isPassed = status === 'PASSED';
-                        const isRejected = status === 'REJECTED';
+                        const isRejected = status === 'FAILED' || status === 'REJECTED';
 
                         return (
                             <span
@@ -93,14 +178,31 @@ export default function QualityPage() {
     ];
 
     const createQcButton = (
-        <button
-            type="button"
-            onClick={() => setIsCreateModalOpen(true)}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
-        >
-            <Plus size={15} />
-            <span>+ New Quality Inspection</span>
-        </button>
+        <div className="flex items-center gap-2">
+            <button
+                type="button"
+                onClick={() => {
+                    setModalType('INBOUND');
+                    setIsCreateModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 bg-card-bg hover:bg-app-bg border border-border text-text-main font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+            >
+                <Plus size={14} className="text-primary" />
+                <span>+ Log Inbound QC</span>
+            </button>
+
+            <button
+                type="button"
+                onClick={() => {
+                    setModalType('OUTBOUND');
+                    setIsCreateModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+            >
+                <Plus size={15} />
+                <span>+ Log Outbound QC</span>
+            </button>
+        </div>
     );
 
     return (
@@ -108,13 +210,14 @@ export default function QualityPage() {
             <TabbedResourcePage
                 key={refreshKey}
                 title="Quality Assurance & Inspection Lab"
-                description="Manage factory quality lab tests, tensile strength certifications, defect scrap, and QC release approvals."
+                description="Unified Quality Control gate: inspect raw material GRN inward (Inbound) and factory production batches (Outbound)."
                 tabs={tabs}
                 headerActions={createQcButton}
             />
 
             <CreateQCInspectionModal
                 isOpen={isCreateModalOpen}
+                defaultType={modalType}
                 onClose={() => setIsCreateModalOpen(false)}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />

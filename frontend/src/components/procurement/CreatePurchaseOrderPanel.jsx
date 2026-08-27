@@ -211,6 +211,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                         <input
                             type="date"
                             required
+                            min={new Date().toISOString().split('T')[0]}
                             value={expectedDelivery}
                             onChange={(e) => setExpectedDelivery(e.target.value)}
                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"

@@ -32,10 +32,40 @@ const RawMaterialSchema = new mongoose.Schema({
         ref: 'Supplier',
         default: null
     },
+    preferredSupplier: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Supplier',
+        default: null
+    },
     defaultLocation: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Location',
         default: null
+    },
+    warehouseLocation: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Location',
+        default: null
+    },
+    materialGrade: {
+        type: String,
+        trim: true,
+        default: 'Virgin Grade 100'
+    },
+    color: {
+        type: String,
+        trim: true,
+        default: 'Natural White'
+    },
+    hsnCode: {
+        type: String,
+        trim: true,
+        default: '39012000'
+    },
+    moq: {
+        type: Number,
+        default: 1000,
+        min: [0, 'MOQ cannot be negative']
     },
     currentStock: {
         type: Number,
@@ -51,6 +81,11 @@ const RawMaterialSchema = new mongoose.Schema({
         type: Number,
         default: 0,
         min: [0, 'Price per unit cannot be negative']
+    },
+    lastPurchasePrice: {
+        type: Number,
+        default: 0,
+        min: [0, 'Last purchase price cannot be negative']
     },
     isActive: {
         type: Boolean,

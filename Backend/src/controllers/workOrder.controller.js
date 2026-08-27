@@ -4,7 +4,19 @@ const BOM = require('../models/bom.model');
 const Customer = require('../models/customer.model');
 const FinishedGood = require('../models/finishedGood.model');
 const Machine = require('../models/machine.model');
+const Tenant = require('../models/tenant.model');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
+
+const ALL_8_STAGES = [
+    'TAPE_EXTRUSION',
+    'CIRCULAR_WEAVING',
+    'EXTRUSION_LAMINATION',
+    'FLEXO_PRINTING',
+    'CUTTING_SEWING',
+    'STITCHING',
+    'HANDLE_ATTACHMENT',
+    'BALING_PACKING'
+];
 
 /**
  * Helper function to auto-generate unique WorkOrder number per tenant & year
@@ -100,32 +112,86 @@ const createWorkOrder = async (req, res) => {
             }
         }
 
-        // 3. Lookup active BOM for this finishedGood
-        const activeBom = await BOM.findOne({
-            finishedGood,
-            tenant: tenantId,
-            isActive: true
-        });
+        // 3. Auto-resolve active/default BOM for this finishedGood
+        let activeBom = null;
+        if (req.body.bom) {
+            activeBom = await BOM.findOne({ _id: req.body.bom, finishedGood, tenant: tenantId, isActive: true });
+        }
+
+        if (!activeBom) {
+            // Priority 1: Check for isDefault: true
+            activeBom = await BOM.findOne({ finishedGood, tenant: tenantId, isActive: true, isDefault: true });
+        }
+
+        if (!activeBom) {
+            // Priority 2: Fallback to active BOMs
+            const activeBoms = await BOM.find({ finishedGood, tenant: tenantId, isActive: true }).sort({ createdAt: -1 });
+            if (activeBoms.length === 1) {
+                activeBom = activeBoms[0];
+            } else if (activeBoms.length > 1) {
+                console.error(`[BOM AUTO-RESOLVE WARNING] Multiple active BOMs (${activeBoms.length}) found for FinishedGood '${fgDoc.name}' (${finishedGood}) with no default set. Auto-using latest BOM.`);
+                activeBom = activeBoms[0];
+            }
+        }
 
         if (!activeBom) {
             return res.status(400).json({
                 success: false,
-                message: 'No active BOM found for this product. Please create an active BOM first.'
+                message: `No active Bill of Materials (BOM) found for Finished Good '${fgDoc.name}'. Please configure a BOM.`
             });
         }
 
-        // 4. Generate WorkOrder number & setup 6 fixed pipeline stages
+        // 4. Fetch Tenant production settings & setup 8 pipeline stages
+        const tenantDoc = await Tenant.findById(tenantId);
+        const startingStageKey = tenantDoc?.productionSettings?.activeStartingStage || 'FLEXO_PRINTING';
+
+        const ALL_STAGE_NAMES = [
+            'TAPE_EXTRUSION',
+            'CIRCULAR_WEAVING',
+            'EXTRUSION_LAMINATION',
+            'FLEXO_PRINTING',
+            'CUTTING_SEWING',
+            'STITCHING',
+            'HANDLE_ATTACHMENT',
+            'BALING_PACKING'
+        ];
+
+        let startingIndex = ALL_STAGE_NAMES.indexOf(startingStageKey);
+        if (startingIndex === -1) startingIndex = 3; // Default to FLEXO_PRINTING (Index 3, Step 4)
+
         const workOrderNumber = await generateWorkOrderNumber(tenantId);
         const now = new Date();
 
-        const stages = [
-            { stageName: 'TAPE_EXTRUSION', sequence: 1, status: 'ACTIVE', startedAt: now, machine: assignedMachine || null },
-            { stageName: 'CIRCULAR_WEAVING', sequence: 2, status: 'PENDING' },
-            { stageName: 'EXTRUSION_LAMINATION', sequence: 3, status: 'PENDING' },
-            { stageName: 'FLEXO_PRINTING', sequence: 4, status: 'PENDING' },
-            { stageName: 'CUTTING_SEWING', sequence: 5, status: 'PENDING' },
-            { stageName: 'BALING_PACKING', sequence: 6, status: 'PENDING' }
-        ];
+        const stages = ALL_STAGE_NAMES.map((stageName, index) => {
+            const sequence = index + 1;
+            if (index < startingIndex) {
+                return {
+                    stageName,
+                    sequence,
+                    status: 'SKIPPED',
+                    goodOutputQty: 0,
+                    rejectedQty: 0
+                };
+            } else if (index === startingIndex) {
+                return {
+                    stageName,
+                    sequence,
+                    status: 'ACTIVE',
+                    startedAt: now,
+                    machine: assignedMachine || null,
+                    goodOutputQty: 0,
+                    rejectedQty: 0
+                };
+            } else {
+                return {
+                    stageName,
+                    sequence,
+                    status: 'PENDING',
+                    goodOutputQty: 0,
+                    rejectedQty: 0
+                };
+            }
+        });
 
         // 5. Setup Mongoose session for atomic WorkOrder creation + Stock Consumption
         try {
@@ -286,16 +352,49 @@ const advanceStage = async (req, res) => {
         const currentStage = workOrder.stages[activeStageIndex];
         const now = new Date();
 
+        // Calculate max available quantity passed from previous non-skipped completed stage (or targetQuantity if first active stage)
+        let maxAvailableQty = workOrder.targetQuantity;
+        for (let i = activeStageIndex - 1; i >= 0; i--) {
+            const prevStage = workOrder.stages[i];
+            if (prevStage && prevStage.status !== 'SKIPPED') {
+                maxAvailableQty = Number(prevStage.goodOutputQty || 0);
+                break;
+            }
+        }
+
+        // Auto-calculate rejected quantity as remainder if not explicitly provided
+        const computedRejectedQty = Math.max(0, maxAvailableQty - numGoodQty);
+        const finalRejectedQty = req.body.rejectedQty !== undefined ? numRejectedQty : computedRejectedQty;
+        const totalEntered = numGoodQty + finalRejectedQty;
+
+        // Strict Waterfall Quantity Validation: Total quantity (good + defect) cannot exceed previous stage available input
+        if (totalEntered > maxAvailableQty || numGoodQty > maxAvailableQty) {
+            if (useTransaction && session) { await session.abortTransaction(); session.endSession(); }
+            return res.status(400).json({
+                success: false,
+                message: `Total quantity (${totalEntered}) cannot exceed the available input from the previous stage (${maxAvailableQty}).`
+            });
+        }
+
         // 1. Complete current stage
         currentStage.goodOutputQty = numGoodQty;
-        currentStage.rejectedQty = numRejectedQty;
+        currentStage.rejectedQty = finalRejectedQty;
         currentStage.status = 'COMPLETED';
         currentStage.completedAt = now;
 
         let outputTxn = null;
 
-        // 2. Check if this was the final stage (sequence 6: BALING_PACKING)
-        if (currentStage.sequence === 6) {
+        // Find next non-skipped stage index
+        let nextStageIndex = -1;
+        for (let i = activeStageIndex + 1; i < workOrder.stages.length; i++) {
+            if (workOrder.stages[i] && workOrder.stages[i].status !== 'SKIPPED') {
+                nextStageIndex = i;
+                break;
+            }
+        }
+
+        // 2. Check if this was the final active stage
+        if (nextStageIndex === -1 || currentStage.sequence === 8) {
             if (numGoodQty > 0) {
                 const txnResult = await executeStockTransactionCore({
                     tenantId,
@@ -316,8 +415,8 @@ const advanceStage = async (req, res) => {
                 workOrder.status = 'COMPLETED';
             }
         } else {
-            // Activate next stage
-            const nextStage = workOrder.stages[activeStageIndex + 1];
+            // Activate next non-skipped stage
+            const nextStage = workOrder.stages[nextStageIndex];
             if (nextStage) {
                 nextStage.status = 'ACTIVE';
                 nextStage.startedAt = now;
@@ -328,8 +427,10 @@ const advanceStage = async (req, res) => {
         if (typeof workOrder.recalculateProgress === 'function') {
             workOrder.recalculateProgress();
         } else {
-            const completedCount = (workOrder.stages || []).filter((s) => s.status === 'COMPLETED').length;
-            workOrder.progressPercentage = Math.min(100, Math.round((completedCount / (workOrder.stages?.length || 6)) * 100));
+            const activeOrCompleted = (workOrder.stages || []).filter((s) => s.status !== 'SKIPPED');
+            const totalActiveCount = activeOrCompleted.length || 1;
+            const completedCount = activeOrCompleted.filter((s) => s.status === 'COMPLETED').length;
+            workOrder.progressPercentage = Math.min(100, Math.round((completedCount / totalActiveCount) * 100));
         }
 
         await workOrder.save(sessionOption);
@@ -348,7 +449,7 @@ const advanceStage = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: `Stage '${currentStage.stageName}' completed successfully.${currentStage.sequence === 6 ? ' Finished good routed to Pending QC Stock.' : ''}`,
+            message: `Stage '${currentStage.stageName}' completed successfully.${currentStage.sequence === 8 ? ' Finished good routed to Pending QC Stock.' : ''}`,
             data: {
                 workOrder,
                 completedStage: currentStage,

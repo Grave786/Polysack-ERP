@@ -6,25 +6,51 @@ const QcInspectionSchema = new mongoose.Schema({
         ref: 'Tenant',
         required: [true, 'Tenant is required']
     },
+    inspectionType: {
+        type: String,
+        enum: ['INBOUND', 'OUTBOUND'],
+        default: 'OUTBOUND'
+    },
     qcCertificateNumber: {
         type: String,
         required: [true, 'QC Certificate Number is required'],
         trim: true,
         uppercase: true
     },
+    // Outbound QC Fields (Production -> Finished Goods)
     workOrder: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'WorkOrder',
-        required: [true, 'Work Order reference is required']
+        ref: 'WorkOrder'
     },
     finishedGood: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'FinishedGood',
-        required: [true, 'Finished Good reference is required']
+        ref: 'FinishedGood'
     },
+    // Inbound QC Fields (GRN -> Raw Materials)
+    grn: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'GRN'
+    },
+    po: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'PurchaseOrder'
+    },
+    rawMaterial: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'RawMaterial'
+    },
+    supplier: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Supplier'
+    },
+    receivedQty: {
+        type: Number,
+        default: 0
+    },
+    // Shared Inspection Metrics
     sampleSize: {
         type: Number,
-        required: [true, 'Sample size is required'],
+        default: 1,
         min: [1, 'Sample size must be at least 1']
     },
     passedQty: {

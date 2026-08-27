@@ -25,6 +25,15 @@ router.post('/', authenticate, checkPermission('PROCUREMENT', 'CREATE'), createP
 router.get('/', authenticate, checkPermission('PROCUREMENT', 'READ'), getPurchaseOrders);
 
 /**
+ * @route   PATCH /api/purchase-orders/:id/status
+ * @route   PUT /api/purchase-orders/:id/status
+ * @desc    Update Purchase Order status (DRAFT/PENDING_APPROVAL -> SENT_TO_SUPPLIER or CANCELLED)
+ * @access  Private (PROCUREMENT:UPDATE)
+ */
+router.patch('/:id/status', authenticate, checkPermission('PROCUREMENT', 'UPDATE'), updateStatus);
+router.put('/:id/status', authenticate, checkPermission('PROCUREMENT', 'UPDATE'), updateStatus);
+
+/**
  * @route   GET /api/purchase-orders/:id
  * @desc    Get Purchase Order by ID
  * @access  Private (PROCUREMENT:READ)
@@ -37,13 +46,6 @@ router.get('/:id', authenticate, checkPermission('PROCUREMENT', 'READ'), getPurc
  * @access  Private (PROCUREMENT:UPDATE)
  */
 router.put('/:id', authenticate, checkPermission('PROCUREMENT', 'UPDATE'), updatePurchaseOrder);
-
-/**
- * @route   PATCH /api/purchase-orders/:id/status
- * @desc    Update Purchase Order status (DRAFT -> SENT_TO_SUPPLIER or CANCELLED)
- * @access  Private (PROCUREMENT:UPDATE)
- */
-router.patch('/:id/status', authenticate, checkPermission('PROCUREMENT', 'UPDATE'), updateStatus);
 
 /**
  * @route   DELETE /api/purchase-orders/:id
