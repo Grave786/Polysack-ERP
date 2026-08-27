@@ -215,8 +215,12 @@ const getPurchaseOrders = async (req, res) => {
 
         const [purchaseOrders, total] = await Promise.all([
             PurchaseOrder.find(filter)
-                .populate('supplier', 'name contactPerson phone')
+                .populate('supplier', 'name code contactPerson phone email address city gstin')
                 .populate('deliveryLocation', 'name code type')
+                .populate({
+                    path: 'items.rawMaterial',
+                    select: 'name code uom'
+                })
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum),

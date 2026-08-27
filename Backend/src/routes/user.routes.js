@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { createUser, getUsers, toggleUserActive, updateProfile, changePassword } = require('../controllers/user.controller');
+const { createUser, getUsers, toggleUserActive, updateUser, updateProfile, changePassword } = require('../controllers/user.controller');
 const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
 
 /**
@@ -30,6 +30,13 @@ router.post('/', authenticate, checkPermission('USERS', 'CREATE'), createUser);
  * @access  Private (USERS:READ)
  */
 router.get('/', authenticate, checkPermission('USERS', 'READ'), getUsers);
+
+/**
+ * @route   PUT /api/users/:id
+ * @desc    Update user role & facility
+ * @access  Private (USERS:UPDATE)
+ */
+router.put('/:id', authenticate, checkPermission('USERS', 'UPDATE'), updateUser);
 
 /**
  * @route   PATCH /api/users/:id/toggle-active

@@ -13,7 +13,7 @@ let is403ToastActive = false;
 const showSingle403Toast = (msg) => {
     if (!is403ToastActive) {
         is403ToastActive = true;
-        toast.error(msg || 'Access Denied: You do not have permission to access this module.');
+        toast.error(msg || 'Access Denied: You do not have permission to access this module.', { id: 'global-403-toast' });
         setTimeout(() => {
             is403ToastActive = false;
         }, 3000);

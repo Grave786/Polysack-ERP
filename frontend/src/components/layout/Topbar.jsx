@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/authStore';
 import GlobalSearchBar from './GlobalSearchBar';
 import { Building2, ChevronDown, ShieldCheck, Bell, BellOff, LogOut, Loader2, Check, Menu, User, Settings, Users } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
+import { hasModulePermission } from '../../utils/permissionUtils';
 
 // Helper to detect 24-character hexadecimal MongoDB ObjectId
 const isMongoObjectId = (val) => {
@@ -52,6 +53,11 @@ export default function Topbar({ onToggleSidebar }) {
     const userInitials = getInitials(user?.name);
     const roleDisplayName = getRoleDisplayName(user);
     const userEmail = user?.email || 'user@polysack.com';
+
+    // Module permission visibility checks for profile menu items
+    const canSeeCompanySettings = hasModulePermission(user, 'USERS') || hasModulePermission(user, 'TENANTS');
+    const canSeeRoles = hasModulePermission(user, 'ROLES');
+    const canSeeUsers = hasModulePermission(user, 'USERS');
 
     // Close popovers on outside click
     useEffect(() => {
@@ -285,41 +291,47 @@ export default function Topbar({ onToggleSidebar }) {
                                     <span>My Profile</span>
                                 </button>
 
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setIsProfileMenuOpen(false);
-                                        navigate('/administration');
-                                    }}
-                                    className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
-                                >
-                                    <Building2 size={15} className="text-amber-500" />
-                                    <span>Company Settings</span>
-                                </button>
+                                {canSeeCompanySettings && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setIsProfileMenuOpen(false);
+                                            navigate('/administration');
+                                        }}
+                                        className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
+                                    >
+                                        <Building2 size={15} className="text-amber-500" />
+                                        <span>Company Settings</span>
+                                    </button>
+                                )}
 
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setIsProfileMenuOpen(false);
-                                        navigate('/administration/roles');
-                                    }}
-                                    className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
-                                >
-                                    <ShieldCheck size={15} className="text-purple-500" />
-                                    <span>Roles & Permissions</span>
-                                </button>
+                                {canSeeRoles && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setIsProfileMenuOpen(false);
+                                            navigate('/administration/roles');
+                                        }}
+                                        className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
+                                    >
+                                        <ShieldCheck size={15} className="text-purple-500" />
+                                        <span>Roles & Permissions</span>
+                                    </button>
+                                )}
 
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setIsProfileMenuOpen(false);
-                                        navigate('/administration/users');
-                                    }}
-                                    className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
-                                >
-                                    <Users size={15} className="text-blue-500" />
-                                    <span>User Accounts</span>
-                                </button>
+                                {canSeeUsers && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setIsProfileMenuOpen(false);
+                                            navigate('/administration/users');
+                                        }}
+                                        className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
+                                    >
+                                        <Users size={15} className="text-blue-500" />
+                                        <span>User Accounts</span>
+                                    </button>
+                                )}
                             </div>
 
                             {/* Logout Action */}

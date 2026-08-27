@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { Plus, Download, Truck } from 'lucide-react';
+import { Plus, Download, Truck, FileText } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreatePurchaseOrderPanel from '../components/procurement/CreatePurchaseOrderPanel';
 import CreateGRNPanel from '../components/procurement/CreateGRNPanel';
+import PrintPOModal from '../components/procurement/PrintPOModal';
+import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 
 export default function ProcurementPage() {
@@ -10,6 +12,55 @@ export default function ProcurementPage() {
     const [selectedPoForGrn, setSelectedPoForGrn] = useState(null);
     const [isGrnPanelOpen, setIsGrnPanelOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
+
+    // Print PO Modal State
+    const [isPrintPoOpen, setIsPrintPoOpen] = useState(false);
+    const [selectedPoForPrint, setSelectedPoForPrint] = useState(null);
+
+    // Export CSV Handler
+    const handleExportCsv = async () => {
+        try {
+            toast.loading('Generating Purchase Orders CSV export...', { id: 'po-csv-export' });
+            const res = await axiosInstance.get('/purchase-orders?limit=500');
+
+            if (res.data?.success && Array.isArray(res.data.data) && res.data.data.length > 0) {
+                const poList = res.data.data;
+                const headers = ['PO_NUMBER', 'SUPPLIER_NAME', 'PO_DATE', 'EXPECTED_DELIVERY', 'TOTAL_VALUE_INR', 'STATUS'];
+                const csvRows = [headers.join(',')];
+
+                poList.forEach((po) => {
+                    const suppName = typeof po.supplier === 'object' ? (po.supplier?.companyName || po.supplier?.name) : (po.supplier || '');
+                    const dateStr = po.poDate ? new Date(po.poDate).toLocaleDateString() : '';
+                    const expStr = po.expectedDelivery ? new Date(po.expectedDelivery).toLocaleDateString() : '';
+
+                    const row = [
+                        `"${(po.poNumber || '').replace(/"/g, '""')}"`,
+                        `"${suppName.replace(/"/g, '""')}"`,
+                        `"${dateStr}"`,
+                        `"${expStr}"`,
+                        `"${po.totalValue || 0}"`,
+                        `"${po.status || 'DRAFT'}"`
+                    ];
+                    csvRows.push(row.join(','));
+                });
+
+                const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.setAttribute('download', `Purchase_Orders_Export_${Date.now()}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                toast.success(`Exported ${poList.length} Purchase Order records to CSV!`, { id: 'po-csv-export' });
+            } else {
+                toast.error('No Purchase Order data found to export', { id: 'po-csv-export' });
+            }
+        } catch (err) {
+            console.error('Error exporting PO CSV:', err);
+            toast.error(err.response?.data?.message || 'Failed to export CSV file', { id: 'po-csv-export' });
+        }
+    };
 
     const columns = [
         {
@@ -115,11 +166,11 @@ export default function ProcurementPage() {
                         <button
                             type="button"
                             onClick={() => {
-                                // TODO: PDF generation for Purchase Order
-                                toast('PO PDF export coming soon', { icon: '📄' });
+                                setSelectedPoForPrint(row);
+                                setIsPrintPoOpen(true);
                             }}
-                            className="p-1 text-text-muted hover:text-primary rounded hover:bg-app-bg transition-colors cursor-pointer"
-                            title="Export PO Document"
+                            className="p-1.5 text-text-muted hover:text-primary rounded hover:bg-app-bg transition-colors cursor-pointer"
+                            title="Download & Print PO Document PDF"
                         >
                             <Download size={15} />
                         </button>
@@ -138,7 +189,7 @@ export default function ProcurementPage() {
         }
     ];
 
-    const headerCreateButton = (
+    const headerActions = (
         <button
             type="button"
             onClick={() => setIsCreatePoOpen(true)}
@@ -156,7 +207,7 @@ export default function ProcurementPage() {
                 title="Purchase Orders & Goods Receipt (GRN)"
                 description="Procure Poly Granules, Kraft Rolls & Inks with automated stock inward triggers"
                 tabs={tabs}
-                headerActions={headerCreateButton}
+                headerActions={headerActions}
             />
 
             {/* Issue Purchase Order Panel */}
@@ -172,6 +223,13 @@ export default function ProcurementPage() {
                 onClose={() => setIsGrnPanelOpen(false)}
                 po={selectedPoForGrn}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
+            />
+
+            {/* Print & Download PO Document Modal */}
+            <PrintPOModal
+                isOpen={isPrintPoOpen}
+                onClose={() => setIsPrintPoOpen(false)}
+                po={selectedPoForPrint}
             />
         </>
     );

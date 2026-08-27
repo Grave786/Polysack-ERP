@@ -20,6 +20,7 @@ const EmployeeSchema = new mongoose.Schema({
     department: {
         type: String,
         required: [true, 'Department is required'],
+        set: (val) => val ? String(val).trim().toUpperCase().replace(/[-\s]+/g, '_') : val,
         enum: {
             values: [
                 'PRODUCTION',

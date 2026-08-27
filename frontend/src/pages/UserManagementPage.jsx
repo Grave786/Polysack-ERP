@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, UserCheck, UserX, UserPlus, RefreshCw, ShieldCheck, CheckCircle2 } from 'lucide-react';
+import { Plus, UserCheck, UserX, UserPlus, RefreshCw, ShieldCheck, CheckCircle2, Pencil, X } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
@@ -13,8 +13,18 @@ export default function UserManagementPage() {
 
     // Form state for creating new user
     const [roles, setRoles] = useState([]);
+    const [locationsList, setLocationsList] = useState([]);
     const [isLoadingRoles, setIsLoadingRoles] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Edit User Modal State
+    const [editModal, setEditModal] = useState({
+        isOpen: false,
+        user: null,
+        role: '',
+        facility_id: '',
+        isSaving: false
+    });
 
     const [formData, setFormData] = useState({
         name: '',
@@ -24,29 +34,79 @@ export default function UserManagementPage() {
         facility_id: 'MAIN_UNIT'
     });
 
-    // Fetch Roles for drawer dropdown on open
+    // Fetch Roles and Locations on Mount or Refresh
     useEffect(() => {
-        if (isAddUserOpen) {
-            setIsLoadingRoles(true);
-            axiosInstance.get('/roles')
-                .then((res) => {
-                    if (res.data?.success && Array.isArray(res.data.data)) {
-                        const rolesList = res.data.data.filter((r) => r.isActive !== false);
-                        setRoles(rolesList);
-                        if (rolesList.length > 0) {
-                            setFormData((prev) => ({ ...prev, role: rolesList[0]._id }));
-                        }
+        axiosInstance.get('/roles')
+            .then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    const rolesList = res.data.data.filter((r) => r.isActive !== false);
+                    setRoles(rolesList);
+                    if (rolesList.length > 0) {
+                        setFormData((prev) => ({ ...prev, role: prev.role || rolesList[0]._id }));
                     }
-                })
-                .catch((err) => {
-                    console.error('Error fetching roles:', err);
-                    toast.error('Failed to load user roles');
-                })
-                .finally(() => {
-                    setIsLoadingRoles(false);
-                });
+                }
+            })
+            .catch((err) => {
+                console.error('Error fetching roles:', err);
+            });
+
+        axiosInstance.get('/locations?isActive=true')
+            .then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    setLocationsList(res.data.data);
+                }
+            })
+            .catch(() => {});
+    }, [refreshKey]);
+
+    // Open Edit User Modal (Blocked for self to prevent lockout)
+    const handleOpenEditUser = (user) => {
+        const currentUserId = currentUser?._id || currentUser?.id;
+        if (String(user._id) === String(currentUserId)) {
+            toast.error('Self-role change is restricted to prevent accidental lockout.');
+            return;
         }
-    }, [isAddUserOpen]);
+
+        const roleId = typeof user.role === 'object' ? user.role?._id : user.role;
+        setEditModal({
+            isOpen: true,
+            user,
+            role: roleId || (roles[0]?._id || ''),
+            facility_id: user.facility_id || 'MAIN_UNIT',
+            isSaving: false
+        });
+    };
+
+    // Submit Edit User Form
+    const handleSaveEditUser = async (e) => {
+        if (e) e.preventDefault();
+        if (!editModal.user?._id) return;
+
+        if (!editModal.role) {
+            toast.error('Please select a role for this user');
+            return;
+        }
+
+        try {
+            setEditModal((prev) => ({ ...prev, isSaving: true }));
+            toast.loading('Updating user account...', { id: 'edit-user-toast' });
+
+            const res = await axiosInstance.put(`/users/${editModal.user._id}`, {
+                role: editModal.role,
+                facility_id: editModal.facility_id
+            });
+
+            if (res.data?.success) {
+                toast.success(`User '${editModal.user.name}' updated successfully!`, { id: 'edit-user-toast' });
+                setEditModal({ isOpen: false, user: null, role: '', facility_id: '', isSaving: false });
+                setRefreshKey((prev) => prev + 1);
+            }
+        } catch (err) {
+            console.error('Error updating user:', err);
+            toast.error(err.response?.data?.message || 'Failed to update user', { id: 'edit-user-toast' });
+            setEditModal((prev) => ({ ...prev, isSaving: false }));
+        }
+    };
 
     // Handle soft delete / toggle active status
     const handleToggleActive = async (user) => {
@@ -179,28 +239,49 @@ export default function UserManagementPage() {
                 const isSelf = String(row._id) === String(currentUserId);
 
                 return (
-                    <button
-                        type="button"
-                        disabled={isSelf}
-                        onClick={() => !isSelf && handleToggleActive(row)}
-                        className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-extrabold transition-all shadow-2xs ${
-                            isSelf
-                                ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
-                                : row.isActive !== false
-                                    ? 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 cursor-pointer'
-                                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 cursor-pointer'
-                        }`}
-                        title={
-                            isSelf
-                                ? 'You cannot deactivate or delete your own account'
-                                : row.isActive !== false
-                                    ? 'Deactivate User Account'
-                                    : 'Activate User Account'
-                        }
-                    >
-                        {row.isActive !== false ? <UserX size={13} /> : <UserCheck size={13} />}
-                        <span>{row.isActive !== false ? 'Deactivate' : 'Activate'}</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            disabled={isSelf}
+                            onClick={() => !isSelf && handleOpenEditUser(row)}
+                            className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-extrabold transition-all shadow-2xs ${
+                                isSelf
+                                    ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                                    : 'bg-app-bg text-text-muted hover:text-primary hover:bg-primary/10 border border-border cursor-pointer'
+                            }`}
+                            title={
+                                isSelf
+                                    ? 'Self-role change is restricted to prevent accidental lockout'
+                                    : 'Edit User Role & Facility'
+                            }
+                        >
+                            <Pencil size={13} />
+                            <span>Edit</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            disabled={isSelf}
+                            onClick={() => !isSelf && handleToggleActive(row)}
+                            className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-extrabold transition-all shadow-2xs ${
+                                isSelf
+                                    ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                                    : row.isActive !== false
+                                        ? 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 cursor-pointer'
+                                        : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 cursor-pointer'
+                            }`}
+                            title={
+                                isSelf
+                                    ? 'You cannot deactivate or delete your own account'
+                                    : row.isActive !== false
+                                        ? 'Deactivate User Account'
+                                        : 'Activate User Account'
+                            }
+                        >
+                            {row.isActive !== false ? <UserX size={13} /> : <UserCheck size={13} />}
+                            <span>{row.isActive !== false ? 'Deactivate' : 'Activate'}</span>
+                        </button>
+                    </div>
                 );
             }
         }
@@ -345,6 +426,101 @@ export default function UserManagementPage() {
                     </div>
                 </form>
             </SlideOverPanel>
+
+            {/* Edit User Role & Facility Modal */}
+            {editModal.isOpen && (
+                <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div
+                        className="fixed inset-0"
+                        onClick={() => setEditModal({ isOpen: false, user: null, role: '', facility_id: '', isSaving: false })}
+                    />
+                    <div className="relative z-10 w-full max-w-md bg-card-bg border border-border rounded-xl shadow-2xl p-6 font-sans space-y-4 animate-in zoom-in-95 duration-150">
+                        <div className="flex justify-between items-center pb-3 border-b border-border">
+                            <div>
+                                <h3 className="text-sm font-extrabold text-text-main uppercase tracking-wider">
+                                    Edit User Role & Access
+                                </h3>
+                                <p className="text-xs text-text-muted mt-0.5">
+                                    Update RBAC permissions & facility assignment
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setEditModal({ isOpen: false, user: null, role: '', facility_id: '', isSaving: false })}
+                                className="text-text-muted hover:text-text-main cursor-pointer"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        {/* Read-only User Info Card */}
+                        <div className="p-3 bg-app-bg border border-border rounded-lg space-y-1">
+                            <div className="text-xs font-bold text-text-main">
+                                {editModal.user?.name}
+                            </div>
+                            <div className="text-xs font-mono text-text-muted">
+                                {editModal.user?.email}
+                            </div>
+                        </div>
+
+                        <form onSubmit={handleSaveEditUser} className="space-y-4 text-xs font-sans">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                    Assigned Role *
+                                </label>
+                                <select
+                                    required
+                                    value={editModal.role}
+                                    onChange={(e) => setEditModal((prev) => ({ ...prev, role: e.target.value }))}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                                >
+                                    <option value="">-- Select Role --</option>
+                                    {roles.map((r) => (
+                                        <option key={r._id} value={r._id}>
+                                            {r.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                    Facility / Unit Location
+                                </label>
+                                <select
+                                    value={editModal.facility_id}
+                                    onChange={(e) => setEditModal((prev) => ({ ...prev, facility_id: e.target.value }))}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                                >
+                                    <option value="MAIN_UNIT">MAIN_UNIT (Default Plant)</option>
+                                    {locationsList.map((loc) => (
+                                        <option key={loc._id} value={loc.code || loc.name}>
+                                            {loc.name} ({loc.code || loc.type})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                                <button
+                                    type="button"
+                                    onClick={() => setEditModal({ isOpen: false, user: null, role: '', facility_id: '', isSaving: false })}
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={editModal.isSaving}
+                                    className="px-4 py-2 bg-primary text-white font-semibold rounded-md text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
+                                >
+                                    {editModal.isSaving ? 'Saving...' : 'Save User Account'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
         </>
     );
 }

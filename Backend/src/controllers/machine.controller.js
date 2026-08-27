@@ -162,10 +162,15 @@ const getMachines = async (req, res) => {
             filter.section = section;
         }
 
-        if (status && status !== 'All' && status !== 'ALL') {
-            if (status === 'Active' || status === 'ACTIVE') filter.isActive = true;
-            else if (status === 'Inactive' || status === 'INACTIVE') filter.isActive = false;
-            else filter.status = status;
+        if (status && status !== 'All' && status !== 'ALL' && status !== 'All Statuses') {
+            if (status === 'Active' || status === 'ACTIVE') {
+                filter.isActive = true;
+            } else if (status === 'Inactive' || status === 'INACTIVE') {
+                filter.isActive = false;
+            } else {
+                const regexPattern = status.replace(/_/g, '[\\s_]').replace(/\s+/g, '[\\s_]');
+                filter.status = { $regex: `^${regexPattern}$`, $options: 'i' };
+            }
         } else if (isActive !== undefined) {
             filter.isActive = isActive === 'true' || isActive === true;
         }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Clock, Fingerprint, CalendarDays, Plus, RefreshCw, Sparkles, UserCheck, CheckCircle2, Calendar } from 'lucide-react';
+import { Clock, Fingerprint, CalendarDays, Plus, RefreshCw, Sparkles, UserCheck, CheckCircle2, Calendar, X } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
 import axiosInstance from '../api/axiosInstance';
@@ -14,6 +14,18 @@ export default function AttendancePage() {
     const [isPunchDrawerOpen, setIsPunchDrawerOpen] = useState(false);
     const [isShiftDrawerOpen, setIsShiftDrawerOpen] = useState(false);
     const [isRosterDrawerOpen, setIsRosterDrawerOpen] = useState(false);
+
+    // Create Shift Modal State
+    const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+    const [shiftForm, setShiftForm] = useState({
+        name: '',
+        shiftCode: '',
+        startTime: '06:00',
+        endTime: '14:00',
+        standardHours: 8,
+        gracePeriodMinutes: 15
+    });
+    const [isSavingShift, setIsSavingShift] = useState(false);
 
     // Form Dropdown Options
     const [employees, setEmployees] = useState([]);
@@ -40,6 +52,53 @@ export default function AttendancePage() {
         endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         overtimeRule: 'REQUIRES_APPROVAL'
     });
+
+    /**
+     * Handle Create New Work Shift
+     */
+    const handleCreateShift = async (e) => {
+        e.preventDefault();
+
+        if (!shiftForm.name.trim() || !shiftForm.shiftCode.trim()) {
+            toast.error('Please enter Shift Name and Shift Code');
+            return;
+        }
+
+        try {
+            setIsSavingShift(true);
+            toast.loading('Creating work shift...', { id: 'create-shift-toast' });
+
+            const payload = {
+                name: shiftForm.name.trim(),
+                shiftCode: shiftForm.shiftCode.trim().toUpperCase(),
+                startTime: shiftForm.startTime,
+                endTime: shiftForm.endTime,
+                standardHours: Number(shiftForm.standardHours || 8),
+                gracePeriodMinutes: Number(shiftForm.gracePeriodMinutes || 15)
+            };
+
+            const res = await axiosInstance.post('/shifts', payload);
+
+            if (res.data?.success) {
+                toast.success(`Shift '${res.data.data?.name}' created successfully!`, { id: 'create-shift-toast' });
+                setIsShiftModalOpen(false);
+                setShiftForm({
+                    name: '',
+                    shiftCode: '',
+                    startTime: '06:00',
+                    endTime: '14:00',
+                    standardHours: 8,
+                    gracePeriodMinutes: 15
+                });
+                setRefreshKey((prev) => prev + 1);
+            }
+        } catch (err) {
+            console.error('Error creating shift:', err);
+            toast.error(err.response?.data?.message || 'Failed to create shift', { id: 'create-shift-toast' });
+        } finally {
+            setIsSavingShift(false);
+        }
+    };
 
     /**
      * One-time "Add Standard Shifts (A/B/Night)" action handler
@@ -457,7 +516,7 @@ export default function AttendancePage() {
                     </button>
                     <button
                         type="button"
-                        onClick={() => setIsShiftDrawerOpen(true)}
+                        onClick={() => setIsShiftModalOpen(true)}
                         className="flex items-center gap-1.5 px-4 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer shrink-0"
                     >
                         <Plus size={16} />
@@ -776,6 +835,151 @@ export default function AttendancePage() {
                     )}
                 </form>
             </SlideOverPanel>
+
+            {/* Create Standard Shift Modal Overlay */}
+            {isShiftModalOpen && (
+                <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150 font-sans">
+                    <div
+                        className="fixed inset-0"
+                        onClick={() => setIsShiftModalOpen(false)}
+                    />
+                    <div className="relative z-10 w-full max-w-md bg-card-bg border border-border rounded-xl shadow-2xl p-6 space-y-4 animate-in zoom-in-95 duration-150">
+                        <div className="flex justify-between items-center pb-3 border-b border-border">
+                            <div>
+                                <h3 className="text-sm font-extrabold text-text-main uppercase tracking-wider">
+                                    Create Standard Work Shift
+                                </h3>
+                                <p className="text-xs text-text-muted mt-0.5">
+                                    Define shift schedule, timing & grace period
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsShiftModalOpen(false)}
+                                className="text-text-muted hover:text-text-main cursor-pointer"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleCreateShift} className="space-y-4 text-xs font-sans">
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Shift Name *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        required
+                                        placeholder="e.g. Shift A"
+                                        value={shiftForm.name}
+                                        onChange={(e) => {
+                                            const val = e.target.value;
+                                            const autoCode = val.trim().toUpperCase().replace(/\s+/g, '_');
+                                            setShiftForm((prev) => ({
+                                                ...prev,
+                                                name: val,
+                                                shiftCode: prev.shiftCode ? prev.shiftCode : autoCode
+                                            }));
+                                        }}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Shift Code *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        required
+                                        placeholder="e.g. SHIFT_A"
+                                        value={shiftForm.shiftCode}
+                                        onChange={(e) => setShiftForm((prev) => ({ ...prev, shiftCode: e.target.value.toUpperCase() }))}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-bold uppercase text-text-main focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Start Time *
+                                    </label>
+                                    <input
+                                        type="time"
+                                        required
+                                        value={shiftForm.startTime}
+                                        onChange={(e) => setShiftForm((prev) => ({ ...prev, startTime: e.target.value }))}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        End Time *
+                                    </label>
+                                    <input
+                                        type="time"
+                                        required
+                                        value={shiftForm.endTime}
+                                        onChange={(e) => setShiftForm((prev) => ({ ...prev, endTime: e.target.value }))}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Standard Hours
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="0.5"
+                                        min="1"
+                                        max="24"
+                                        value={shiftForm.standardHours}
+                                        onChange={(e) => setShiftForm((prev) => ({ ...prev, standardHours: e.target.value }))}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Grace Period (Mins)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="120"
+                                        value={shiftForm.gracePeriodMinutes}
+                                        onChange={(e) => setShiftForm((prev) => ({ ...prev, gracePeriodMinutes: e.target.value }))}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsShiftModalOpen(false)}
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isSavingShift}
+                                    className="px-4 py-2 bg-primary text-white font-semibold rounded-md text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
+                                >
+                                    {isSavingShift ? 'Saving...' : 'Save Work Shift'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
         </>
     );
 }

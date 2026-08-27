@@ -33,7 +33,7 @@ const getCachedTenantStatus = async (tenantIdInput) => {
     const tenant = await Tenant.findById(tenantId).select('isActive').lean();
     const isActive = Boolean(tenant && tenant.isActive !== false);
 
-    console.log(`⚡ [TENANT DB FETCH] Tenant: ${tenantId} | isActive from DB: ${isActive}`);
+    // console.log(`⚡ [TENANT DB FETCH] Tenant: ${tenantId} | isActive from DB: ${isActive}`);
 
     tenantStatusCache.set(tenantId, {
         isActive,
@@ -47,10 +47,10 @@ const getCachedTenantStatus = async (tenantIdInput) => {
 const clearTenantStatusCache = (tenantIdInput) => {
     const tenantId = normalizeTenantId(tenantIdInput);
     if (tenantId) {
-        console.log(`🚨 [TENANT CACHE CLEARED] Invalidated cache key: ${tenantId}`);
+        // console.log(`🚨 [TENANT CACHE CLEARED] Invalidated cache key: ${tenantId}`);
         tenantStatusCache.delete(tenantId);
     } else {
-        console.log(`🚨 [TENANT CACHE CLEARED ALL] Flushed entire tenant status cache`);
+        // console.log(`🚨 [TENANT CACHE CLEARED ALL] Flushed entire tenant status cache`);
         tenantStatusCache.clear();
     }
 };
@@ -182,7 +182,16 @@ const checkPermission = (requiredModule, requiredAction) => {
                 return next();
             }
 
-            // 3. Verify user has a valid active role
+            // 3. Verify user has a valid active role (auto-heal if user reference was orphaned)
+            if ((!user.role || !user.role.isActive) && user.tenant) {
+                const activeRole = await Role.findOne({ tenant: user.tenant, isActive: true }).populate('permissions');
+                if (activeRole) {
+                    console.log(`✅ [Auto-Heal RBAC] Re-linking user '${user.email}' (${user._id}) to active tenant role '${activeRole.name}' (${activeRole._id})`);
+                    await User.updateOne({ _id: user._id }, { role: activeRole._id });
+                    user.role = activeRole;
+                }
+            }
+
             if (!user.role || !user.role.isActive) {
                 return res.status(403).json({
                     success: false,

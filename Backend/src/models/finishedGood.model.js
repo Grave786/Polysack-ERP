@@ -38,10 +38,8 @@ const FinishedGoodSchema = new mongoose.Schema({
     },
     bagShape: {
         type: String,
-        enum: {
-            values: ['GUSSETED', 'FLAT_TUBE', 'PINCH_BOTTOM', 'BLOCK_BOTTOM'],
-            message: '{VALUE} is not a valid bag shape.'
-        }
+        trim: true,
+        default: ''
     },
     dimensions: {
         width: { type: Number, min: 0 },

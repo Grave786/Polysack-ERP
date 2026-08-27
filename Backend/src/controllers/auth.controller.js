@@ -147,6 +147,15 @@ const login = async (req, res) => {
         // 5. Generate JWT token using generateToken utility
         const token = generateToken(user);
 
+        if (user.tenant && (!user.role || !user.role.isActive)) {
+            const activeRole = await Role.findOne({ tenant: user.tenant, isActive: true }).populate('permissions');
+            if (activeRole) {
+                console.log(`✅ [Auto-Heal Login] Re-linking user '${user.email}' (${user._id}) to active tenant role '${activeRole.name}' (${activeRole._id})`);
+                await User.updateOne({ _id: user._id }, { role: activeRole._id });
+                user.role = activeRole;
+            }
+        }
+
         // 6. Exclude password & format permissions/isSuperAdmin in user object
         const userResponse = formatUserResponse(user);
 
@@ -219,6 +228,15 @@ const getMe = async (req, res) => {
                 success: false,
                 message: 'User account not found.'
             });
+        }
+
+        if (user.tenant && (!user.role || !user.role.isActive)) {
+            const activeRole = await Role.findOne({ tenant: user.tenant, isActive: true }).populate('permissions');
+            if (activeRole) {
+                console.log(`✅ [Auto-Heal Auth] Re-linking user '${user.email}' (${user._id}) to active tenant role '${activeRole.name}' (${activeRole._id})`);
+                await User.updateOne({ _id: user._id }, { role: activeRole._id });
+                user.role = activeRole;
+            }
         }
 
         const userResponse = formatUserResponse(user);

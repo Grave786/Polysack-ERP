@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { Mail, Lock, Factory, Loader2, ShieldAlert } from 'lucide-react';
+import { getFirstPermittedRoute } from '../utils/permissionUtils';
 
 export default function LoginPage() {
     const navigate = useNavigate();
@@ -27,7 +28,13 @@ export default function LoginPage() {
         setIsSubmitting(false);
 
         if (result.success) {
-            navigate('/dashboard');
+            const userObj = result.user || useAuthStore.getState().user;
+            const targetRoute = getFirstPermittedRoute(userObj);
+            if (targetRoute === '/403') {
+                navigate('/403', { state: { message: 'No modules assigned — contact your administrator.' } });
+            } else {
+                navigate(targetRoute);
+            }
         } else if (result.error && (result.error.toLowerCase().includes('suspended') || result.error.toLowerCase().includes('account is suspended'))) {
             setSuspensionError("Your organization's account has been suspended. Please contact system support.");
         }

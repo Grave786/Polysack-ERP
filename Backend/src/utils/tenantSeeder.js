@@ -2,6 +2,7 @@ const UOM = require('../models/uom.model');
 const Location = require('../models/location.model');
 const Shift = require('../models/shift.model');
 const Category = require('../models/category.model');
+const BagShape = require('../models/bagShape.model');
 
 /**
  * Seed default master data for a newly onboarded tenant.
@@ -82,7 +83,24 @@ const seedTenantMasterData = async (tenantId) => {
             );
         }
 
-        console.log(`✅ Default master data (UOM, Locations, Shifts, Categories) seeded for Tenant ID: ${tenantId}`);
+        // 5. Seed Standard Default Bag Shapes
+        const defaultBagShapes = [
+            { name: 'Gusseted', description: 'Gusseted side-fold bag shape', isActive: true },
+            { name: 'Flat / Tubular', description: 'Flat or tubular bag shape', isActive: true },
+            { name: 'Block Bottom', description: 'Block bottom self-standing bag shape', isActive: true },
+            { name: 'Pinch Bottom', description: 'Pinch bottom sealed bag shape', isActive: true },
+            { name: 'Valve', description: 'Internal or external valve bag shape', isActive: true }
+        ];
+
+        for (const shapeData of defaultBagShapes) {
+            await BagShape.updateOne(
+                { tenant: tenantId, name: shapeData.name },
+                { $setOnInsert: { ...shapeData, tenant: tenantId } },
+                { upsert: true }
+            );
+        }
+
+        console.log(`✅ Default master data (UOM, Locations, Shifts, Categories, Bag Shapes) seeded for Tenant ID: ${tenantId}`);
     } catch (error) {
         console.error('Error seeding tenant default master data:', error);
     }

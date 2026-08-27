@@ -18,6 +18,7 @@ import {
     X
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
+import { hasModulePermission, checkIsSuperAdmin, checkIsTenantAdmin } from '../../utils/permissionUtils';
 
 const SIDEBAR_SECTIONS = [
     {
@@ -34,7 +35,7 @@ const SIDEBAR_SECTIONS = [
         title: 'CORE ERP',
         tenantOnly: true,
         items: [
-            { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
+            { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, module: 'DASHBOARD' },
             { name: 'Master Data', path: '/master-data', icon: Database, module: 'MASTER_DATA' }
         ]
     },
@@ -74,15 +75,8 @@ const SIDEBAR_SECTIONS = [
 export default function Sidebar({ isOpen, onClose }) {
     const user = useAuthStore((state) => state.user);
 
-    const userRoleName = (user?.roleName || (typeof user?.role === 'object' ? user?.role?.name : user?.role) || '').toLowerCase();
-    const isSuperAdmin = Boolean(
-        user?.isSuperAdmin ||
-        !user?.tenant ||
-        user?.email === 'superadmin@polysack.com' ||
-        userRoleName === 'super admin' ||
-        userRoleName === 'super_admin'
-    );
-    const isTenantAdmin = userRoleName.includes('admin') || userRoleName.includes('tenant admin');
+    const isSuperAdmin = checkIsSuperAdmin(user);
+    const isTenantAdmin = checkIsTenantAdmin(user);
 
     const isItemVisible = (item) => {
         // Super Admin sees ONLY the 4 designated platform management links
@@ -90,25 +84,11 @@ export default function Sidebar({ isOpen, onClose }) {
             return ['/dashboard', '/administration/tenants', '/administration/roles', '/administration/users'].includes(item.path);
         }
 
-        // Dashboard is visible for all tenant users
-        if (item.path === '/dashboard') return true;
-
         // Tenant Admin sees all tenant modules
         if (isTenantAdmin) return true;
 
-        // Dynamic permission check for regular tenant users
-        const permittedModules = user?.permittedModules || [];
-        const permissions = user?.role?.permissions || user?.permissions || [];
-
         if (item.module) {
-            if (permittedModules.length > 0) {
-                return permittedModules.includes(item.module);
-            }
-
-            if (Array.isArray(permissions) && permissions.length > 0) {
-                return permissions.some((p) => (typeof p === 'object' ? p.module === item.module : String(p).startsWith(item.module)));
-            }
-            return false;
+            return hasModulePermission(user, item.module);
         }
 
         return true;

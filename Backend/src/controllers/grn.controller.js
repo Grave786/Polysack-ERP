@@ -120,8 +120,12 @@ const createGRN = async (req, res) => {
 
         // 4. Validate items against PurchaseOrder
         for (const grnItem of items) {
+            const rawMaterialId = typeof grnItem.rawMaterial === 'object'
+                ? String(grnItem.rawMaterial?._id || grnItem.rawMaterial?.id || '')
+                : String(grnItem.rawMaterial || '').trim();
+
             const numQty = Number(grnItem.receivedQuantity);
-            if (!grnItem.rawMaterial || isNaN(numQty) || numQty <= 0) {
+            if (!rawMaterialId || isNaN(numQty) || numQty <= 0) {
                 if (useTransaction && session) {
                     if (session.inTransaction()) await session.abortTransaction();
                     session.endSession();
@@ -132,7 +136,7 @@ const createGRN = async (req, res) => {
                 });
             }
 
-            const rmIdStr = String(grnItem.rawMaterial);
+            const rmIdStr = String(rawMaterialId);
             const poItem = poDoc.items.find(i => String(i.rawMaterial) === rmIdStr);
 
             if (!poItem) {
@@ -161,7 +165,7 @@ const createGRN = async (req, res) => {
             }
 
             cleanedItems.push({
-                rawMaterial: grnItem.rawMaterial,
+                rawMaterial: rawMaterialId,
                 receivedQuantity: numQty,
                 batchNumber: grnItem.batchNumber ? String(grnItem.batchNumber).trim() : undefined
             });
@@ -198,10 +202,20 @@ const createGRN = async (req, res) => {
 
             createdStockTransactions.push(txnResult.transaction);
 
-            // Increment PO item received quantity
+            // Increment PO item received quantity and update RawMaterial pricePerUnit (latest price wins)
             const poItem = poDoc.items.find(i => String(i.rawMaterial) === String(grnItem.rawMaterial));
             if (poItem) {
                 poItem.receivedQuantity += grnItem.receivedQuantity;
+
+                if (poItem.ratePerUnit !== undefined && Number(poItem.ratePerUnit) > 0) {
+                    const rmDocQuery = RawMaterial.findOne({ _id: grnItem.rawMaterial, tenant: tenantId });
+                    if (useTransaction && session) rmDocQuery.session(session);
+                    const rmDoc = await rmDocQuery;
+                    if (rmDoc) {
+                        rmDoc.pricePerUnit = Number(poItem.ratePerUnit);
+                        await rmDoc.save(sessionOption);
+                    }
+                }
             }
         }
 

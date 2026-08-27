@@ -22,9 +22,20 @@ const createRole = async (req, res) => {
         // 2. Check duplicate role within the same tenant
         const existingRole = await Role.findOne({ name, tenant: userTenant });
         if (existingRole) {
+            if (!existingRole.isActive) {
+                existingRole.isActive = true;
+                if (Array.isArray(permissions)) existingRole.permissions = permissions;
+                await existingRole.save();
+                await existingRole.populate('permissions');
+                return res.status(200).json({
+                    success: true,
+                    message: `Role '${name}' reactivated successfully.`,
+                    data: existingRole
+                });
+            }
             return res.status(400).json({
                 success: false,
-                message: `A role named '${name}' already exists in your organization.`
+                message: `An active role named '${name}' already exists in your organization.`
             });
         }
 
@@ -201,11 +212,21 @@ const deleteRole = async (req, res) => {
             });
         }
 
-        await Role.deleteOne({ _id: id });
+        const User = require('../models/user.model');
+        const assignedUsersCount = await User.countDocuments({ role: id });
+        if (assignedUsersCount > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot delete role '${role.name}' because ${assignedUsersCount} user(s) are currently assigned to it. Please reassign those users to another role first.`
+            });
+        }
+
+        role.isActive = false;
+        await role.save();
 
         return res.status(200).json({
             success: true,
-            message: `Role '${role.name}' deleted successfully.`
+            message: `Role '${role.name}' deactivated successfully.`
         });
     } catch (error) {
         console.error('Error in deleteRole:', error);

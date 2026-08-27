@@ -306,11 +306,95 @@ const changePassword = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Update a user's assigned role & facility (Admin operation)
+ * @route   PUT /api/users/:id
+ * @access  Private (USERS:UPDATE permission)
+ */
+const updateUser = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { role, facility_id, name } = req.body;
+        const currentUserId = String(req.user?._id || req.user?.id);
+        const userTenant = req.user?.tenant || null;
+
+        // Self-role update block
+        if (String(id) === currentUserId && role) {
+            return res.status(403).json({
+                success: false,
+                message: 'Self-role change is restricted. You cannot change your own role to prevent accidental lockout.'
+            });
+        }
+
+        const userDoc = await User.findOne({ _id: id, tenant: userTenant });
+        if (!userDoc) {
+            return res.status(404).json({
+                success: false,
+                message: 'User account not found in your organization.'
+            });
+        }
+
+        if (name && name.trim()) {
+            userDoc.name = name.trim();
+        }
+
+        if (role) {
+            const roleDoc = await Role.findById(role);
+            if (!roleDoc) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid role ID provided.'
+                });
+            }
+            if (!roleDoc.isActive) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'The selected role is inactive.'
+                });
+            }
+            if (userTenant && roleDoc.tenant && roleDoc.tenant.toString() !== userTenant.toString()) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: The selected role does not belong to your organization.'
+                });
+            }
+            userDoc.role = role;
+        }
+
+        if (facility_id !== undefined) {
+            userDoc.facility_id = String(facility_id).trim() || 'MAIN_UNIT';
+        }
+
+        await userDoc.save();
+        await userDoc.populate({
+            path: 'role',
+            populate: { path: 'permissions' }
+        });
+
+        const userResponse = userDoc.toObject();
+        delete userResponse.password;
+
+        return res.status(200).json({
+            success: true,
+            message: `User '${userDoc.name}' updated successfully.`,
+            data: userResponse
+        });
+    } catch (error) {
+        console.error('Error in updateUser:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to update user account.',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     createUser,
     getUsers,
     toggleUserActive,
     deleteUser,
+    updateUser,
     updateProfile,
     changePassword
 };

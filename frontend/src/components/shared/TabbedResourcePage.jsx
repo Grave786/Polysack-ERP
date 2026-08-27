@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useResourceApi } from '../../hooks/useResourceApi';
 import DataTable from './DataTable';
-import { Construction, Plus, X, Clock, Sparkles, Pencil, Trash2 } from 'lucide-react';
+import { Construction, Plus, X, Clock, Sparkles, Pencil, Trash2, MapPin } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
@@ -70,7 +70,17 @@ export default function TabbedResourcePage({
     const [uomsList, setUomsList] = useState([]);
     const [finishedGoodsList, setFinishedGoodsList] = useState([]);
     const [rawMaterialsList, setRawMaterialsList] = useState([]);
+    const [bagShapesList, setBagShapesList] = useState([]);
     const [bomIngredients, setBomIngredients] = useState([{ rawMaterial: '', quantityPerUnit: '' }]);
+
+    // Custom Bag Shape Modal State
+    const [bagShapeModal, setBagShapeModal] = useState({
+        isOpen: false,
+        mode: 'ADD',
+        shapeId: null,
+        inputValue: '',
+        isSaving: false
+    });
 
     // Inline Shift Modal State inside Employee Form
     const [isInlineShiftModalOpen, setIsInlineShiftModalOpen] = useState(false);
@@ -83,6 +93,32 @@ export default function TabbedResourcePage({
         gracePeriodMinutes: 15
     });
     const [isSavingInlineShift, setIsSavingInlineShift] = useState(false);
+
+    // Inline Location Modal State inside Employee Form
+    const [isInlineLocationModalOpen, setIsInlineLocationModalOpen] = useState(false);
+    const [inlineLocationData, setInlineLocationData] = useState({
+        name: '',
+        code: '',
+        type: 'FACTORY',
+        address: '',
+        city: '',
+        state: ''
+    });
+    const [isSavingInlineLocation, setIsSavingInlineLocation] = useState(false);
+
+    const handleOpenInlineLocationModal = () => {
+        const nextNum = (locationsList.length || 0) + 1;
+        const padded = String(nextNum).padStart(3, '0');
+        setInlineLocationData({
+            name: '',
+            code: `LOC-${padded}`,
+            type: 'FACTORY',
+            address: '',
+            city: '',
+            state: ''
+        });
+        setIsInlineLocationModalOpen(true);
+    };
 
     // Custom UOM Modal State
     const [uomModal, setUomModal] = useState({
@@ -254,6 +290,13 @@ export default function TabbedResourcePage({
                     setLocationsList(list);
                 }
             }).catch(() => { });
+
+            // Fetch Bag Shapes dynamically
+            axiosInstance.get('/bag-shapes?isActive=true').then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    setBagShapesList(res.data.data);
+                }
+            }).catch(() => { });
         }
 
         if (key === 'boms' || key === 'bom') {
@@ -410,6 +453,108 @@ export default function TabbedResourcePage({
         });
     };
 
+    /**
+     * Open Add Bag Shape Modal
+     */
+    const handleOpenAddBagShapeModal = () => {
+        setBagShapeModal({
+            isOpen: true,
+            mode: 'ADD',
+            shapeId: null,
+            inputValue: '',
+            isSaving: false
+        });
+    };
+
+    /**
+     * Open Edit Bag Shape Modal
+     */
+    const handleOpenEditBagShapeModal = (shapeVal) => {
+        if (!shapeVal || shapeVal === 'Other') return;
+        const selectedShape = bagShapesList.find((s) => s.name === shapeVal || s._id === shapeVal);
+        if (!selectedShape) return;
+
+        setBagShapeModal({
+            isOpen: true,
+            mode: 'EDIT',
+            shapeId: selectedShape._id,
+            inputValue: selectedShape.name,
+            isSaving: false
+        });
+    };
+
+    /**
+     * Save Bag Shape Modal Handler
+     */
+    const handleSaveBagShapeModal = async (e) => {
+        if (e) e.preventDefault();
+        const nameTrimmed = (bagShapeModal.inputValue || '').trim();
+        if (!nameTrimmed) {
+            toast.error('Please enter a bag shape name');
+            return;
+        }
+
+        try {
+            setBagShapeModal((prev) => ({ ...prev, isSaving: true }));
+            if (bagShapeModal.mode === 'ADD') {
+                toast.loading('Creating bag shape...', { id: 'save-shape-modal' });
+                const res = await axiosInstance.post('/bag-shapes', { name: nameTrimmed });
+                if (res.data?.success && res.data?.data) {
+                    const newShape = res.data.data;
+                    toast.success(`Bag shape '${newShape.name}' created!`, { id: 'save-shape-modal' });
+                    setBagShapesList((prev) => [...prev, newShape]);
+                    handleInputChange('bagShape', newShape.name);
+                    setBagShapeModal({ isOpen: false, mode: 'ADD', shapeId: null, inputValue: '', isSaving: false });
+                }
+            } else if (bagShapeModal.mode === 'EDIT' && bagShapeModal.shapeId) {
+                toast.loading('Updating bag shape...', { id: 'save-shape-modal' });
+                const res = await axiosInstance.put(`/bag-shapes/${bagShapeModal.shapeId}`, { name: nameTrimmed });
+                if (res.data?.success && res.data?.data) {
+                    const updatedShape = res.data.data;
+                    toast.success(`Bag shape updated to '${updatedShape.name}'!`, { id: 'save-shape-modal' });
+                    setBagShapesList((prev) =>
+                        prev.map((s) => (s._id === updatedShape._id ? updatedShape : s))
+                    );
+                    handleInputChange('bagShape', updatedShape.name);
+                    setBagShapeModal({ isOpen: false, mode: 'ADD', shapeId: null, inputValue: '', isSaving: false });
+                }
+            }
+        } catch (err) {
+            console.error('Save bag shape error:', err);
+            toast.error(err.response?.data?.message || 'Failed to save bag shape', { id: 'save-shape-modal' });
+            setBagShapeModal((prev) => ({ ...prev, isSaving: false }));
+        }
+    };
+
+    /**
+     * Inline Bag Shape Delete Confirmation
+     */
+    const handleDeleteBagShapeInline = (shapeVal) => {
+        if (!shapeVal || shapeVal === 'Other') return;
+        const selectedShape = bagShapesList.find((s) => s.name === shapeVal || s._id === shapeVal);
+        if (!selectedShape) return;
+
+        setConfirmModal({
+            isOpen: true,
+            title: 'Delete Bag Shape',
+            message: `Are you sure you want to delete bag shape '${selectedShape.name}'?`,
+            onConfirm: async () => {
+                try {
+                    toast.loading('Deleting bag shape...', { id: 'delete-shape' });
+                    const res = await axiosInstance.delete(`/bag-shapes/${selectedShape._id}`);
+                    if (res.data?.success) {
+                        toast.success(`Bag shape '${selectedShape.name}' deleted!`, { id: 'delete-shape' });
+                        setBagShapesList((prev) => prev.filter((s) => s._id !== selectedShape._id));
+                        handleInputChange('bagShape', '');
+                    }
+                } catch (err) {
+                    console.error('Delete bag shape error:', err);
+                    toast.error(err.response?.data?.message || 'Failed to delete bag shape', { id: 'delete-shape' });
+                }
+            }
+        });
+    };
+
     // Reset form data when active tab changes or drawer closes
     useEffect(() => {
         if (!isDrawerOpen) {
@@ -445,16 +590,56 @@ export default function TabbedResourcePage({
         if (!activeTab?.resourcePath) return;
         try {
             toast.loading('Generating CSV export...', { id: 'csv-export' });
-            const response = await axiosInstance.get(`${activeTab.resourcePath}/export`, {
-                params: {
-                    search,
-                    status: (statusFilter && statusFilter !== 'All Statuses' && statusFilter !== 'All' && statusFilter !== 'ALL') ? statusFilter : undefined
-                },
-                responseType: 'blob'
-            });
 
-            const blob = new Blob([response.data], { type: 'text/csv' });
-            const url = window.URL.createObjectURL(blob);
+            let csvBlob;
+            try {
+                const response = await axiosInstance.get(`${activeTab.resourcePath}/export`, {
+                    params: {
+                        search,
+                        status: (statusFilter && statusFilter !== 'All Statuses' && statusFilter !== 'All' && statusFilter !== 'ALL') ? statusFilter : undefined
+                    },
+                    responseType: 'blob'
+                });
+                csvBlob = new Blob([response.data], { type: 'text/csv' });
+            } catch {
+                // Fallback: Fetch data records and generate CSV client-side
+                const listRes = await axiosInstance.get(activeTab.resourcePath, {
+                    params: {
+                        limit: 500,
+                        search,
+                        status: (statusFilter && statusFilter !== 'All Statuses' && statusFilter !== 'All' && statusFilter !== 'ALL') ? statusFilter : undefined
+                    }
+                });
+
+                if (listRes.data?.success && Array.isArray(listRes.data.data) && listRes.data.data.length > 0) {
+                    const records = listRes.data.data;
+                    const headers = activeTab?.columns
+                        ? activeTab.columns.map((c) => typeof c.header === 'string' ? c.header : c.accessor || 'FIELD')
+                        : Object.keys(records[0]).filter((k) => typeof records[0][k] !== 'object');
+
+                    const csvRows = [headers.join(',')];
+
+                    records.forEach((row) => {
+                        const rowVals = activeTab?.columns
+                            ? activeTab.columns.map((c) => {
+                                let val = '';
+                                if (c.accessor) val = row[c.accessor];
+                                else if (c.render && typeof c.render === 'function') val = row.name || row.code || row.poNumber || '';
+                                if (val === undefined || val === null) val = '';
+                                return `"${String(val).replace(/"/g, '""')}"`;
+                            })
+                            : headers.map((h) => `"${String(row[h] || '').replace(/"/g, '""')}"`);
+
+                        csvRows.push(rowVals.join(','));
+                    });
+
+                    csvBlob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                } else {
+                    throw new Error('No data available to export');
+                }
+            }
+
+            const url = window.URL.createObjectURL(csvBlob);
             const link = document.createElement('a');
             link.href = url;
             link.setAttribute('download', `${activeTabKey}_export_${Date.now()}.csv`);
@@ -464,7 +649,7 @@ export default function TabbedResourcePage({
             toast.success('CSV export downloaded successfully!', { id: 'csv-export' });
         } catch (err) {
             console.error('Export CSV error:', err);
-            toast.error('Failed to export CSV file', { id: 'csv-export' });
+            toast.error(err.message || 'Failed to export CSV file', { id: 'csv-export' });
         }
     };
 
@@ -493,11 +678,48 @@ export default function TabbedResourcePage({
         }
 
         const key = activeTabKey?.toLowerCase() || '';
-        if (key === 'raw-materials' || key === 'rawmaterials' || key === 'finished-goods' || key === 'finishedbags' || key === 'finishedproducts') {
+        if (key === 'machines' || key === 'machine') {
+            payload.code = (formData.code || formData.machineCode || currentCode || '').toUpperCase();
+            payload.name = formData.name || '';
+            payload.section = (formData.section || 'EXTRUSION').toUpperCase();
+            payload.status = (formData.status || 'AVAILABLE').toUpperCase();
+            if (formData.capacityPerHour || formData.capacity) {
+                payload.capacityPerHour = Number(formData.capacityPerHour || formData.capacity);
+            }
+            if (formData.efficiency !== undefined && formData.efficiency !== '') {
+                payload.efficiency = Number(formData.efficiency);
+            }
+        }
+
+        if (key === 'raw-materials' || key === 'rawmaterials') {
             const catVal = typeof formData.category === 'object' ? formData.category?._id : formData.category;
             const uomVal = typeof formData.uom === 'object' ? formData.uom?._id : formData.uom;
             payload.category = catVal || (categoriesList[0]?._id || '');
             payload.uom = uomVal || (uomsList[0]?._id || '');
+            delete payload.currentStock; // Current stock can only be updated via GRN / Stock Ledger
+        }
+
+        if (key === 'finished-goods' || key === 'finishedbags' || key === 'finishedproducts') {
+            const catVal = typeof formData.category === 'object' ? formData.category?._id : formData.category;
+            const uomVal = typeof formData.uom === 'object' ? formData.uom?._id : formData.uom;
+            const locVal = typeof formData.defaultLocation === 'object' ? formData.defaultLocation?._id : formData.defaultLocation;
+            payload.code = (formData.code || formData.itemCode || currentCode || '').toUpperCase();
+            payload.name = formData.name || '';
+            payload.category = catVal || (categoriesList[0]?._id || '');
+            payload.uom = uomVal || (uomsList[0]?._id || '');
+            if (locVal) payload.defaultLocation = locVal;
+
+            payload.bagShape = formData.bagShape || '';
+
+            if (formData.fabricGSM) payload.fabricGSM = Number(formData.fabricGSM);
+            if (formData.bagCapacity) payload.bagCapacity = Number(formData.bagCapacity);
+            if (formData.pricePerBag) payload.pricePerBag = Number(formData.pricePerBag);
+            if (formData.dimensions) {
+                payload.dimensions = {
+                    width: Number(formData.dimensions.width || 0),
+                    length: Number(formData.dimensions.length || 0)
+                };
+            }
         }
 
         if (key === 'boms' || key === 'bom') {
@@ -549,6 +771,37 @@ export default function TabbedResourcePage({
     };
 
     /**
+     * Inline Location Creation Submission (inside Employee Form)
+     */
+    const handleSaveInlineLocation = async (e) => {
+        e.preventDefault();
+        if (!inlineLocationData.name.trim() || !inlineLocationData.code.trim() || !inlineLocationData.type) {
+            toast.error('Please enter Location Name, Code, and Type');
+            return;
+        }
+        try {
+            setIsSavingInlineLocation(true);
+            const res = await axiosInstance.post('/locations', {
+                ...inlineLocationData,
+                name: inlineLocationData.name.trim(),
+                code: inlineLocationData.code.trim().toUpperCase()
+            });
+            if (res.data?.success && res.data?.data) {
+                const newLoc = res.data.data;
+                toast.success(`Facility '${newLoc.name}' created!`);
+                setLocationsList((prev) => [...prev, newLoc]);
+                handleInputChange('facility', newLoc._id);
+                setIsInlineLocationModalOpen(false);
+            }
+        } catch (err) {
+            console.error('Failed to create inline location:', err);
+            toast.error(err.response?.data?.message || 'Failed to create inline facility/location');
+        } finally {
+            setIsSavingInlineLocation(false);
+        }
+    };
+
+    /**
      * Open Create Drawer and Pre-fill Suggested Code for ALL Entities
      */
     const handleOpenDrawer = () => {
@@ -565,6 +818,7 @@ export default function TabbedResourcePage({
             machineCode: suggestedCode,
             itemCode: suggestedCode,
             shiftCode: suggestedCode,
+            section: 'EXTRUSION',
             startTime: '06:00',
             endTime: '14:00',
             standardHours: 8,
@@ -1187,14 +1441,30 @@ export default function TabbedResourcePage({
                         </div>
 
                         <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Facility / Location *
-                            </label>
+                            <div className="flex items-center justify-between mb-1">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                    Facility / Location *
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={handleOpenInlineLocationModal}
+                                    className="text-[11px] font-bold text-primary hover:underline cursor-pointer flex items-center gap-0.5"
+                                >
+                                    <Plus size={12} />
+                                    <span>Add Facility</span>
+                                </button>
+                            </div>
                             <select
                                 name="facility"
                                 required
                                 value={formData.facility || (locationsList[0]?._id || '')}
-                                onChange={(e) => handleInputChange('facility', e.target.value)}
+                                onChange={(e) => {
+                                    if (e.target.value === '__ADD_NEW_LOCATION__') {
+                                        handleOpenInlineLocationModal();
+                                    } else {
+                                        handleInputChange('facility', e.target.value);
+                                    }
+                                }}
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
                             >
                                 <option value="">-- Select Facility --</option>
@@ -1203,6 +1473,9 @@ export default function TabbedResourcePage({
                                         {l.name}
                                     </option>
                                 ))}
+                                <option value="__ADD_NEW_LOCATION__" className="font-bold text-primary">
+                                    + Add New Facility...
+                                </option>
                             </select>
                         </div>
                     </div>
@@ -1430,16 +1703,16 @@ export default function TabbedResourcePage({
                         </select>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <div className="flex justify-between items-center mb-1">
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                            <div className="flex items-center justify-between w-full mb-1 gap-2 min-w-0">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main truncate whitespace-nowrap min-w-0">
                                     Unit of Measure (UOM) *
                                 </label>
                                 <button
                                     type="button"
                                     onClick={handleOpenAddUomModal}
-                                    className="text-xs text-primary hover:underline font-bold cursor-pointer"
+                                    className="text-xs text-primary hover:underline font-bold cursor-pointer shrink-0 whitespace-nowrap"
                                 >
                                     + Add New
                                 </button>
@@ -1449,7 +1722,7 @@ export default function TabbedResourcePage({
                                 required
                                 value={typeof formData.uom === 'object' ? formData.uom?._id : (formData.uom || (uomsList[0]?._id || ''))}
                                 onChange={(e) => handleInputChange('uom', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                                className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
                             >
                                 <option value="">-- Select UOM --</option>
                                 {uomsList.map((u) => (
@@ -1461,14 +1734,16 @@ export default function TabbedResourcePage({
                         </div>
 
                         <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Default Storage Location
-                            </label>
+                            <div className="flex items-center justify-between w-full mb-1 gap-2 min-w-0">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main truncate whitespace-nowrap min-w-0">
+                                    Default Storage Location
+                                </label>
+                            </div>
                             <select
                                 name="defaultLocation"
                                 value={typeof formData.defaultLocation === 'object' ? formData.defaultLocation?._id : (formData.defaultLocation || '')}
                                 onChange={(e) => handleInputChange('defaultLocation', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                                className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
                             >
                                 <option value="">-- Select Location --</option>
                                 {locationsList.map((loc) => (
@@ -1482,16 +1757,21 @@ export default function TabbedResourcePage({
 
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Current Stock
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-muted mb-1 flex items-center justify-between">
+                                <span>Current Stock</span>
+                                <span className="text-[10px] text-amber-700 font-semibold normal-case">Read-only (Managed via GRN & Ledger)</span>
                             </label>
                             <input
                                 type="number"
-                                placeholder="5000"
-                                value={formData.currentStock || ''}
-                                onChange={(e) => handleInputChange('currentStock', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                readOnly
+                                disabled
+                                value={formData.currentStock !== undefined ? formData.currentStock : 0}
+                                className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-bold text-text-muted cursor-not-allowed font-sans opacity-80"
+                                title="Stock levels cannot be edited manually. Use Goods Receipt (GRN) or Stock Adjustment in Inventory module."
                             />
+                            <p className="text-[10px] text-text-muted mt-1">
+                                Stock is updated automatically via GRN inward & ledger transactions.
+                            </p>
                         </div>
 
                         <div>
@@ -1598,16 +1878,16 @@ export default function TabbedResourcePage({
                         </select>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <div className="flex justify-between items-center mb-1">
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                            <div className="flex items-center justify-between w-full mb-1 gap-2 min-w-0">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main truncate whitespace-nowrap min-w-0">
                                     Unit of Measure (UOM) *
                                 </label>
                                 <button
                                     type="button"
                                     onClick={handleOpenAddUomModal}
-                                    className="text-xs text-primary hover:underline font-bold cursor-pointer"
+                                    className="text-xs text-primary hover:underline font-bold cursor-pointer shrink-0 whitespace-nowrap"
                                 >
                                     + Add New
                                 </button>
@@ -1617,7 +1897,7 @@ export default function TabbedResourcePage({
                                 required
                                 value={typeof formData.uom === 'object' ? formData.uom?._id : (formData.uom || (uomsList[0]?._id || ''))}
                                 onChange={(e) => handleInputChange('uom', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                                className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
                             >
                                 <option value="">-- Select UOM --</option>
                                 {uomsList.map((u) => (
@@ -1629,19 +1909,55 @@ export default function TabbedResourcePage({
                         </div>
 
                         <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Bag Shape
-                            </label>
+                            <div className="flex items-center justify-between w-full mb-1 gap-2 min-w-0">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main truncate whitespace-nowrap min-w-0">
+                                    Bag Shape
+                                </label>
+                                <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
+                                    <button
+                                        type="button"
+                                        onClick={handleOpenAddBagShapeModal}
+                                        className="text-xs text-primary hover:underline font-bold cursor-pointer shrink-0"
+                                    >
+                                        + Add New
+                                    </button>
+                                    {formData.bagShape && formData.bagShape !== 'Other' && (
+                                        <>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleOpenEditBagShapeModal(formData.bagShape)}
+                                                className="text-xs text-text-muted hover:text-primary flex items-center gap-1 font-medium cursor-pointer shrink-0"
+                                                title="Edit selected bag shape"
+                                            >
+                                                <Pencil size={12} />
+                                                <span>Edit</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleDeleteBagShapeInline(formData.bagShape)}
+                                                className="text-xs text-danger hover:underline flex items-center gap-1 font-medium cursor-pointer shrink-0"
+                                                title="Delete selected bag shape"
+                                            >
+                                                <Trash2 size={12} />
+                                                <span>Delete</span>
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
                             <select
                                 name="bagShape"
-                                value={formData.bagShape || 'Flat'}
+                                value={formData.bagShape || ''}
                                 onChange={(e) => handleInputChange('bagShape', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                                className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
                             >
-                                <option value="Flat">Flat</option>
-                                <option value="Gusseted">Gusseted</option>
-                                <option value="Tubular">Tubular</option>
-                                <option value="Pinch Bottom">Pinch Bottom</option>
+                                <option value="">-- Select Shape --</option>
+                                {bagShapesList.map((bs) => (
+                                    <option key={bs._id} value={bs.name}>
+                                        {bs.name}
+                                    </option>
+                                ))}
+                                <option value="Other">Other</option>
                             </select>
                         </div>
                     </div>
@@ -1966,7 +2282,7 @@ export default function TabbedResourcePage({
                     availableStatuses={(() => {
                         const k = (activeTabKey || '').toLowerCase();
                         if (k === 'customers' || k === 'customer') return ['Active', 'Inactive', 'Lead'];
-                        if (k === 'machines' || k === 'machine') return ['Active', 'Inactive', 'AVAILABLE', 'RUNNING', 'MAINTENANCE', 'OFFLINE'];
+                        if (k === 'machines' || k === 'machine') return ['Available', 'In Use', 'Under Maintenance', 'Out of Service'];
                         if (k === 'work-orders' || k === 'workorders' || k === 'stage-monitor') return ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
                         return ['Active', 'Inactive'];
                     })()}
@@ -2040,12 +2356,12 @@ export default function TabbedResourcePage({
 
             {/* INLINE SHIFT CREATION MODAL (Convenience inside Employee Form) */}
             {isInlineShiftModalOpen && (
-                <>
+                <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150">
                     <div
-                        className="fixed inset-0 bg-black/60 z-50 transition-opacity"
+                        className="fixed inset-0"
                         onClick={() => setIsInlineShiftModalOpen(false)}
                     />
-                    <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-card-bg border border-border rounded-xl shadow-2xl z-50 p-6 font-sans">
+                    <div className="relative z-10 w-full max-w-md bg-card-bg border border-border rounded-xl shadow-2xl p-6 font-sans animate-in zoom-in-95 duration-150">
                         <div className="flex justify-between items-center pb-3 mb-4 border-b border-border">
                             <div className="flex items-center gap-2">
                                 <Clock className="text-primary" size={20} />
@@ -2054,7 +2370,7 @@ export default function TabbedResourcePage({
                             <button
                                 type="button"
                                 onClick={() => setIsInlineShiftModalOpen(false)}
-                                className="text-text-muted hover:text-text-main"
+                                className="text-text-muted hover:text-text-main cursor-pointer"
                             >
                                 <X size={16} />
                             </button>
@@ -2145,27 +2461,161 @@ export default function TabbedResourcePage({
                                 <button
                                     type="button"
                                     onClick={() => setIsInlineShiftModalOpen(false)}
-                                    className="px-3 py-1.5 border border-border rounded-lg text-text-main font-semibold"
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="submit"
                                     disabled={isSavingInlineShift}
-                                    className="px-3 py-1.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-bold rounded-lg disabled:opacity-50"
+                                    className="px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-bold rounded-md text-xs disabled:opacity-50 cursor-pointer"
                                 >
                                     {isSavingInlineShift ? 'Creating...' : 'Create & Select Shift'}
                                 </button>
                             </div>
                         </form>
                     </div>
-                </>
+                </div>
+            )}
+
+            {/* Inline Location Modal inside Employee Form */}
+            {isInlineLocationModalOpen && (
+                <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div
+                        className="fixed inset-0"
+                        onClick={() => setIsInlineLocationModalOpen(false)}
+                    />
+                    <div className="relative z-10 w-full max-w-md bg-card-bg border border-border rounded-xl p-6 shadow-2xl space-y-4 font-sans animate-in zoom-in-95 duration-150">
+                        <div className="flex items-center justify-between border-b border-border pb-3">
+                            <div className="flex items-center gap-2">
+                                <MapPin className="text-primary" size={20} />
+                                <h3 className="text-sm font-extrabold text-text-main">Create New Facility / Location</h3>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsInlineLocationModalOpen(false)}
+                                className="text-text-muted hover:text-text-main cursor-pointer"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSaveInlineLocation} className="space-y-3.5 text-xs font-sans">
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Location Code *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        required
+                                        placeholder="e.g. LOC-001"
+                                        value={inlineLocationData.code}
+                                        onChange={(e) => setInlineLocationData({ ...inlineLocationData, code: e.target.value.toUpperCase() })}
+                                        className="w-full border border-border rounded-md p-2 bg-card-bg text-text-main font-mono font-semibold uppercase"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Location Type *
+                                    </label>
+                                    <select
+                                        value={inlineLocationData.type}
+                                        onChange={(e) => setInlineLocationData({ ...inlineLocationData, type: e.target.value })}
+                                        className="w-full border border-border rounded-md p-2 bg-card-bg text-text-main cursor-pointer"
+                                    >
+                                        <option value="FACTORY">Factory</option>
+                                        <option value="WAREHOUSE">Warehouse</option>
+                                        <option value="GODOWN">Godown</option>
+                                        <option value="DISPATCH_ZONE">Dispatch Zone</option>
+                                        <option value="PRODUCTION_FLOOR">Production Floor</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Facility Name *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    placeholder="e.g. Main Extrusion Plant - Unit 1"
+                                    value={inlineLocationData.name}
+                                    onChange={(e) => setInlineLocationData({ ...inlineLocationData, name: e.target.value })}
+                                    className="w-full border border-border rounded-md p-2 bg-card-bg text-text-main"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Address / Details
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. Plot 42, GIDC Industrial Estate"
+                                    value={inlineLocationData.address}
+                                    onChange={(e) => setInlineLocationData({ ...inlineLocationData, address: e.target.value })}
+                                    className="w-full border border-border rounded-md p-2 bg-card-bg text-text-main"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        City
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. Ahmedabad"
+                                        value={inlineLocationData.city}
+                                        onChange={(e) => setInlineLocationData({ ...inlineLocationData, city: e.target.value })}
+                                        className="w-full border border-border rounded-md p-2 bg-card-bg text-text-main"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        State
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. Gujarat"
+                                        value={inlineLocationData.state}
+                                        onChange={(e) => setInlineLocationData({ ...inlineLocationData, state: e.target.value })}
+                                        className="w-full border border-border rounded-md p-2 bg-card-bg text-text-main"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="pt-3 border-t border-border flex justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsInlineLocationModalOpen(false)}
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isSavingInlineLocation}
+                                    className="px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-bold rounded-md text-xs disabled:opacity-50 cursor-pointer"
+                                >
+                                    {isSavingInlineLocation ? 'Creating...' : 'Create & Select Facility'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
             )}
 
             {/* Custom Category Modal */}
             {categoryModal.isOpen && (
-                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
-                    <div className="bg-card-bg rounded-lg shadow-xl w-96 p-6 border border-border space-y-4 font-sans animate-in fade-in zoom-in duration-150">
+                <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div
+                        className="fixed inset-0"
+                        onClick={() => setCategoryModal({ isOpen: false, mode: 'ADD', categoryId: null, inputValue: '', isSaving: false })}
+                    />
+                    <div className="relative z-10 bg-card-bg rounded-xl shadow-2xl w-full max-w-md p-6 border border-border space-y-4 font-sans animate-in zoom-in-95 duration-150">
                         <div className="flex items-center justify-between border-b border-border pb-3">
                             <h3 className="text-sm font-bold text-text-main uppercase tracking-wider">
                                 {categoryModal.mode === 'ADD' ? 'Add New Category' : 'Edit Category'}
@@ -2199,7 +2649,7 @@ export default function TabbedResourcePage({
                                 <button
                                     type="button"
                                     onClick={() => setCategoryModal({ isOpen: false, mode: 'ADD', categoryId: null, inputValue: '', isSaving: false })}
-                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-sidebar-hover transition-colors cursor-pointer"
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
                                 >
                                     Cancel
                                 </button>
@@ -2216,10 +2666,72 @@ export default function TabbedResourcePage({
                 </div>
             )}
 
+            {/* Custom Bag Shape Modal */}
+            {bagShapeModal.isOpen && (
+                <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div
+                        className="fixed inset-0"
+                        onClick={() => setBagShapeModal({ isOpen: false, mode: 'ADD', shapeId: null, inputValue: '', isSaving: false })}
+                    />
+                    <div className="relative z-10 bg-card-bg rounded-xl shadow-2xl w-full max-w-md p-6 border border-border space-y-4 font-sans animate-in zoom-in-95 duration-150">
+                        <div className="flex items-center justify-between border-b border-border pb-3">
+                            <h3 className="text-sm font-bold text-text-main uppercase tracking-wider">
+                                {bagShapeModal.mode === 'ADD' ? 'Add New Bag Shape' : 'Edit Bag Shape'}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setBagShapeModal({ isOpen: false, mode: 'ADD', shapeId: null, inputValue: '', isSaving: false })}
+                                className="text-text-muted hover:text-text-main p-1 rounded-md transition-colors cursor-pointer"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSaveBagShapeModal} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                    Bag Shape Name *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    autoFocus
+                                    placeholder="e.g. Gusseted, Valve, Block Bottom"
+                                    value={bagShapeModal.inputValue}
+                                    onChange={(e) => setBagShapeModal((prev) => ({ ...prev, inputValue: e.target.value }))}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                                <button
+                                    type="button"
+                                    onClick={() => setBagShapeModal({ isOpen: false, mode: 'ADD', shapeId: null, inputValue: '', isSaving: false })}
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={bagShapeModal.isSaving}
+                                    className="px-4 py-2 bg-primary text-white font-semibold rounded-md text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
+                                >
+                                    {bagShapeModal.isSaving ? 'Saving...' : 'Save Bag Shape'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
             {/* Custom UOM Modal */}
             {uomModal.isOpen && (
-                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
-                    <div className="bg-card-bg rounded-lg shadow-xl w-96 p-6 border border-border space-y-4 font-sans animate-in fade-in zoom-in duration-150">
+                <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div
+                        className="fixed inset-0"
+                        onClick={() => setUomModal({ isOpen: false, name: '', abbreviation: '', isSaving: false })}
+                    />
+                    <div className="relative z-10 bg-card-bg rounded-xl shadow-2xl w-full max-w-md p-6 border border-border space-y-4 font-sans animate-in zoom-in-95 duration-150">
                         <div className="flex items-center justify-between border-b border-border pb-3">
                             <h3 className="text-sm font-bold text-text-main uppercase tracking-wider">
                                 Add New Unit of Measure (UOM)
@@ -2267,7 +2779,7 @@ export default function TabbedResourcePage({
                                 <button
                                     type="button"
                                     onClick={() => setUomModal({ isOpen: false, name: '', abbreviation: '', isSaving: false })}
-                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-sidebar-hover transition-colors cursor-pointer"
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
                                 >
                                     Cancel
                                 </button>
@@ -2286,15 +2798,19 @@ export default function TabbedResourcePage({
 
             {/* Custom Confirmation Modal */}
             {confirmModal.isOpen && (
-                <div className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4">
-                    <div className="bg-card-bg rounded-lg shadow-2xl w-[400px] p-6 border border-border space-y-4 font-sans animate-in fade-in zoom-in duration-150">
+                <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div
+                        className="fixed inset-0"
+                        onClick={closeConfirmModal}
+                    />
+                    <div className="relative z-10 bg-card-bg rounded-xl shadow-2xl w-[400px] p-6 border border-border space-y-4 font-sans animate-in zoom-in-95 duration-150">
                         <h3 className="text-lg font-bold text-text-main">{confirmModal.title}</h3>
                         <p className="text-sm text-text-muted mt-2">{confirmModal.message}</p>
                         <div className="mt-6 flex justify-end gap-3 pt-2">
                             <button
                                 type="button"
                                 onClick={closeConfirmModal}
-                                className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-sidebar-hover transition-colors cursor-pointer"
+                                className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
                             >
                                 Cancel
                             </button>

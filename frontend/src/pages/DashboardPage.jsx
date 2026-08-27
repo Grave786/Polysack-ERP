@@ -96,7 +96,7 @@ export default function DashboardPage() {
                 })
                 .catch((err) => {
                     console.error('Error loading dashboard analytics data:', err);
-                    toast.error('Failed to load real-time dashboard metrics');
+                    toast.error('Failed to load real-time dashboard metrics', { id: 'dashboard-metrics-error' });
                 })
                 .finally(() => {
                     setIsLoading(false);

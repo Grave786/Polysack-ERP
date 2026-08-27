@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
+import { getFirstPermittedRoute } from './utils/permissionUtils';
 import ProtectedRoute from './components/ProtectedRoute';
 import DashboardLayout from './components/layout/DashboardLayout';
 import LoginPage from './pages/LoginPage';
@@ -20,6 +21,16 @@ import AdministrationPage from './pages/AdministrationPage';
 import UserManagementPage from './pages/UserManagementPage';
 import RolesManagementPage from './pages/RolesManagementPage';
 import ProfilePage from './pages/ProfilePage';
+import Forbidden403Page from './pages/Forbidden403Page';
+
+function DefaultRouteRedirect() {
+    const user = useAuthStore((state) => state.user);
+    const targetRoute = getFirstPermittedRoute(user);
+    if (targetRoute === '/403') {
+        return <Navigate to="/403" state={{ message: 'No modules assigned — contact your administrator.' }} replace />;
+    }
+    return <Navigate to={targetRoute} replace />;
+}
 
 export default function App() {
     const checkAuth = useAuthStore((state) => state.checkAuth);
@@ -44,8 +55,11 @@ export default function App() {
 
             {/* Protected Group Routes */}
             <Route element={<ProtectedRoute />}>
+                <Route path="/403" element={<Forbidden403Page />} />
                 <Route element={<DashboardLayout />}>
-                    <Route path="/dashboard" element={<DashboardPage />} />
+                    <Route element={<ProtectedRoute requiredModule="DASHBOARD" />}>
+                        <Route path="/dashboard" element={<DashboardPage />} />
+                    </Route>
                     <Route path="/profile" element={<ProfilePage />} />
 
                     {/* Module-specific Protected Routes */}
@@ -102,13 +116,13 @@ export default function App() {
                         <Route path="/roles" element={<RolesManagementPage />} />
                     </Route>
 
-                    {/* Fallback inside dashboard */}
-                    <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                    {/* Fallback inside dashboard layout */}
+                    <Route path="*" element={<DefaultRouteRedirect />} />
                 </Route>
             </Route>
 
             {/* Global Root Fallback */}
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<DefaultRouteRedirect />} />
         </Routes>
     );
 }

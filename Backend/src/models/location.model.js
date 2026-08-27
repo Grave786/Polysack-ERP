@@ -20,6 +20,7 @@ const LocationSchema = new mongoose.Schema({
     type: {
         type: String,
         required: [true, 'Location type is required'],
+        set: (val) => val ? String(val).trim().toUpperCase().replace(/[-\s]+/g, '_') : val,
         enum: {
             values: ['FACTORY', 'WAREHOUSE', 'GODOWN', 'DISPATCH_ZONE', 'PRODUCTION_FLOOR'],
             message: '{VALUE} is not a valid location type.'

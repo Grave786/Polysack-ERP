@@ -18,6 +18,7 @@ const roleRoutes = require('./src/routes/role.routes');
 const userRoutes = require('./src/routes/user.routes');
 const uomRoutes = require('./src/routes/uom.routes');
 const categoryRoutes = require('./src/routes/category.routes');
+const bagShapeRoutes = require('./src/routes/bagShape.routes');
 const locationRoutes = require('./src/routes/location.routes');
 const supplierRoutes = require('./src/routes/supplier.routes');
 const rawMaterialRoutes = require('./src/routes/rawMaterial.routes');
@@ -77,8 +78,31 @@ const initializeSystem = async () => {
     } else {
       console.log(`✅ System Permissions verified (${count}/${EXPECTED_PERMISSIONS_COUNT}).`);
     }
+
+    // Auto-revert POs without GRNs marked as FULLY_RECEIVED / PARTIALLY_RECEIVED
+    const PurchaseOrder = mongoose.model('PurchaseOrder');
+    const GRN = mongoose.model('GRN');
+    const posToRevert = await PurchaseOrder.find({ status: { $in: ['FULLY_RECEIVED', 'PARTIALLY_RECEIVED'] } });
+    for (const po of posToRevert) {
+      const grnCount = await GRN.countDocuments({ purchaseOrder: po._id });
+      if (grnCount === 0) {
+        po.status = 'SENT_TO_SUPPLIER';
+        if (po.items) {
+          po.items.forEach(i => { i.receivedQuantity = 0; });
+        }
+        await po.save();
+        console.log(`✅ Reverted PO ${po.poNumber} status to SENT_TO_SUPPLIER (no GRN created).`);
+      }
+    }
+
+    // Baseline pricePerUnit update for Raw Materials with zero price
+    const RawMaterial = mongoose.model('RawMaterial');
+    await RawMaterial.updateMany(
+      { $or: [{ pricePerUnit: 0 }, { pricePerUnit: { $exists: false } }] },
+      { $set: { pricePerUnit: 120 } }
+    );
   } catch (err) {
-    console.warn('⚠️ Could not verify permission count on boot:', err.message);
+    console.warn('⚠️ Could not verify permission count or PO status on boot:', err.message);
   }
 };
 
@@ -97,6 +121,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/uom', uomRoutes);
 app.use('/api/uoms', uomRoutes);
 app.use('/api/categories', categoryRoutes);
+app.use('/api/bag-shapes', bagShapeRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/suppliers', supplierRoutes);
 app.use('/api/raw-materials', rawMaterialRoutes);

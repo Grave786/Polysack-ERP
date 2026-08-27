@@ -158,15 +158,24 @@ export default function MasterDataPage() {
                             );
                         }
 
-                        const st = row.status || 'AVAILABLE';
+                        const st = (row.status || 'Available').toUpperCase();
                         let badgeStyle = 'bg-emerald-100 text-emerald-800 border border-emerald-200';
-                        if (st === 'IN_USE') badgeStyle = 'bg-blue-100 text-blue-800 border border-blue-200';
-                        if (st === 'UNDER_MAINTENANCE') badgeStyle = 'bg-amber-100 text-amber-800 border border-amber-200';
-                        if (st === 'OUT_OF_SERVICE') badgeStyle = 'bg-rose-100 text-rose-800 border border-rose-200';
+                        let labelText = 'Available';
+
+                        if (st === 'IN_USE' || st === 'IN USE') {
+                            badgeStyle = 'bg-blue-100 text-blue-800 border border-blue-200';
+                            labelText = 'In Use';
+                        } else if (st === 'UNDER_MAINTENANCE' || st === 'UNDER MAINTENANCE' || st === 'MAINTENANCE') {
+                            badgeStyle = 'bg-amber-100 text-amber-800 border border-amber-200';
+                            labelText = 'Under Maintenance';
+                        } else if (st === 'OUT_OF_SERVICE' || st === 'OUT OF SERVICE' || st === 'OFFLINE') {
+                            badgeStyle = 'bg-rose-100 text-rose-800 border border-rose-200';
+                            labelText = 'Out of Service';
+                        }
 
                         return (
                             <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-block ${badgeStyle}`}>
-                                {st.replace(/_/g, ' ')}
+                                {labelText}
                             </span>
                         );
                     }

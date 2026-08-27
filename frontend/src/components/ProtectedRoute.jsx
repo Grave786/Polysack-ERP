@@ -39,8 +39,7 @@ export default function ProtectedRoute({ allowedRoles, requiredModule, requiredA
         if (isSuperAdmin) {
             // Super Admin must NOT access operational ERP modules
             if (requiredModule && ['PRODUCTION', 'QUALITY', 'INVENTORY', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS', 'MASTER_DATA'].includes(requiredModule)) {
-                showSingleAccessDeniedToast('Access Denied: Operational shop-floor modules are reserved for tenant users.');
-                return <Navigate to="/dashboard" replace />;
+                return <Navigate to="/403" replace />;
             }
             return <Outlet />;
         }
@@ -74,8 +73,7 @@ export default function ProtectedRoute({ allowedRoles, requiredModule, requiredA
             }
 
             if (!hasPerm) {
-                showSingleAccessDeniedToast(`Access Denied: You do not have permission to access the '${requiredModule}' module.`);
-                return <Navigate to="/dashboard" replace />;
+                return <Navigate to="/403" replace />;
             }
         }
     }
