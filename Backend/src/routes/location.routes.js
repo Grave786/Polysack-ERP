@@ -7,7 +7,10 @@ const {
     updateLocation,
     deleteLocation
 } = require('../controllers/location.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+router.use(authenticate);
+router.use(checkTenantModule('MASTER_DATA'));
 
 /**
  * @route   POST /api/locations

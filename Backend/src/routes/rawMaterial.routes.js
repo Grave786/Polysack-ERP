@@ -8,7 +8,10 @@ const {
     updateRawMaterial,
     deleteRawMaterial
 } = require('../controllers/rawMaterial.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+router.use(authenticate);
+router.use(checkTenantModule('INVENTORY'));
 
 /**
  * @route   POST /api/raw-materials

@@ -97,9 +97,10 @@ const login = async (req, res) => {
             });
         }
 
-        // 2. Find user by email, select password and populate role with permissions
+        // 2. Find user by email, select password and populate role with permissions & tenant
         const user = await User.findOne({ email })
             .select('+password')
+            .populate('tenant')
             .populate({
                 path: 'role',
                 populate: {
@@ -175,8 +176,13 @@ const login = async (req, res) => {
     }
 };
 
+const DEFAULT_TENANT_MODULES = [
+    'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY',
+    'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS'
+];
+
 /**
- * Helper to format user response with isSuperAdmin & permittedModules
+ * Helper to format user response with isSuperAdmin, tenantEnabledModules & permittedModules
  */
 const formatUserResponse = (userDoc) => {
     const userObj = userDoc.toObject ? userDoc.toObject() : { ...userDoc };
@@ -190,6 +196,11 @@ const formatUserResponse = (userDoc) => {
         userRoleName === 'Super Admin'
     );
 
+    let tenantEnabledModules = DEFAULT_TENANT_MODULES;
+    if (userObj.tenant && typeof userObj.tenant === 'object' && Array.isArray(userObj.tenant.enabledModules) && userObj.tenant.enabledModules.length > 0) {
+        tenantEnabledModules = userObj.tenant.enabledModules;
+    }
+
     let permittedModules = [];
     if (isSuperAdmin) {
         permittedModules = ['SUPER_ADMIN_PANEL', 'TENANTS', 'USERS', 'ROLES', 'DASHBOARD'];
@@ -202,6 +213,7 @@ const formatUserResponse = (userDoc) => {
     }
 
     userObj.isSuperAdmin = isSuperAdmin;
+    userObj.tenantEnabledModules = tenantEnabledModules;
     userObj.permittedModules = permittedModules;
     return userObj;
 };
@@ -216,6 +228,7 @@ const getMe = async (req, res) => {
         const userId = req.user?._id || req.user?.id;
         const user = await User.findById(userId)
             .select('-password')
+            .populate('tenant')
             .populate({
                 path: 'role',
                 populate: {

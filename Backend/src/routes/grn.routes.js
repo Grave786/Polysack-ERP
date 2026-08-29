@@ -5,7 +5,10 @@ const {
     getGRNs,
     getGRNById
 } = require('../controllers/grn.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+router.use(authenticate);
+router.use(checkTenantModule('PROCUREMENT'));
 
 /**
  * @route   POST /api/grns

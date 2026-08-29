@@ -8,7 +8,10 @@ const {
     updateShift,
     deleteShift
 } = require('../controllers/shift.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+router.use(authenticate);
+router.use(checkTenantModule('HR'));
 
 /**
  * @route   POST /api/shifts

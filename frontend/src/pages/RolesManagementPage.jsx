@@ -4,6 +4,8 @@ import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../store/authStore';
+import { checkIsSuperAdmin } from '../utils/permissionUtils';
 
 const MODULE_LABELS = {
     SALES: 'POS Billing & Sales Orders',
@@ -28,6 +30,9 @@ const ACTION_COLORS = {
 };
 
 export default function RolesManagementPage() {
+    const user = useAuthStore((state) => state.user);
+    const isSuperAdmin = checkIsSuperAdmin(user);
+
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [editingRoleId, setEditingRoleId] = useState(null);
     const [refreshKey, setRefreshKey] = useState(0);
@@ -352,7 +357,16 @@ export default function RolesManagementPage() {
                             </div>
                         ) : (
                             <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
-                                {Object.keys(groupedPermissions).map((moduleName) => {
+                                {Object.keys(groupedPermissions)
+                                    .filter((moduleName) => {
+                                        if (isSuperAdmin) return true;
+                                        if (['USERS', 'ROLES'].includes(moduleName)) return true;
+                                        const tenantModules = user?.tenantEnabledModules || user?.tenant?.enabledModules || [
+                                            'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY', 'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS'
+                                        ];
+                                        return tenantModules.includes(moduleName);
+                                    })
+                                    .map((moduleName) => {
                                     const perms = groupedPermissions[moduleName];
                                     const modulePermIds = perms.map((p) => p._id);
                                     const allSelected = modulePermIds.every((id) => selectedPermissionIds.includes(id));

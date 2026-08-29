@@ -26,9 +26,7 @@ const SIDEBAR_SECTIONS = [
         superAdminOnly: true,
         items: [
             { name: 'System Dashboard', path: '/dashboard', icon: LayoutDashboard },
-            { name: 'Tenant Accounts', path: '/administration/tenants', icon: Building2 },
-            { name: 'System Roles', path: '/administration/roles', icon: ShieldCheck },
-            { name: 'Platform Users', path: '/administration/users', icon: Users }
+            { name: 'Tenant Accounts', path: '/administration/tenants', icon: Building2 }
         ]
     },
     {
@@ -52,7 +50,7 @@ const SIDEBAR_SECTIONS = [
         title: 'COMMERCIAL',
         tenantOnly: true,
         items: [
-            { name: 'POS Billing Terminal', path: '/pos', icon: CreditCard, module: 'SALES' },
+            { name: 'POS Billing Terminal', path: '/pos', icon: CreditCard, module: 'POS' },
             { name: 'Sales & Billing', path: '/sales', icon: Receipt, module: 'SALES' },
             { name: 'Purchase & GRN', path: '/procurement', icon: ShoppingBag, module: 'PROCUREMENT' },
             { name: 'Customer CRM', path: '/customer-crm', icon: Contact, module: 'CRM' },
@@ -79,13 +77,10 @@ export default function Sidebar({ isOpen, onClose }) {
     const isTenantAdmin = checkIsTenantAdmin(user);
 
     const isItemVisible = (item) => {
-        // Super Admin sees ONLY the 4 designated platform management links
+        // Super Admin sees ONLY System Dashboard and Tenant Accounts
         if (isSuperAdmin) {
-            return ['/dashboard', '/administration/tenants', '/administration/roles', '/administration/users'].includes(item.path);
+            return ['/dashboard', '/administration/tenants'].includes(item.path);
         }
-
-        // Tenant Admin sees all tenant modules
-        if (isTenantAdmin) return true;
 
         if (item.module) {
             return hasModulePermission(user, item.module);
@@ -106,9 +101,8 @@ export default function Sidebar({ isOpen, onClose }) {
 
             {/* Sidebar Shell */}
             <aside
-                className={`fixed lg:static top-0 left-0 h-full z-50 lg:z-auto w-64 min-w-64 max-w-64 shrink-0 bg-sidebar-bg border-r border-sidebar-hover flex flex-col overflow-y-auto overflow-x-hidden text-sidebar-text font-sans transform transition-transform duration-200 ${
-                    isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-                }`}
+                className={`fixed lg:static top-0 left-0 h-full z-50 lg:z-auto w-64 min-w-64 max-w-64 shrink-0 bg-sidebar-bg border-r border-sidebar-hover flex flex-col overflow-y-auto overflow-x-hidden text-sidebar-text font-sans transform transition-transform duration-200 ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+                    }`}
             >
                 {/* Mobile Close Button in Sidebar Header */}
                 <div className="p-3 flex items-center justify-between lg:hidden border-b border-sidebar-hover">
@@ -146,10 +140,9 @@ export default function Sidebar({ isOpen, onClose }) {
                                             end={true}
                                             onClick={onClose}
                                             className={({ isActive }) =>
-                                                `flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap overflow-hidden transition-all duration-150 ${
-                                                    isActive
-                                                        ? 'bg-primary text-sidebar-bg font-bold shadow-xs'
-                                                        : 'text-sidebar-text hover:bg-sidebar-hover hover:text-sidebar-text-active'
+                                                `flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap overflow-hidden transition-all duration-150 ${isActive
+                                                    ? 'bg-primary text-sidebar-bg font-bold shadow-xs'
+                                                    : 'text-sidebar-text hover:bg-sidebar-hover hover:text-sidebar-text-active'
                                                 }`
                                             }
                                         >

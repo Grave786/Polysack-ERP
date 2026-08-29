@@ -1,9 +1,23 @@
 import { useState, useEffect } from 'react';
-import { Building2, RefreshCw, Save, CheckCircle, Plus, Edit2, ShieldAlert, Check, X, UserCheck } from 'lucide-react';
+import { Building2, RefreshCw, Save, CheckCircle, Plus, Edit2, ShieldAlert, Check, X, UserCheck, Layers, ShieldCheck } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
+
+const PLATFORM_MODULES = [
+    { key: 'MASTER_DATA', label: 'Master Data & Industrial Specs', category: 'Core ERP', description: 'Products, Raw Materials, Machines, Categories, Bag Shapes & UOMs' },
+    { key: 'PRODUCTION', label: 'Production & Shop Floor', category: 'Operations', description: 'Work Orders, Job Cards & Flexible Starting Stage routing' },
+    { key: 'QUALITY', label: 'Quality Control & COA', category: 'Operations', description: 'Raw material & finished good QC inspections, defect logs & COA certificates' },
+    { key: 'INVENTORY', label: 'Inventory & Stock Master', category: 'Operations', description: 'Real-time stock ledger, batch tracking, warehouse bin transfers & low stock alerts' },
+    { key: 'POS', label: 'POS Billing Terminal', category: 'Commercial', description: 'Fast retail counter sales, cash/UPI payments & instant thermal receipt generation' },
+    { key: 'SALES', label: 'Sales & Invoicing', category: 'Commercial', description: 'Sales Orders, Tax Invoices, payment receipts & overdue collections tracking' },
+    { key: 'PROCUREMENT', label: 'Purchase & GRN Inward', category: 'Commercial', description: 'Purchase Orders, Vendor management & Goods Receipt Note inward workflows' },
+    { key: 'CRM', label: 'Customer Relations & CRM', category: 'Commercial', description: 'Lead pipelines, customer interaction logs & complaint resolution management' },
+    { key: 'DISPATCH', label: 'Dispatch & Delivery', category: 'Commercial', description: 'Delivery Challans, Vehicle loading, E-way bill & Proof of Delivery approval' },
+    { key: 'HR', label: 'Attendance & HR Management', category: 'Management', description: 'Employee shifts, biometric attendance logs, leave & payroll records' },
+    { key: 'ANALYTICS', label: 'Analytics & Executive Reports', category: 'Management', description: 'Financial dashboards, machine productivity KPIs & comprehensive audit reports' }
+];
 
 export default function AdministrationPage() {
     const user = useAuthStore((state) => state.user);
@@ -25,7 +39,11 @@ export default function AdministrationPage() {
     const [tenantsList, setTenantsList] = useState([]);
     const [isCreateTenantDrawerOpen, setIsCreateTenantDrawerOpen] = useState(false);
     const [isEditTenantDrawerOpen, setIsEditTenantDrawerOpen] = useState(false);
+    const [isModulesDrawerOpen, setIsModulesDrawerOpen] = useState(false);
     const [selectedTenantId, setSelectedTenantId] = useState(null);
+    const [selectedTenantForModules, setSelectedTenantForModules] = useState(null);
+    const [tenantModulesForm, setTenantModulesForm] = useState([]);
+    const [isSavingModules, setIsSavingModules] = useState(false);
 
     // Create Tenant Form State
     const [newTenantForm, setNewTenantForm] = useState({
@@ -242,6 +260,61 @@ export default function AdministrationPage() {
         }
     };
 
+    // Open Manage Modules Drawer
+    const handleOpenManageModules = (tenant) => {
+        setSelectedTenantForModules(tenant);
+        setTenantModulesForm(Array.isArray(tenant.enabledModules) && tenant.enabledModules.length > 0
+            ? tenant.enabledModules
+            : PLATFORM_MODULES.map((m) => m.key)
+        );
+        setIsModulesDrawerOpen(true);
+    };
+
+    // Toggle a single module checkbox
+    const handleToggleModule = (key) => {
+        setTenantModulesForm((prev) => {
+            if (prev.includes(key)) {
+                return prev.filter((k) => k !== key);
+            } else {
+                return [...prev, key];
+            }
+        });
+    };
+
+    // Select all modules
+    const handleSelectAllModules = () => {
+        setTenantModulesForm(PLATFORM_MODULES.map((m) => m.key));
+    };
+
+    // Deselect all modules
+    const handleDeselectAllModules = () => {
+        setTenantModulesForm([]);
+    };
+
+    // Save Tenant Modules
+    const handleSaveTenantModules = async (e) => {
+        e.preventDefault();
+        if (!selectedTenantForModules) return;
+
+        try {
+            setIsSavingModules(true);
+            const res = await axiosInstance.patch(`/super-admin/tenants/${selectedTenantForModules._id}/modules`, {
+                enabledModules: tenantModulesForm
+            });
+
+            if (res.data?.success) {
+                toast.success(`Module access for ${selectedTenantForModules.companyName || selectedTenantForModules.name} updated!`);
+                setIsModulesDrawerOpen(false);
+                refreshTenants();
+            }
+        } catch (err) {
+            console.error('Error saving tenant modules:', err);
+            toast.error(err.response?.data?.message || 'Failed to update tenant module access');
+        } finally {
+            setIsSavingModules(false);
+        }
+    };
+
     // Save Tenant Admin Self Company Profile
     const handleSubmitSelfProfile = async (e) => {
         e.preventDefault();
@@ -327,6 +400,7 @@ export default function AdministrationPage() {
                                     <th className="p-3 border-b border-border font-mono">GSTIN</th>
                                     <th className="p-3 border-b border-border">State</th>
                                     <th className="p-3 border-b border-border">Contact Email</th>
+                                    <th className="p-3 border-b border-border">Tenant Admin</th>
                                     <th className="p-3 border-b border-border font-mono">Users</th>
                                     <th className="p-3 border-b border-border">Status</th>
                                     <th className="p-3 border-b border-border text-right">Actions</th>
@@ -335,7 +409,7 @@ export default function AdministrationPage() {
                             <tbody className="divide-y divide-border">
                                 {tenantsList.length === 0 ? (
                                     <tr>
-                                        <td colSpan={7} className="p-8 text-center text-text-muted">
+                                        <td colSpan={8} className="p-8 text-center text-text-muted">
                                             No tenant accounts registered on platform yet.
                                         </td>
                                     </tr>
@@ -350,6 +424,16 @@ export default function AdministrationPage() {
                                             </td>
                                             <td className="p-3 text-text-muted">{t.stateName || 'Gujarat'}</td>
                                             <td className="p-3 font-mono text-text-muted">{t.email || '-'}</td>
+                                            <td className="p-3">
+                                                {t.tenantAdmin ? (
+                                                    <div className="space-y-0.5">
+                                                        <div className="font-bold text-text-main text-xs">{t.tenantAdmin.name}</div>
+                                                        <div className="font-mono text-[11px] text-text-muted">{t.tenantAdmin.email}</div>
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-text-muted italic text-[11px]">No Admin Found</span>
+                                                )}
+                                            </td>
                                             <td className="p-3 font-mono font-bold text-text-main">
                                                 {t.userCount || 0}
                                             </td>
@@ -364,6 +448,15 @@ export default function AdministrationPage() {
                                             </td>
                                             <td className="p-3 text-right">
                                                 <div className="flex items-center justify-end gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleOpenManageModules(t)}
+                                                        className="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 rounded text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                                        title="Configure Enabled Top-Level Modules for this Tenant"
+                                                    >
+                                                        <Layers size={13} />
+                                                        <span>Modules</span>
+                                                    </button>
                                                     <button
                                                         type="button"
                                                         onClick={() => handleOpenEditTenant(t._id)}
@@ -683,6 +776,102 @@ export default function AdministrationPage() {
                             >
                                 <Save size={16} />
                                 <span>{isSaving ? 'Updating Profile...' : 'Save Tenant GST Profile'}</span>
+                            </button>
+                        </div>
+                    </form>
+                </SlideOverPanel>
+
+                {/* Drawer 3: Manage Tenant Module Entitlements */}
+                <SlideOverPanel
+                    isOpen={isModulesDrawerOpen}
+                    onClose={() => setIsModulesDrawerOpen(false)}
+                    title={`Module Entitlements: ${selectedTenantForModules?.companyName || selectedTenantForModules?.name || 'Tenant'}`}
+                    subtitle="Control top-level ERP module access for this tenant organization"
+                >
+                    <form onSubmit={handleSaveTenantModules} className="space-y-4 font-sans text-xs">
+                        {/* Header & Global Toggles */}
+                        <div className="p-3 bg-app-bg border border-border rounded-xl flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-primary" />
+                                <span className="font-extrabold text-xs text-text-main uppercase tracking-wider">
+                                    Enabled Modules ({tenantModulesForm.length}/{PLATFORM_MODULES.length})
+                                </span>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleSelectAllModules}
+                                    className="text-[11px] font-bold text-primary hover:underline cursor-pointer"
+                                >
+                                    Select All
+                                </button>
+                                <span className="text-text-muted text-xs">•</span>
+                                <button
+                                    type="button"
+                                    onClick={handleDeselectAllModules}
+                                    className="text-[11px] font-bold text-rose-600 hover:underline cursor-pointer"
+                                >
+                                    Deselect All
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Modules Checklist */}
+                        <div className="space-y-2.5 max-h-[65vh] overflow-y-auto pr-1">
+                            {PLATFORM_MODULES.map((m) => {
+                                const isChecked = tenantModulesForm.includes(m.key);
+                                return (
+                                    <div
+                                        key={m.key}
+                                        onClick={() => handleToggleModule(m.key)}
+                                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-start gap-3 select-none ${
+                                            isChecked
+                                                ? 'bg-primary/5 border-primary/40 shadow-2xs'
+                                                : 'bg-card-bg border-border opacity-70 hover:opacity-100 hover:border-border/80'
+                                        }`}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={() => {}} // Controlled by outer div click
+                                            className="mt-0.5 rounded border-border text-primary focus:ring-primary accent-primary cursor-pointer shrink-0"
+                                        />
+
+                                        <div className="space-y-0.5 min-w-0 flex-1">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="font-extrabold text-xs text-text-main">
+                                                    {m.label}
+                                                </span>
+                                                <span className="text-[10px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-app-bg text-text-muted border border-border shrink-0">
+                                                    {m.category}
+                                                </span>
+                                            </div>
+                                            <p className="text-[11px] text-text-muted leading-relaxed">
+                                                {m.description}
+                                            </p>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        {/* Footer Actions */}
+                        <div className="pt-4 border-t border-border flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setIsModulesDrawerOpen(false)}
+                                className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={isSavingModules}
+                                className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            >
+                                <Save size={16} />
+                                <span>{isSavingModules ? 'Saving Entitlements...' : 'Save Module Entitlements'}</span>
                             </button>
                         </div>
                     </form>

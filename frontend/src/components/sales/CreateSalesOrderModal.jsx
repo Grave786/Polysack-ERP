@@ -376,6 +376,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                             <input
                                 type="date"
                                 required
+                                min={new Date().toISOString().split('T')[0]}
                                 value={deliveryDue}
                                 onChange={(e) => setDeliveryDue(e.target.value)}
                                 className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"

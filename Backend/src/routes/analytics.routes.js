@@ -1,8 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { getFinancialSummary } = require('../controllers/analytics.controller');
-const { authenticate } = require('../middlewares/rbac.middleware');
+const { authenticate, checkTenantModule } = require('../middlewares/rbac.middleware');
 
-router.get('/financial-summary', authenticate, getFinancialSummary);
+router.use(authenticate);
+router.use(checkTenantModule('ANALYTICS'));
+
+router.get('/financial-summary', getFinancialSummary);
 
 module.exports = router;

@@ -62,6 +62,22 @@ const TenantSchema = new mongoose.Schema({
         type: Boolean,
         default: true
     },
+    enabledModules: {
+        type: [String],
+        default: [
+            'MASTER_DATA',
+            'PRODUCTION',
+            'QUALITY',
+            'INVENTORY',
+            'POS',
+            'SALES',
+            'PROCUREMENT',
+            'CRM',
+            'DISPATCH',
+            'HR',
+            'ANALYTICS'
+        ]
+    },
     productionSettings: {
         activeStartingStage: {
             type: String,

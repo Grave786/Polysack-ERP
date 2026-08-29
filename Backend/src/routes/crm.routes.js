@@ -20,7 +20,11 @@ const {
     updateComplaint,
     deleteComplaint
 } = require('../controllers/crm.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+// Protect all CRM routes with authentication and tenant CRM module entitlement
+router.use(authenticate);
+router.use(checkTenantModule('CRM'));
 
 // ==========================================
 // 1. CUSTOMER INTERACTIONS ROUTES

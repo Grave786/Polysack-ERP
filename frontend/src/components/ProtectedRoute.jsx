@@ -1,18 +1,6 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import toast from 'react-hot-toast';
-
-let isAccessDeniedToastShowing = false;
-
-const showSingleAccessDeniedToast = (msg) => {
-    if (!isAccessDeniedToastShowing) {
-        isAccessDeniedToastShowing = true;
-        toast.error(msg || 'Access Denied: You do not have permission to access this module.');
-        setTimeout(() => {
-            isAccessDeniedToastShowing = false;
-        }, 3000);
-    }
-};
+import { isTenantModuleEnabled, checkIsSuperAdmin, checkIsTenantAdmin } from '../utils/permissionUtils';
 
 export default function ProtectedRoute({ allowedRoles, requiredModule, requiredAction }) {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -32,48 +20,55 @@ export default function ProtectedRoute({ allowedRoles, requiredModule, requiredA
     }
 
     if (user) {
-        const userRoleName = (user.roleName || (typeof user.role === 'object' ? user.role?.name : user.role) || '').toLowerCase();
-        const isSuperAdmin = Boolean(user.isSuperAdmin || !user.tenant || user.email === 'superadmin@polysack.com' || userRoleName === 'super admin' || userRoleName === 'super_admin');
+        const isSuperAdmin = checkIsSuperAdmin(user);
 
         // 1. Super Admin Route Scoping
         if (isSuperAdmin) {
             // Super Admin must NOT access operational ERP modules
-            if (requiredModule && ['PRODUCTION', 'QUALITY', 'INVENTORY', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS', 'MASTER_DATA'].includes(requiredModule)) {
-                return <Navigate to="/403" replace />;
+            if (requiredModule && ['PRODUCTION', 'QUALITY', 'INVENTORY', 'SALES', 'POS', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS', 'MASTER_DATA'].includes(requiredModule)) {
+                return <Navigate to="/403" state={{ message: "Super Admin accounts do not access operational tenant modules directly." }} replace />;
             }
             return <Outlet />;
         }
 
-        // 2. Tenant User Permission Check
+        // 2. Tenant Module Entitlement Check (Platform-Level Plan Enforcement)
+        if (requiredModule && !isTenantModuleEnabled(user, requiredModule)) {
+            return (
+                <Navigate
+                    to="/403"
+                    state={{ message: "This module is not included in your organization's plan. Contact support to enable it." }}
+                    replace
+                />
+            );
+        }
+
+        // 3. Tenant User Permission Check (User RBAC)
         if (requiredModule) {
+            if (checkIsTenantAdmin(user)) {
+                return <Outlet />;
+            }
+
             const permittedModules = user.permittedModules || [];
             const permissions = user.role?.permissions || user.permissions || [];
 
             let hasPerm = false;
 
             if (permittedModules.length > 0) {
-                hasPerm = permittedModules.includes(requiredModule);
+                if (permittedModules.includes(requiredModule)) hasPerm = true;
+                if (requiredModule === 'POS' && permittedModules.includes('SALES')) hasPerm = true;
             }
 
             if (!hasPerm && Array.isArray(permissions) && permissions.length > 0) {
                 hasPerm = permissions.some((p) => {
-                    if (typeof p === 'object') {
-                        if (requiredAction) {
-                            return p.module === requiredModule && p.action === requiredAction;
-                        }
-                        return p.module === requiredModule;
-                    }
-                    return String(p).startsWith(requiredModule);
+                    const m = typeof p === 'object' ? p.module : String(p);
+                    if (m === requiredModule) return true;
+                    if (requiredModule === 'POS' && m.startsWith('SALES')) return true;
+                    return m.startsWith(requiredModule);
                 });
             }
 
-            // Tenant Admin role fallback for all modules
-            if (userRoleName.includes('admin') || userRoleName.includes('tenant admin')) {
-                hasPerm = true;
-            }
-
             if (!hasPerm) {
-                return <Navigate to="/403" replace />;
+                return <Navigate to="/403" state={{ message: "You don't have permission to access this module." }} replace />;
             }
         }
     }

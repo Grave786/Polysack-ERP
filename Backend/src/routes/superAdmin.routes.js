@@ -7,7 +7,8 @@ const {
     getTenantProfileByTenantId,
     updateTenantProfileByTenantId,
     toggleTenantStatus,
-    getTenantAdmins
+    getTenantAdmins,
+    updateTenantModules
 } = require('../controllers/superAdmin.controller');
 
 /**
@@ -69,5 +70,6 @@ router.get('/tenants/:tenantId/company-profile', getTenantProfileByTenantId);
 router.patch('/tenants/:tenantId/company-profile', updateTenantProfileByTenantId);
 router.put('/tenants/:tenantId/company-profile', updateTenantProfileByTenantId);
 router.patch('/tenants/:tenantId/status', toggleTenantStatus);
+router.patch('/tenants/:tenantId/modules', updateTenantModules);
 
 module.exports = router;

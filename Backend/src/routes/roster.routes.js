@@ -1,7 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { createRoster, getRosters, deleteRoster } = require('../controllers/roster.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+router.use(authenticate);
+router.use(checkTenantModule('HR'));
 
 router.post('/', authenticate, checkPermission('USERS', 'CREATE'), createRoster);
 router.get('/', authenticate, checkPermission('USERS', 'READ'), getRosters);

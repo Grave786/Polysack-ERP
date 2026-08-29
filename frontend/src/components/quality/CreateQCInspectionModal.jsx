@@ -1,21 +1,23 @@
-import { useState, useEffect } from 'react';
-import { ShieldCheck, RefreshCw, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { ShieldCheck, RefreshCw, AlertCircle, CheckCircle2, PackageCheck } from 'lucide-react';
 import SlideOverPanel from '../shared/SlideOverPanel';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
 export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, defaultType = 'INBOUND' }) {
     const [inspectionType, setInspectionType] = useState(defaultType);
-    const [workOrders, setWorkOrders] = useState([]);
+    const [pendingInbound, setPendingInbound] = useState([]);
+    const [pendingOutbound, setPendingOutbound] = useState([]);
     const [rawMaterials, setRawMaterials] = useState([]);
-    const [grns, setGrns] = useState([]);
     const [isLoadingOptions, setIsLoadingOptions] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
+    // Selected target keys
+    const [selectedInboundKey, setSelectedInboundKey] = useState(''); // `${grnId}_${rmId}` or 'DIRECT'
+    const [selectedDirectRmId, setSelectedDirectRmId] = useState('');
+    const [selectedWorkOrderId, setSelectedWorkOrderId] = useState('');
+
     const [formData, setFormData] = useState({
-        workOrder: '',
-        rawMaterial: '',
-        grn: '',
         sampleSize: 50,
         passedQty: 50,
         rejectedQty: 0,
@@ -24,55 +26,90 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
         defects: ''
     });
 
+    // Fetch pending QC targets on open
+    const fetchPendingTargets = () => {
+        setIsLoadingOptions(true);
+        Promise.all([
+            axiosInstance.get('/qc-inspections/pending-targets').catch(() => ({ data: { data: { inbound: [], outbound: [] } } })),
+            axiosInstance.get('/raw-materials?limit=100').catch(() => ({ data: { data: [] } }))
+        ])
+            .then(([targetsRes, rmRes]) => {
+                const inboundList = targetsRes.data?.data?.inbound || [];
+                const outboundList = targetsRes.data?.data?.outbound || [];
+                const rmList = rmRes.data?.data || [];
+
+                setPendingInbound(inboundList);
+                setPendingOutbound(outboundList);
+                setRawMaterials(rmList);
+
+                // Initialize defaults
+                if (inboundList.length > 0) {
+                    const first = inboundList[0];
+                    setSelectedInboundKey(`${first.grnId}_${first.rawMaterial._id}`);
+                    setFormData((prev) => ({
+                        ...prev,
+                        passedQty: Math.min(prev.passedQty, first.remainingQuantity),
+                        sampleSize: Math.min(prev.sampleSize, first.remainingQuantity)
+                    }));
+                } else if (rmList.length > 0) {
+                    setSelectedInboundKey('DIRECT');
+                    setSelectedDirectRmId(rmList[0]._id);
+                }
+
+                if (outboundList.length > 0) {
+                    const firstWo = outboundList[0];
+                    setSelectedWorkOrderId(firstWo.workOrderId);
+                }
+            })
+            .finally(() => setIsLoadingOptions(false));
+    };
+
     useEffect(() => {
         if (isOpen) {
             setInspectionType(defaultType);
-            setIsLoadingOptions(true);
-
-            Promise.all([
-                axiosInstance.get('/work-orders?limit=100').catch(() => ({ data: { data: [] } })),
-                axiosInstance.get('/raw-materials?limit=100').catch(() => ({ data: { data: [] } })),
-                axiosInstance.get('/grns?limit=100').catch(() => ({ data: { data: [] } }))
-            ])
-                .then(([woRes, rmRes, grnRes]) => {
-                    const woList = woRes.data?.data || [];
-                    const rmList = rmRes.data?.data || [];
-                    const grnList = grnRes.data?.data || [];
-
-                    setWorkOrders(woList);
-                    setRawMaterials(rmList);
-                    setGrns(grnList);
-
-                    setFormData((prev) => ({
-                        ...prev,
-                        workOrder: prev.workOrder || (woList[0]?._id || ''),
-                        rawMaterial: prev.rawMaterial || (rmList[0]?._id || ''),
-                        grn: prev.grn || (grnList[0]?._id || '')
-                    }));
-                })
-                .finally(() => setIsLoadingOptions(false));
+            fetchPendingTargets();
         }
     }, [isOpen, defaultType]);
+
+    // Active selected inbound item metadata
+    const activeInboundItem = useMemo(() => {
+        if (selectedInboundKey === 'DIRECT' || !selectedInboundKey) return null;
+        return pendingInbound.find((item) => `${item.grnId}_${item.rawMaterial._id}` === selectedInboundKey) || null;
+    }, [selectedInboundKey, pendingInbound]);
+
+    // Active selected outbound work order metadata
+    const activeOutboundItem = useMemo(() => {
+        if (!selectedWorkOrderId) return null;
+        return pendingOutbound.find((wo) => String(wo.workOrderId) === String(selectedWorkOrderId)) || null;
+    }, [selectedWorkOrderId, pendingOutbound]);
+
+    // Calculate max allowed inspectable quantity for current selection
+    const maxAllowedQty = useMemo(() => {
+        if (inspectionType === 'INBOUND') {
+            return activeInboundItem ? activeInboundItem.remainingQuantity : null;
+        } else {
+            return activeOutboundItem ? activeOutboundItem.remainingQuantity : null;
+        }
+    }, [inspectionType, activeInboundItem, activeOutboundItem]);
+
+    const totalTested = Number(formData.passedQty || 0) + Number(formData.rejectedQty || 0);
+    const isExceedingRemaining = maxAllowedQty !== null && totalTested > maxAllowedQty;
 
     const handleSubmit = async (e) => {
         e.preventDefault();
 
-        if (inspectionType === 'OUTBOUND' && !formData.workOrder) {
-            toast.error('Please select a Work Order');
-            return;
-        }
-
-        if (inspectionType === 'INBOUND' && !formData.rawMaterial) {
-            toast.error('Please select a Raw Material');
-            return;
-        }
-
         const sampleSizeNum = Number(formData.sampleSize || 1);
         const passedQtyNum = Number(formData.passedQty || 0);
         const rejectedQtyNum = Number(formData.rejectedQty || 0);
+        const sumTested = passedQtyNum + rejectedQtyNum;
 
-        if (passedQtyNum + rejectedQtyNum <= 0) {
+        if (sumTested <= 0) {
             toast.error('Passed Qty + Rejected Qty must be greater than 0');
+            return;
+        }
+
+        if (maxAllowedQty !== null && sumTested > maxAllowedQty) {
+            toast.error(`Cannot inspect ${sumTested} units. Max remaining inspectable quantity is ${maxAllowedQty}.`);
             return;
         }
 
@@ -89,10 +126,21 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
             };
 
             if (inspectionType === 'INBOUND') {
-                payload.rawMaterial = formData.rawMaterial;
-                if (formData.grn) payload.grn = formData.grn;
+                if (activeInboundItem) {
+                    payload.grn = activeInboundItem.grnId;
+                    payload.rawMaterial = activeInboundItem.rawMaterial._id;
+                } else if (selectedDirectRmId) {
+                    payload.rawMaterial = selectedDirectRmId;
+                } else {
+                    toast.error('Please select a target Raw Material or GRN line item.');
+                    return;
+                }
             } else {
-                payload.workOrder = formData.workOrder;
+                if (!selectedWorkOrderId) {
+                    toast.error('Please select a Work Order.');
+                    return;
+                }
+                payload.workOrder = selectedWorkOrderId;
             }
 
             const res = await axiosInstance.post('/qc-inspections', payload);
@@ -157,61 +205,137 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                 {inspectionType === 'INBOUND' ? (
                     <>
                         <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Target Raw Material *
-                            </label>
+                            <div className="flex items-center justify-between mb-1">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                    Target Inbound GRN Line Item *
+                                </label>
+                                <span className="text-[10px] text-text-muted">
+                                    {pendingInbound.length} pending line item(s)
+                                </span>
+                            </div>
                             <select
                                 required
-                                value={formData.rawMaterial}
-                                onChange={(e) => setFormData({ ...formData, rawMaterial: e.target.value })}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
+                                value={selectedInboundKey}
+                                onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSelectedInboundKey(val);
+                                    const match = pendingInbound.find((item) => `${item.grnId}_${item.rawMaterial._id}` === val);
+                                    if (match) {
+                                        setFormData((prev) => ({
+                                            ...prev,
+                                            passedQty: Math.min(prev.passedQty || match.remainingQuantity, match.remainingQuantity),
+                                            sampleSize: Math.min(prev.sampleSize || 50, match.remainingQuantity)
+                                        }));
+                                    }
+                                }}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans font-medium"
                             >
-                                <option value="">-- Select Raw Material --</option>
-                                {rawMaterials.map((rm) => (
-                                    <option key={rm._id} value={rm._id}>
-                                        {rm.name} ({rm.code || rm.uom?.name || 'KG'})
+                                {pendingInbound.map((item) => (
+                                    <option
+                                        key={`${item.grnId}_${item.rawMaterial._id}`}
+                                        value={`${item.grnId}_${item.rawMaterial._id}`}
+                                    >
+                                        {item.grnNumber} — {item.rawMaterial.name} ({item.remainingQuantity} {item.rawMaterial.uom || 'KG'} remaining of {item.receivedQuantity})
+                                    </option>
+                                ))}
+                                <option value="DIRECT">-- Direct Inward / No GRN --</option>
+                            </select>
+                        </div>
+
+                        {selectedInboundKey === 'DIRECT' && (
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                    Select Raw Material *
+                                </label>
+                                <select
+                                    required
+                                    value={selectedDirectRmId}
+                                    onChange={(e) => setSelectedDirectRmId(e.target.value)}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
+                                >
+                                    <option value="">-- Select Raw Material --</option>
+                                    {rawMaterials.map((rm) => (
+                                        <option key={rm._id} value={rm._id}>
+                                            {rm.name} ({rm.code || rm.uom?.name || 'KG'})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+
+                        {activeInboundItem && (
+                            <div className="p-3 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg flex items-center justify-between text-xs">
+                                <div>
+                                    <span className="text-text-muted">GRN / PO Ref: </span>
+                                    <span className="font-bold text-text-main font-mono">{activeInboundItem.grnNumber} ({activeInboundItem.poNumber})</span>
+                                    <div className="text-[11px] text-text-muted mt-0.5">
+                                        Received: <strong className="text-text-main">{activeInboundItem.receivedQuantity}</strong> | Already Inspected: <strong className="text-text-main">{activeInboundItem.alreadyInspected}</strong>
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <span className="text-[10px] uppercase font-bold text-blue-700 dark:text-blue-300 block">Remaining to QC</span>
+                                    <span className="text-sm font-black font-mono text-blue-800 dark:text-blue-200">
+                                        {activeInboundItem.remainingQuantity} {activeInboundItem.rawMaterial.uom || 'KG'}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+                    </>
+                ) : (
+                    <>
+                        <div>
+                            <div className="flex items-center justify-between mb-1">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                    Target Work Order *
+                                </label>
+                                <span className="text-[10px] text-text-muted">
+                                    {pendingOutbound.length} pending Work Order(s)
+                                </span>
+                            </div>
+                            <select
+                                required
+                                value={selectedWorkOrderId}
+                                onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSelectedWorkOrderId(val);
+                                    const match = pendingOutbound.find((wo) => String(wo.workOrderId) === String(val));
+                                    if (match) {
+                                        setFormData((prev) => ({
+                                            ...prev,
+                                            passedQty: Math.min(prev.passedQty || match.remainingQuantity, match.remainingQuantity),
+                                            sampleSize: Math.min(prev.sampleSize || 50, match.remainingQuantity)
+                                        }));
+                                    }
+                                }}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans font-medium"
+                            >
+                                <option value="">-- Select Pending Work Order --</option>
+                                {pendingOutbound.map((wo) => (
+                                    <option key={wo.workOrderId} value={wo.workOrderId}>
+                                        {wo.workOrderNumber} — {wo.finishedGood.name} ({wo.remainingQuantity} remaining of {wo.totalProduced})
                                     </option>
                                 ))}
                             </select>
                         </div>
 
-                        <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Associated GRN # (Optional)
-                            </label>
-                            <select
-                                value={formData.grn}
-                                onChange={(e) => setFormData({ ...formData, grn: e.target.value })}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
-                            >
-                                <option value="">-- Direct Inward / No GRN --</option>
-                                {grns.map((g) => (
-                                    <option key={g._id} value={g._id}>
-                                        {g.grnNumber}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
+                        {activeOutboundItem && (
+                            <div className="p-3 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg flex items-center justify-between text-xs">
+                                <div>
+                                    <span className="text-text-muted">Customer / WO: </span>
+                                    <span className="font-bold text-text-main font-mono">{activeOutboundItem.workOrderNumber} ({activeOutboundItem.customerName})</span>
+                                    <div className="text-[11px] text-text-muted mt-0.5">
+                                        Total Produced: <strong className="text-text-main">{activeOutboundItem.totalProduced}</strong> | Already Inspected: <strong className="text-text-main">{activeOutboundItem.alreadyInspected}</strong>
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <span className="text-[10px] uppercase font-bold text-blue-700 dark:text-blue-300 block">Remaining to QC</span>
+                                    <span className="text-sm font-black font-mono text-blue-800 dark:text-blue-200">
+                                        {activeOutboundItem.remainingQuantity} {activeOutboundItem.finishedGood.uom || 'BAGS'}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
                     </>
-                ) : (
-                    <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Target Work Order *
-                        </label>
-                        <select
-                            required
-                            value={formData.workOrder}
-                            onChange={(e) => setFormData({ ...formData, workOrder: e.target.value })}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
-                        >
-                            <option value="">-- Select Work Order --</option>
-                            {workOrders.map((wo) => (
-                                <option key={wo._id} value={wo._id}>
-                                    {wo.workOrderNumber} — {wo.finishedGood?.name || 'Finished Product'}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
                 )}
 
                 <div className="grid grid-cols-3 gap-3">
@@ -223,6 +347,7 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                             type="number"
                             required
                             min="1"
+                            max={maxAllowedQty || undefined}
                             value={formData.sampleSize}
                             onChange={(e) => setFormData({ ...formData, sampleSize: e.target.value })}
                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
@@ -236,6 +361,7 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                             type="number"
                             required
                             min="0"
+                            max={maxAllowedQty || undefined}
                             value={formData.passedQty}
                             onChange={(e) => setFormData({ ...formData, passedQty: e.target.value })}
                             className="w-full border border-emerald-300 rounded-md p-2.5 bg-emerald-50/50 text-xs font-bold text-emerald-900 focus:outline-none focus:border-emerald-500 font-mono"
@@ -249,12 +375,22 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                             type="number"
                             required
                             min="0"
+                            max={maxAllowedQty || undefined}
                             value={formData.rejectedQty}
                             onChange={(e) => setFormData({ ...formData, rejectedQty: e.target.value })}
                             className="w-full border border-rose-300 rounded-md p-2.5 bg-rose-50/50 text-xs font-bold text-rose-900 focus:outline-none focus:border-rose-500 font-mono"
                         />
                     </div>
                 </div>
+
+                {isExceedingRemaining && (
+                    <div className="p-3 bg-rose-50 border border-rose-300 rounded-lg flex items-center gap-2 text-rose-800 text-xs font-bold">
+                        <AlertCircle size={16} className="text-rose-600 shrink-0" />
+                        <span>
+                            Inspection total ({totalTested}) exceeds remaining un-inspected quantity ({maxAllowedQty})! Please reduce Passed or Rejected quantity.
+                        </span>
+                    </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -306,8 +442,12 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                     </button>
                     <button
                         type="submit"
-                        disabled={isSubmitting}
-                        className="px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg rounded-md text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                        disabled={isSubmitting || isExceedingRemaining}
+                        className={`px-4 py-2 rounded-md text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-xs ${
+                            isSubmitting || isExceedingRemaining
+                                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                : 'bg-primary hover:bg-primary-hover text-sidebar-bg cursor-pointer'
+                        }`}
                     >
                         {isSubmitting ? (
                             <>

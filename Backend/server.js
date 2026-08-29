@@ -101,6 +101,17 @@ const initializeSystem = async () => {
         }
       }
     );
+
+    // Auto-populate enabledModules on existing tenants missing the field
+    const Tenant = mongoose.model('Tenant');
+    const ALL_DEFAULT_MODULES = [
+      'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY',
+      'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS'
+    ];
+    await Tenant.updateMany(
+      { $or: [{ enabledModules: { $exists: false } }, { enabledModules: { $size: 0 } }, { enabledModules: null }] },
+      { $set: { enabledModules: ALL_DEFAULT_MODULES } }
+    );
   } catch (err) {
     console.warn('⚠️ Could not verify permission count on boot:', err.message);
   }

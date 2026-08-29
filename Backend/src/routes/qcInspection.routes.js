@@ -3,9 +3,20 @@ const router = express.Router();
 const {
     createQCInspection,
     getQCInspections,
-    getQCInspectionById
+    getQCInspectionById,
+    getPendingQcTargets
 } = require('../controllers/qcInspection.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+router.use(authenticate);
+router.use(checkTenantModule('QUALITY'));
+
+/**
+ * @route   GET /api/qc-inspections/pending-targets
+ * @desc    Get pending QC targets with remaining uninspected quantities
+ * @access  Private (QUALITY:READ)
+ */
+router.get('/pending-targets', authenticate, checkPermission('QUALITY', 'READ'), getPendingQcTargets);
 
 /**
  * @route   POST /api/qc-inspections

@@ -1,9 +1,10 @@
 const mongoose = require('mongoose');
 const Tenant = require('../models/tenant.model');
 const User = require('../models/user.model');
+const Role = require('../models/role.model');
 
 /**
- * @desc    Get all tenant organizations with user count
+ * @desc    Get all tenant organizations with user count and tenant admin info
  * @route   GET /api/super-admin/tenants
  * @access  Private (Super Admin Only)
  */
@@ -22,9 +23,37 @@ const getAllTenants = async (req, res) => {
             userCountMap[String(item._id)] = item.count;
         });
 
+        // Query Tenant Admin roles to find the admin user for each tenant
+        const adminRoleDocs = await Role.find({
+            name: { $in: ['TENANT_ADMIN', 'Tenant Admin', 'Tenant Administrator', 'Admin', 'ADMIN'] }
+        }).select('_id');
+        const adminRoleIds = adminRoleDocs.map((r) => r._id);
+
+        const tenantAdminUsers = await User.find({
+            tenant: { $ne: null },
+            $or: [
+                { role: { $in: adminRoleIds } },
+                { roleName: { $in: ['TENANT_ADMIN', 'Tenant Admin', 'Tenant Administrator', 'Admin', 'ADMIN'] } }
+            ]
+        })
+            .select('name email tenant createdAt')
+            .sort({ createdAt: 1 });
+
+        const tenantAdminMap = {};
+        tenantAdminUsers.forEach((u) => {
+            const tId = String(u.tenant);
+            if (!tenantAdminMap[tId]) {
+                tenantAdminMap[tId] = {
+                    name: u.name,
+                    email: u.email
+                };
+            }
+        });
+
         const data = tenants.map((t) => {
             const tObj = t.toObject();
             tObj.userCount = userCountMap[String(t._id)] || 0;
+            tObj.tenantAdmin = tenantAdminMap[String(t._id)] || null;
             return tObj;
         });
 
@@ -275,10 +304,62 @@ const getTenantAdmins = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Update enabled modules list for a specific tenant
+ * @route   PATCH /api/super-admin/tenants/:tenantId/modules
+ * @access  Private (Super Admin Only)
+ */
+const updateTenantModules = async (req, res) => {
+    try {
+        const { tenantId } = req.params;
+        const { enabledModules } = req.body;
+
+        if (!Array.isArray(enabledModules)) {
+            return res.status(400).json({
+                success: false,
+                message: 'enabledModules must be an array of module identifiers.'
+            });
+        }
+
+        const tenant = await Tenant.findById(tenantId);
+        if (!tenant) {
+            return res.status(404).json({
+                success: false,
+                message: 'Tenant organization not found.'
+            });
+        }
+
+        tenant.enabledModules = enabledModules;
+        await tenant.save();
+
+        // Invalidate in-memory cache so live requests immediately apply new module rules
+        const { clearTenantStatusCache } = require('../middlewares/rbac.middleware');
+        clearTenantStatusCache(tenantId);
+
+        return res.status(200).json({
+            success: true,
+            message: `Module access for '${tenant.companyName || tenant.name}' updated successfully.`,
+            data: {
+                tenantId: tenant._id,
+                companyName: tenant.companyName || tenant.name,
+                enabledModules: tenant.enabledModules
+            }
+        });
+    } catch (error) {
+        console.error('Error in updateTenantModules:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to update tenant module access.',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     getAllTenants,
     getTenantProfileByTenantId,
     updateTenantProfileByTenantId,
     toggleTenantStatus,
-    getTenantAdmins
+    getTenantAdmins,
+    updateTenantModules
 };

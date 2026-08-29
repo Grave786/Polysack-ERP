@@ -8,7 +8,10 @@ const {
     updateStatus,
     deleteSalesOrder
 } = require('../controllers/salesOrder.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+router.use(authenticate);
+router.use(checkTenantModule('SALES'));
 
 /**
  * @route   POST /api/sales-orders

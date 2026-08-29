@@ -6,7 +6,10 @@ const {
     getDispatches,
     getDispatchById
 } = require('../controllers/dispatch.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+router.use(authenticate);
+router.use(checkTenantModule('DISPATCH'));
 
 /**
  * @route   POST /api/dispatches

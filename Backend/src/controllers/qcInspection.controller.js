@@ -122,8 +122,52 @@ const createQCInspection = async (req, res) => {
             }
 
             let grnDoc = null;
+            let totalReceivedQty = totalTested;
+
             if (grn) {
                 grnDoc = await GRN.findOne({ _id: grn, tenant: tenantId });
+                if (!grnDoc) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Specified GRN does not exist or does not belong to your organization.'
+                    });
+                }
+
+                // Locate the line item in this GRN
+                const grnItem = grnDoc.items.find(item => String(item.rawMaterial) === String(rawMaterial));
+                if (!grnItem) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Raw Material '${rmDoc.name}' (${rmDoc.code || ''}) is not part of GRN ${grnDoc.grnNumber}.`
+                    });
+                }
+
+                totalReceivedQty = grnItem.receivedQuantity;
+
+                // Calculate cumulative tested quantity for this GRN line item across previous QC inspections
+                const existingQcs = await QCInspection.find({
+                    tenant: tenantId,
+                    inspectionType: 'INBOUND',
+                    grn: grnDoc._id,
+                    rawMaterial: rmDoc._id
+                }).select('passedQty rejectedQty');
+
+                const alreadyInspectedQty = existingQcs.reduce((sum, q) => sum + (q.passedQty || 0) + (q.rejectedQty || 0), 0);
+                const remainingUninspected = totalReceivedQty - alreadyInspectedQty;
+
+                if (remainingUninspected <= 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `This GRN line item has already been fully inspected (${totalReceivedQty} received, ${alreadyInspectedQty} already tested). No further QC inspections can be logged.`
+                    });
+                }
+
+                if (totalTested > remainingUninspected) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Cannot inspect ${totalTested} units. Only ${remainingUninspected} units remain un-inspected for this GRN line item (Received: ${totalReceivedQty}, Already Inspected: ${alreadyInspectedQty}).`
+                    });
+                }
             }
 
             const qcDocs = await QCInspection.create([{
@@ -134,7 +178,7 @@ const createQCInspection = async (req, res) => {
                 po: grnDoc?.purchaseOrder || undefined,
                 rawMaterial: rmDoc._id,
                 supplier: grnDoc?.supplier || rmDoc.defaultSupplier || undefined,
-                receivedQty: totalTested,
+                receivedQty: totalReceivedQty,
                 sampleSize: numSampleSize,
                 passedQty: numPassedQty,
                 rejectedQty: numRejectedQty,
@@ -202,11 +246,29 @@ const createQCInspection = async (req, res) => {
                 });
             }
 
-            const availablePending = fgDoc.pendingQCStock || 0;
-            if (totalTested > availablePending) {
+            const totalProducedQty = workOrderDoc.completedQuantity || workOrderDoc.targetQuantity || 0;
+
+            // Calculate cumulative tested quantity for this Work Order across previous Outbound QC inspections
+            const existingQcs = await QCInspection.find({
+                tenant: tenantId,
+                inspectionType: 'OUTBOUND',
+                workOrder: workOrderDoc._id
+            }).select('passedQty rejectedQty');
+
+            const alreadyInspectedQty = existingQcs.reduce((sum, q) => sum + (q.passedQty || 0) + (q.rejectedQty || 0), 0);
+            const remainingUninspected = totalProducedQty - alreadyInspectedQty;
+
+            if (remainingUninspected <= 0) {
                 return res.status(400).json({
                     success: false,
-                    message: `Cannot inspect ${totalTested} units. Only ${availablePending} units are currently pending QC for '${fgDoc.name}'.`
+                    message: `Work Order '${workOrderDoc.workOrderNumber}' has already been fully inspected (${totalProducedQty} produced, ${alreadyInspectedQty} inspected). No further QC inspections can be logged.`
+                });
+            }
+
+            if (totalTested > remainingUninspected) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot inspect ${totalTested} units. Only ${remainingUninspected} units remain to be inspected for Work Order '${workOrderDoc.workOrderNumber}' (Produced: ${totalProducedQty}, Already Inspected: ${alreadyInspectedQty}).`
                 });
             }
 
@@ -216,6 +278,7 @@ const createQCInspection = async (req, res) => {
                 qcCertificateNumber,
                 workOrder: workOrderDoc._id,
                 finishedGood: fgDoc._id,
+                receivedQty: totalProducedQty,
                 sampleSize: numSampleSize,
                 passedQty: numPassedQty,
                 rejectedQty: numRejectedQty,
@@ -406,8 +469,138 @@ const getQCInspectionById = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get all pending QC targets (GRN line items & Work Orders) with calculated remaining uninspected quantities
+ * @route   GET /api/qc-inspections/pending-targets
+ * @access  Private (QUALITY:READ permission)
+ */
+const getPendingQcTargets = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        // 1. Fetch GRNs for Inbound QC
+        const grns = await GRN.find({ tenant: tenantId })
+            .populate('items.rawMaterial', 'name code uom currentStock')
+            .populate('supplier', 'name')
+            .populate('purchaseOrder', 'poNumber')
+            .sort({ createdAt: -1 });
+
+        const inboundInspections = await QCInspection.find({
+            tenant: tenantId,
+            inspectionType: 'INBOUND',
+            grn: { $exists: true, $ne: null }
+        }).select('grn rawMaterial passedQty rejectedQty');
+
+        const inboundTestedMap = {};
+        inboundInspections.forEach((qc) => {
+            const key = `${String(qc.grn)}_${String(qc.rawMaterial)}`;
+            const tested = (qc.passedQty || 0) + (qc.rejectedQty || 0);
+            inboundTestedMap[key] = (inboundTestedMap[key] || 0) + tested;
+        });
+
+        const pendingInbound = [];
+        grns.forEach((grn) => {
+            grn.items.forEach((item) => {
+                if (!item.rawMaterial) return;
+                const rmId = String(item.rawMaterial._id || item.rawMaterial);
+                const key = `${String(grn._id)}_${rmId}`;
+                const alreadyInspected = inboundTestedMap[key] || 0;
+                const receivedQty = item.receivedQuantity || 0;
+                const remainingQty = Math.max(0, receivedQty - alreadyInspected);
+
+                if (remainingQty > 0) {
+                    pendingInbound.push({
+                        grnId: grn._id,
+                        grnNumber: grn.grnNumber,
+                        poNumber: grn.purchaseOrder?.poNumber || '-',
+                        supplierName: grn.supplier?.name || '-',
+                        rawMaterial: {
+                            _id: item.rawMaterial._id || item.rawMaterial,
+                            name: item.rawMaterial.name || 'Raw Material',
+                            code: item.rawMaterial.code || '-',
+                            uom: item.rawMaterial.uom?.name || 'KG'
+                        },
+                        receivedQuantity: receivedQty,
+                        alreadyInspected,
+                        remainingQuantity: remainingQty
+                    });
+                }
+            });
+        });
+
+        // 2. Fetch WorkOrders for Outbound QC
+        const workOrders = await WorkOrder.find({
+            tenant: tenantId,
+            status: { $in: ['IN_PROGRESS', 'COMPLETED'] }
+        })
+            .populate('finishedGood', 'name code uom currentStock pendingQCStock')
+            .populate('customer', 'name')
+            .sort({ createdAt: -1 });
+
+        const outboundInspections = await QCInspection.find({
+            tenant: tenantId,
+            inspectionType: 'OUTBOUND',
+            workOrder: { $exists: true, $ne: null }
+        }).select('workOrder passedQty rejectedQty');
+
+        const outboundTestedMap = {};
+        outboundInspections.forEach((qc) => {
+            const key = String(qc.workOrder);
+            const tested = (qc.passedQty || 0) + (qc.rejectedQty || 0);
+            outboundTestedMap[key] = (outboundTestedMap[key] || 0) + tested;
+        });
+
+        const pendingOutbound = [];
+        workOrders.forEach((wo) => {
+            if (!wo.finishedGood) return;
+            const totalProduced = wo.completedQuantity || wo.targetQuantity || 0;
+            const alreadyInspected = outboundTestedMap[String(wo._id)] || 0;
+            const remainingQty = Math.max(0, totalProduced - alreadyInspected);
+
+            if (remainingQty > 0) {
+                pendingOutbound.push({
+                    workOrderId: wo._id,
+                    workOrderNumber: wo.workOrderNumber,
+                    customerName: wo.customer?.name || '-',
+                    finishedGood: {
+                        _id: wo.finishedGood._id || wo.finishedGood,
+                        name: wo.finishedGood.name || 'Finished Product',
+                        code: wo.finishedGood.code || '-',
+                        uom: wo.finishedGood.uom?.name || 'BAG'
+                    },
+                    totalProduced,
+                    alreadyInspected,
+                    remainingQuantity: remainingQty
+                });
+            }
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                inbound: pendingInbound,
+                outbound: pendingOutbound
+            }
+        });
+    } catch (err) {
+        console.error('Error fetching pending QC targets:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch pending QC targets',
+            error: err.message
+        });
+    }
+};
+
 module.exports = {
     createQCInspection,
     getQCInspections,
-    getQCInspectionById
+    getQCInspectionById,
+    getPendingQcTargets
 };

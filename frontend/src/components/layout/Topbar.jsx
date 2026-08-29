@@ -492,46 +492,62 @@ export default function Topbar({ onToggleSidebar }) {
                                     <span>My Profile</span>
                                 </button>
 
-                                {canSeeCompanySettings && (
+                                {isSuperAdmin ? (
                                     <button
                                         type="button"
                                         onClick={() => {
                                             setIsProfileMenuOpen(false);
-                                            navigate('/administration');
+                                            navigate('/administration/tenants');
                                         }}
                                         className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
                                     >
                                         <Building2 size={15} className="text-amber-500" />
-                                        <span>Company Settings</span>
+                                        <span>Tenant Accounts</span>
                                     </button>
-                                )}
+                                ) : (
+                                    <>
+                                        {canSeeCompanySettings && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsProfileMenuOpen(false);
+                                                    navigate('/administration');
+                                                }}
+                                                className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
+                                            >
+                                                <Building2 size={15} className="text-amber-500" />
+                                                <span>Company Settings</span>
+                                            </button>
+                                        )}
 
-                                {canSeeRoles && (
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setIsProfileMenuOpen(false);
-                                            navigate('/administration/roles');
-                                        }}
-                                        className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
-                                    >
-                                        <ShieldCheck size={15} className="text-purple-500" />
-                                        <span>Roles & Permissions</span>
-                                    </button>
-                                )}
+                                        {canSeeRoles && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsProfileMenuOpen(false);
+                                                    navigate('/administration/roles');
+                                                }}
+                                                className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
+                                            >
+                                                <ShieldCheck size={15} className="text-purple-500" />
+                                                <span>Roles & Permissions</span>
+                                            </button>
+                                        )}
 
-                                {canSeeUsers && (
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setIsProfileMenuOpen(false);
-                                            navigate('/administration/users');
-                                        }}
-                                        className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
-                                    >
-                                        <Users size={15} className="text-blue-500" />
-                                        <span>User Accounts</span>
-                                    </button>
+                                        {canSeeUsers && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsProfileMenuOpen(false);
+                                                    navigate('/administration/users');
+                                                }}
+                                                className="w-full px-4 py-2.5 flex items-center gap-2.5 text-text-main hover:bg-app-bg transition-colors font-medium cursor-pointer text-xs"
+                                            >
+                                                <Users size={15} className="text-blue-500" />
+                                                <span>User Accounts</span>
+                                            </button>
+                                        )}
+                                    </>
                                 )}
                             </div>
 

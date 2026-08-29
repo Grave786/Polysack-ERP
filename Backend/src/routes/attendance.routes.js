@@ -2,7 +2,10 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { manualPunch, getAttendanceLogs, importBiometricCsv } = require('../controllers/attendance.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+router.use(authenticate);
+router.use(checkTenantModule('HR'));
 
 // Multer memory storage configuration for CSV uploads
 const storage = multer.memoryStorage();

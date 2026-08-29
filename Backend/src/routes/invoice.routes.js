@@ -6,7 +6,10 @@ const {
     getInvoiceById,
     recordPayment
 } = require('../controllers/invoice.controller');
-const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+
+router.use(authenticate);
+router.use(checkTenantModule('SALES'));
 
 /**
  * @route   POST /api/invoices/from-sales-order/:salesOrderId

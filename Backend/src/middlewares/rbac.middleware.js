@@ -4,9 +4,14 @@ const Role = require('../models/role.model');
 const Permission = require('../models/permission.model');
 const Tenant = require('../models/tenant.model');
 
-// In-memory TTL Cache for Tenant active status (10s TTL for fast live session enforcement)
+// In-memory TTL Cache for Tenant active status & enabledModules (10s TTL for fast live session enforcement)
 const tenantStatusCache = new Map();
 const CACHE_TTL_MS = 10000;
+
+const DEFAULT_MODULES = [
+    'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY',
+    'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS'
+];
 
 // Helper to normalize tenant ID input (handles strings, ObjectIds, and populated objects)
 const normalizeTenantId = (val) => {
@@ -18,29 +23,31 @@ const normalizeTenantId = (val) => {
     return String(val);
 };
 
-const getCachedTenantStatus = async (tenantIdInput) => {
+const getCachedTenant = async (tenantIdInput) => {
     const tenantId = normalizeTenantId(tenantIdInput);
-    if (!tenantId) return true;
+    if (!tenantId) return null;
 
     const cached = tenantStatusCache.get(tenantId);
     const now = Date.now();
 
     if (cached && cached.expiresAt > now) {
-        // console.log(`🔒 [TENANT CACHE HIT] Tenant: ${tenantId} | isActive: ${cached.isActive}`);
-        return cached.isActive;
+        return cached.tenant;
     }
 
-    const tenant = await Tenant.findById(tenantId).select('isActive').lean();
-    const isActive = Boolean(tenant && tenant.isActive !== false);
-
-    // console.log(`⚡ [TENANT DB FETCH] Tenant: ${tenantId} | isActive from DB: ${isActive}`);
-
+    const tenant = await Tenant.findById(tenantId).select('isActive enabledModules name companyName').lean();
+    
     tenantStatusCache.set(tenantId, {
-        isActive,
+        tenant,
         expiresAt: now + CACHE_TTL_MS
     });
 
-    return isActive;
+    return tenant;
+};
+
+const getCachedTenantStatus = async (tenantIdInput) => {
+    const tenant = await getCachedTenant(tenantIdInput);
+    if (!tenant) return true;
+    return Boolean(tenant.isActive !== false);
 };
 
 // Invalidate tenant cache immediately upon status updates
@@ -182,7 +189,28 @@ const checkPermission = (requiredModule, requiredAction) => {
                 return next();
             }
 
-            // 3. Verify user has a valid active role (auto-heal if user reference was orphaned)
+            // 3. Platform-level Tenant Module Entitlement Check (Bypassed for core account administration: USERS, ROLES, DASHBOARD)
+            const CORE_ACCOUNT_MODULES = ['USERS', 'ROLES', 'DASHBOARD', 'ADMINISTRATION'];
+            const targetModules = Array.isArray(requiredModule) ? requiredModule : [requiredModule];
+            const requiresPlanEntitlement = targetModules.some((m) => !CORE_ACCOUNT_MODULES.includes(m));
+
+            if (user.tenant && requiresPlanEntitlement) {
+                const tenantDoc = await getCachedTenant(user.tenant);
+                const enabledModules = (tenantDoc?.enabledModules && tenantDoc.enabledModules.length > 0)
+                    ? tenantDoc.enabledModules
+                    : DEFAULT_MODULES;
+
+                const isAnyModuleEntitled = targetModules.some((m) => CORE_ACCOUNT_MODULES.includes(m) || enabledModules.includes(m));
+                if (!isAnyModuleEntitled) {
+                    return res.status(403).json({
+                        success: false,
+                        code: 'MODULE_DISABLED_FOR_TENANT',
+                        message: "This module is not included in your organization's plan. Contact support to enable it."
+                    });
+                }
+            }
+
+            // 4. Verify user has a valid active role (auto-heal if user reference was orphaned)
             if ((!user.role || !user.role.isActive) && user.tenant) {
                 const activeRole = await Role.findOne({ tenant: user.tenant, isActive: true }).populate('permissions');
                 if (activeRole) {
@@ -199,11 +227,10 @@ const checkPermission = (requiredModule, requiredAction) => {
                 });
             }
 
-            // 4. Check if role has matching permission for requiredModule and requiredAction
+            // 5. Check if role has matching permission for requiredModule and requiredAction
             const permissions = user.role.permissions || [];
-            const modules = Array.isArray(requiredModule) ? requiredModule : [requiredModule];
             const hasPermission = permissions.some((perm) =>
-                modules.includes(perm.module) && perm.action === requiredAction
+                targetModules.includes(perm.module) && perm.action === requiredAction
             );
 
             if (!hasPermission) {
@@ -227,8 +254,40 @@ const checkPermission = (requiredModule, requiredAction) => {
     };
 };
 
+/**
+ * Middleware Factory: checkTenantModule
+ * Specifically blocks API calls to a module if it is not enabled for the tenant.
+ */
+const checkTenantModule = (moduleKey) => {
+    return async (req, res, next) => {
+        try {
+            const tenantId = req.user?.tenant;
+            if (!tenantId) return next(); // Super Admin bypass
+
+            const tenant = await getCachedTenant(tenantId);
+            const enabledModules = (tenant?.enabledModules && tenant.enabledModules.length > 0)
+                ? tenant.enabledModules
+                : DEFAULT_MODULES;
+
+            if (!enabledModules.includes(moduleKey.toUpperCase())) {
+                return res.status(403).json({
+                    success: false,
+                    code: 'MODULE_DISABLED_FOR_TENANT',
+                    message: "This module is not included in your organization's plan. Contact support to enable it."
+                });
+            }
+
+            next();
+        } catch (error) {
+            console.error('Error in checkTenantModule middleware:', error);
+            next();
+        }
+    };
+};
+
 module.exports = {
     authenticate,
     checkPermission,
+    checkTenantModule,
     clearTenantStatusCache
 };

@@ -14,7 +14,10 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
 
     // Form fields
     const [supplier, setSupplier] = useState('');
-    const [expectedDelivery, setExpectedDelivery] = useState('');
+    const [poDate, setPoDate] = useState(new Date().toISOString().split('T')[0]);
+    const [expectedDelivery, setExpectedDelivery] = useState(
+        new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+    );
     const [deliveryLocation, setDeliveryLocation] = useState('');
     const [notes, setNotes] = useState('');
     const [sendImmediately, setSendImmediately] = useState(false);
@@ -141,6 +144,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
 
             const payload = {
                 supplier,
+                poDate,
                 expectedDelivery,
                 deliveryLocation: deliveryLocation || undefined,
                 notes: notes.trim() || undefined,
@@ -202,8 +206,21 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                     )}
                 </div>
 
-                {/* Expected Delivery & Delivery Location */}
-                <div className="grid grid-cols-2 gap-3">
+                {/* PO Date, Expected Delivery & Delivery Location */}
+                <div className="grid grid-cols-3 gap-3">
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            PO Date *
+                        </label>
+                        <input
+                            type="date"
+                            required
+                            value={poDate}
+                            onChange={(e) => setPoDate(e.target.value)}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                        />
+                    </div>
+
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                             Expected Delivery Date *

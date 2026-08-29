@@ -10,6 +10,8 @@ const {
 } = require('../controllers/employee.controller');
 const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
 
+router.use(authenticate);
+
 /**
  * @route   POST /api/employees
  * @desc    Create a new Employee

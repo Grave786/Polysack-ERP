@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
-import { getFirstPermittedRoute } from './utils/permissionUtils';
+import { getFirstPermittedRoute, checkIsSuperAdmin } from './utils/permissionUtils';
 import ProtectedRoute from './components/ProtectedRoute';
 import DashboardLayout from './components/layout/DashboardLayout';
 import LoginPage from './pages/LoginPage';
@@ -30,6 +30,22 @@ function DefaultRouteRedirect() {
         return <Navigate to="/403" state={{ message: 'No modules assigned — contact your administrator.' }} replace />;
     }
     return <Navigate to={targetRoute} replace />;
+}
+
+function TenantUsersRoute() {
+    const user = useAuthStore((state) => state.user);
+    if (checkIsSuperAdmin(user)) {
+        return <Navigate to="/administration/tenants" replace />;
+    }
+    return <UserManagementPage />;
+}
+
+function TenantRolesRoute() {
+    const user = useAuthStore((state) => state.user);
+    if (checkIsSuperAdmin(user)) {
+        return <Navigate to="/administration/tenants" replace />;
+    }
+    return <RolesManagementPage />;
 }
 
 export default function App() {
@@ -67,8 +83,11 @@ export default function App() {
                         <Route path="/production" element={<ProductionPage />} />
                     </Route>
 
-                    <Route element={<ProtectedRoute requiredModule="SALES" />}>
+                    <Route element={<ProtectedRoute requiredModule="POS" />}>
                         <Route path="/pos" element={<PosPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="SALES" />}>
                         <Route path="/sales" element={<SalesPage />} />
                     </Route>
 
@@ -107,13 +126,13 @@ export default function App() {
                     <Route element={<ProtectedRoute requiredModule="USERS" />}>
                         <Route path="/administration" element={<AdministrationPage />} />
                         <Route path="/administration/tenants" element={<AdministrationPage />} />
-                        <Route path="/administration/users" element={<UserManagementPage />} />
-                        <Route path="/users" element={<UserManagementPage />} />
+                        <Route path="/administration/users" element={<TenantUsersRoute />} />
+                        <Route path="/users" element={<TenantUsersRoute />} />
                     </Route>
 
                     <Route element={<ProtectedRoute requiredModule="ROLES" />}>
-                        <Route path="/administration/roles" element={<RolesManagementPage />} />
-                        <Route path="/roles" element={<RolesManagementPage />} />
+                        <Route path="/administration/roles" element={<TenantRolesRoute />} />
+                        <Route path="/roles" element={<TenantRolesRoute />} />
                     </Route>
 
                     {/* Fallback inside dashboard layout */}

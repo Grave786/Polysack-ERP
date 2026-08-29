@@ -66,6 +66,15 @@ const createSalesOrder = async (req, res) => {
             });
         }
 
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (new Date(deliveryDue) < today) {
+            return res.status(400).json({
+                success: false,
+                message: 'Expected Delivery Date cannot be in the past.'
+            });
+        }
+
         // 2. Validate tenant-ownership of Customer
         const customerDoc = await Customer.findOne({ _id: customer, tenant: tenantId });
         if (!customerDoc) {
