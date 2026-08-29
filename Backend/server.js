@@ -120,8 +120,11 @@ const initializeSystem = async () => {
 initializeSystem();
 
 // Basic Health Check Route
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: 'PolySack ERP Engine is running smoothly' });
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'PolySack ERP API is running',
+    health: '/api/health'
+  });
 });
 
 // Register API Routes
