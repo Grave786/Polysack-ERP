@@ -66,9 +66,16 @@ const createSalesOrder = async (req, res) => {
             });
         }
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        if (new Date(deliveryDue) < today) {
+        const todayStr = (() => {
+            const d = new Date();
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        })();
+
+        const inputDeliveryStr = String(deliveryDue).split('T')[0];
+        if (inputDeliveryStr < todayStr) {
             return res.status(400).json({
                 success: false,
                 message: 'Expected Delivery Date cannot be in the past.'
@@ -151,7 +158,7 @@ const createSalesOrder = async (req, res) => {
             tenant: tenantId,
             soNumber,
             customer,
-            orderDate: orderDate || new Date(),
+            orderDate: new Date(),
             deliveryDue,
             items: cleanedItems,
             totalValue: computedTotalValue,

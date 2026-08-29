@@ -3,6 +3,7 @@ import { Plus, Trash2, ShoppingCart, Calculator, Calendar, User, MapPin, FileTex
 import SlideOverPanel from '../shared/SlideOverPanel';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { getTodayLocalDateString, getFutureLocalDateString, formatToLocalDateString } from '../../utils/dateUtils';
 
 export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, initialData = null }) {
     const isEditMode = Boolean(initialData && initialData._id);
@@ -15,10 +16,8 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
 
     // Form State
     const [customerId, setCustomerId] = useState('');
-    const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
-    const [deliveryDue, setDeliveryDue] = useState(
-        new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-    );
+    const [orderDate, setOrderDate] = useState(getTodayLocalDateString());
+    const [deliveryDue, setDeliveryDue] = useState(getFutureLocalDateString(7));
     const [dispatchLocation, setDispatchLocation] = useState('');
     const [status, setStatus] = useState('CONFIRMED');
     const [notes, setNotes] = useState('');
@@ -73,17 +72,17 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
         loadDropdowns();
     }, [isOpen]);
 
-    // Populate Initial Data on Edit Mode
+    // Populate Initial Data on Edit Mode & reset
     useEffect(() => {
+        if (isOpen) {
+            console.log('[Date Verification] Sales Order Form Opened — Local Today:', getTodayLocalDateString(), 'Delivery Due Default:', getFutureLocalDateString(7));
+        }
+
         if (isOpen && isEditMode && initialData) {
             const custId = typeof initialData.customer === 'object' ? initialData.customer?._id : initialData.customer;
             setCustomerId(custId || '');
-            setOrderDate(
-                initialData.orderDate ? new Date(initialData.orderDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
-            );
-            setDeliveryDue(
-                initialData.deliveryDue ? new Date(initialData.deliveryDue).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
-            );
+            setOrderDate(formatToLocalDateString(initialData.orderDate));
+            setDeliveryDue(formatToLocalDateString(initialData.deliveryDue));
             const locId = typeof initialData.dispatchLocation === 'object' ? initialData.dispatchLocation?._id : initialData.dispatchLocation;
             setDispatchLocation(locId || '');
             setStatus(initialData.status || 'CONFIRMED');
@@ -107,8 +106,8 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
         } else if (isOpen && !isEditMode) {
             // Reset for new Sales Order
             setCustomerId('');
-            setOrderDate(new Date().toISOString().split('T')[0]);
-            setDeliveryDue(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
+            setOrderDate(getTodayLocalDateString());
+            setDeliveryDue(getFutureLocalDateString(7));
             setDispatchLocation('');
             setStatus('CONFIRMED');
             setNotes('');
@@ -116,43 +115,46 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
         }
     }, [isOpen, isEditMode, initialData]);
 
+    // Handle Expected Delivery Date Change with Live Self-Correction
+    const handleDeliveryDueChange = (e) => {
+        const val = e.target.value;
+        const todayStr = getTodayLocalDateString();
+        if (val && val < todayStr) {
+            setDeliveryDue(todayStr);
+            toast.error("Expected delivery date cannot be in the past — reset to today's date.");
+        } else {
+            setDeliveryDue(val);
+        }
+    };
+
     // Handle Item Field Changes
     const handleItemChange = (index, field, value) => {
-        setItems((prevItems) => {
-            const updated = [...prevItems];
-            const currentItem = { ...updated[index], [field]: value };
+        const updated = [...items];
+        updated[index][field] = value;
 
-            // When Finished Good selection changes, auto-fill unit price from master catalog
-            if (field === 'finishedGood') {
-                const fg = finishedGoods.find((f) => f._id === value);
-                if (fg && (currentItem.ratePerUnit === '' || Number(currentItem.ratePerUnit) === 0)) {
-                    const defaultRate = fg.pricePerBag || fg.pricePerUnit || fg.sellingPrice || 15;
-                    currentItem.ratePerUnit = String(defaultRate);
-                }
-            }
+        if (field === 'quantity' || field === 'ratePerUnit') {
+            const q = Number(field === 'quantity' ? value : updated[index].quantity) || 0;
+            const r = Number(field === 'ratePerUnit' ? value : updated[index].ratePerUnit) || 0;
+            updated[index].subtotal = q * r;
+        }
 
-            const qty = Number(currentItem.quantity) || 0;
-            const rate = Number(currentItem.ratePerUnit) || 0;
-            currentItem.subtotal = qty * rate;
-
-            updated[index] = currentItem;
-            return updated;
-        });
+        setItems(updated);
     };
 
-    // Add New Line Item Row
     const handleAddItem = () => {
-        setItems((prev) => [...prev, { finishedGood: '', quantity: '', ratePerUnit: '', subtotal: 0 }]);
+        setItems([...items, { finishedGood: '', quantity: '', ratePerUnit: '', subtotal: 0 }]);
     };
 
-    // Remove Line Item Row
     const handleRemoveItem = (index) => {
         if (items.length <= 1) {
             toast.error('Sales Order must contain at least one line item.');
             return;
         }
-        setItems((prev) => prev.filter((_, i) => i !== index));
+        setItems(items.filter((_, i) => i !== index));
     };
+
+    const addItemRow = handleAddItem;
+    const removeItemRow = handleRemoveItem;
 
     // Live Calculation
     const totalQuantity = items.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
@@ -172,6 +174,13 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
     // Save Sales Order
     const handleSubmit = async (e) => {
         e.preventDefault();
+        const todayStr = getTodayLocalDateString();
+        if (deliveryDue && deliveryDue < todayStr) {
+            toast.error('Expected Delivery date cannot be in the past.');
+            setDeliveryDue(todayStr);
+            return;
+        }
+
         if (!isFormValid) {
             toast.error('Please complete all required fields and valid line items.');
             return;
@@ -357,15 +366,14 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1 flex items-center gap-1">
                                 <Calendar size={12} className="text-text-muted" />
-                                <span>Order Date *</span>
+                                <span>Order Date</span>
                             </label>
-                            <input
-                                type="date"
-                                required
-                                value={orderDate}
-                                onChange={(e) => setOrderDate(e.target.value)}
-                                className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary"
-                            />
+                            <div className="w-full border border-border/80 rounded-lg p-2.5 bg-app-bg text-xs font-mono font-bold text-text-main flex items-center justify-between">
+                                <span>{new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                                <span className="bg-green-100 text-green-800 font-semibold px-2 py-1 rounded text-xs">
+                                    Today (Auto)
+                                </span>
+                            </div>
                         </div>
 
                         <div>
@@ -376,9 +384,9 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                             <input
                                 type="date"
                                 required
-                                min={new Date().toISOString().split('T')[0]}
+                                min={getTodayLocalDateString()}
                                 value={deliveryDue}
-                                onChange={(e) => setDeliveryDue(e.target.value)}
+                                onChange={handleDeliveryDueChange}
                                 className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
                             />
                         </div>

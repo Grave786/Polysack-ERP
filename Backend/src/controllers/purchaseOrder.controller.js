@@ -68,9 +68,16 @@ const createPurchaseOrder = async (req, res) => {
         }
 
         if (expectedDelivery) {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            if (new Date(expectedDelivery) < today) {
+            const todayStr = (() => {
+                const d = new Date();
+                const year = d.getFullYear();
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            })();
+
+            const inputDeliveryStr = String(expectedDelivery).split('T')[0];
+            if (inputDeliveryStr < todayStr) {
                 return res.status(400).json({
                     success: false,
                     message: 'Expected Delivery date cannot be in the past.'
@@ -151,7 +158,7 @@ const createPurchaseOrder = async (req, res) => {
             tenant: tenantId,
             poNumber,
             supplier,
-            poDate: poDate || new Date(),
+            poDate: new Date(),
             expectedDelivery: expectedDelivery || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
             items: cleanedItems,
             totalValue: computedTotalValue,

@@ -3,6 +3,7 @@ import { Plus, Trash2, ShoppingBag, RefreshCw, Send } from 'lucide-react';
 import SlideOverPanel from '../shared/SlideOverPanel';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { getTodayLocalDateString, getFutureLocalDateString } from '../../utils/dateUtils';
 
 export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess }) {
     const [suppliers, setSuppliers] = useState([]);
@@ -14,10 +15,8 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
 
     // Form fields
     const [supplier, setSupplier] = useState('');
-    const [poDate, setPoDate] = useState(new Date().toISOString().split('T')[0]);
-    const [expectedDelivery, setExpectedDelivery] = useState(
-        new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-    );
+    const [poDate, setPoDate] = useState(getTodayLocalDateString());
+    const [expectedDelivery, setExpectedDelivery] = useState(getFutureLocalDateString(7));
     const [deliveryLocation, setDeliveryLocation] = useState('');
     const [notes, setNotes] = useState('');
     const [sendImmediately, setSendImmediately] = useState(false);
@@ -27,10 +26,14 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
         { rawMaterial: '', orderedQuantity: 100, ratePerUnit: 0 }
     ]);
 
-    // Fetch prerequisite options (suppliers, locations, raw materials)
+    // Fetch prerequisite options (suppliers, locations, raw materials) & reset dates
     useEffect(() => {
         if (!isOpen) return;
 
+        console.log('[Date Verification] Purchase Order Form Opened — Local Today:', getTodayLocalDateString(), 'Expected Delivery Default:', getFutureLocalDateString(7));
+
+        setPoDate(getTodayLocalDateString());
+        setExpectedDelivery(getFutureLocalDateString(7));
         setIsLoadingData(true);
         Promise.all([
             axiosInstance.get('/suppliers?isActive=true&limit=200'),
@@ -62,10 +65,20 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                 console.error('Error fetching procurement options:', err);
                 toast.error('Failed to load supplier & raw material lists');
             })
-            .finally(() => {
-                setIsLoadingData(false);
-            });
+            .finally(() => setIsLoadingData(false));
     }, [isOpen]);
+
+    // Handle Expected Delivery Date Change with Live Self-Correction
+    const handleExpectedDeliveryChange = (e) => {
+        const val = e.target.value;
+        const todayStr = getTodayLocalDateString();
+        if (val && val < todayStr) {
+            setExpectedDelivery(todayStr);
+            toast.error("Expected delivery date cannot be in the past — reset to today's date.");
+        } else {
+            setExpectedDelivery(val);
+        }
+    };
 
     // Item rows handlers
     const handleAddItemRow = () => {
@@ -210,15 +223,14 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                 <div className="grid grid-cols-3 gap-3">
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            PO Date *
+                            PO Date
                         </label>
-                        <input
-                            type="date"
-                            required
-                            value={poDate}
-                            onChange={(e) => setPoDate(e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
-                        />
+                        <div className="w-full border border-border/80 rounded-md p-2.5 bg-app-bg text-xs font-mono font-bold text-text-main flex items-center justify-between">
+                            <span>{new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                            <span className="bg-green-100 text-green-800 font-semibold px-2 py-1 rounded text-xs">
+                                Today (Auto)
+                            </span>
+                        </div>
                     </div>
 
                     <div>
@@ -228,9 +240,9 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                         <input
                             type="date"
                             required
-                            min={new Date().toISOString().split('T')[0]}
+                            min={getTodayLocalDateString()}
                             value={expectedDelivery}
-                            onChange={(e) => setExpectedDelivery(e.target.value)}
+                            onChange={handleExpectedDeliveryChange}
                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
                         />
                     </div>

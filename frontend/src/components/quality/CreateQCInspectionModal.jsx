@@ -264,17 +264,19 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                         )}
 
                         {activeInboundItem && (
-                            <div className="p-3 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg flex items-center justify-between text-xs">
-                                <div>
-                                    <span className="text-text-muted">GRN / PO Ref: </span>
-                                    <span className="font-bold text-text-main font-mono">{activeInboundItem.grnNumber} ({activeInboundItem.poNumber})</span>
-                                    <div className="text-[11px] text-text-muted mt-0.5">
-                                        Received: <strong className="text-text-main">{activeInboundItem.receivedQuantity}</strong> | Already Inspected: <strong className="text-text-main">{activeInboundItem.alreadyInspected}</strong>
+                            <div className="p-3.5 bg-blue-50/90 border border-blue-200 rounded-lg flex items-center justify-between text-xs shadow-2xs">
+                                <div className="space-y-0.5">
+                                    <div>
+                                        <span className="text-blue-800 font-semibold">GRN / PO Ref: </span>
+                                        <span className="font-extrabold text-blue-950 font-mono">{activeInboundItem.grnNumber} ({activeInboundItem.poNumber})</span>
+                                    </div>
+                                    <div className="text-[11px] text-blue-900">
+                                        Received: <strong className="text-blue-950 font-bold">{activeInboundItem.receivedQuantity}</strong> | Already Inspected: <strong className="text-blue-950 font-bold">{activeInboundItem.alreadyInspected}</strong>
                                     </div>
                                 </div>
-                                <div className="text-right">
-                                    <span className="text-[10px] uppercase font-bold text-blue-700 dark:text-blue-300 block">Remaining to QC</span>
-                                    <span className="text-sm font-black font-mono text-blue-800 dark:text-blue-200">
+                                <div className="text-right pl-3 border-l border-blue-200">
+                                    <span className="text-[10px] uppercase font-bold text-blue-800 tracking-wider block">Remaining to QC</span>
+                                    <span className="text-sm font-black font-mono text-blue-950">
                                         {activeInboundItem.remainingQuantity} {activeInboundItem.rawMaterial.uom || 'KG'}
                                     </span>
                                 </div>
@@ -319,17 +321,19 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                         </div>
 
                         {activeOutboundItem && (
-                            <div className="p-3 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg flex items-center justify-between text-xs">
-                                <div>
-                                    <span className="text-text-muted">Customer / WO: </span>
-                                    <span className="font-bold text-text-main font-mono">{activeOutboundItem.workOrderNumber} ({activeOutboundItem.customerName})</span>
-                                    <div className="text-[11px] text-text-muted mt-0.5">
-                                        Total Produced: <strong className="text-text-main">{activeOutboundItem.totalProduced}</strong> | Already Inspected: <strong className="text-text-main">{activeOutboundItem.alreadyInspected}</strong>
+                            <div className="p-3.5 bg-blue-50/90 border border-blue-200 rounded-lg flex items-center justify-between text-xs shadow-2xs">
+                                <div className="space-y-0.5">
+                                    <div>
+                                        <span className="text-blue-800 font-semibold">Customer / WO: </span>
+                                        <span className="font-extrabold text-blue-950 font-mono">{activeOutboundItem.workOrderNumber} ({activeOutboundItem.customerName})</span>
+                                    </div>
+                                    <div className="text-[11px] text-blue-900">
+                                        Total Produced: <strong className="text-blue-950 font-bold">{activeOutboundItem.totalProduced}</strong> | Already Inspected: <strong className="text-blue-950 font-bold">{activeOutboundItem.alreadyInspected}</strong>
                                     </div>
                                 </div>
-                                <div className="text-right">
-                                    <span className="text-[10px] uppercase font-bold text-blue-700 dark:text-blue-300 block">Remaining to QC</span>
-                                    <span className="text-sm font-black font-mono text-blue-800 dark:text-blue-200">
+                                <div className="text-right pl-3 border-l border-blue-200">
+                                    <span className="text-[10px] uppercase font-bold text-blue-800 tracking-wider block">Remaining to QC</span>
+                                    <span className="text-sm font-black font-mono text-blue-950">
                                         {activeOutboundItem.remainingQuantity} {activeOutboundItem.finishedGood.uom || 'BAGS'}
                                     </span>
                                 </div>
