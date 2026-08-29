@@ -47,8 +47,14 @@ router.patch('/:id/payment', authenticate, checkPermission('SALES', 'UPDATE'), r
  * @desc    Rejects deletion of immutable tax invoices
  * @access  Private
  */
-router.post('/bulk-delete', authenticate, createBulkDeleteHandler(Invoice, { resourceName: 'Invoices', isImmutable: true }));
+const rejectInvoiceModification = (req, res) => {
+    return res.status(403).json({
+        success: false,
+        message: 'Tax invoices are immutable financial records and cannot be modified or deleted.'
+    });
+};
 
-// NOTE: No PUT or DELETE routes are exposed for Invoices because generated invoices are immutable financial records.
+router.put('/:id', authenticate, rejectInvoiceModification);
+router.delete('/:id', authenticate, rejectInvoiceModification);
 
 module.exports = router;

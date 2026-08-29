@@ -12,10 +12,12 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
     const [showRejectForm, setShowRejectForm] = useState(false);
     const [isZoomedImageOpen, setIsZoomedImageOpen] = useState(false);
 
+    const isPos = dispatch.sourceType === 'POS_INVOICE' || Boolean(dispatch.invoice && !dispatch.salesOrder);
     const soObj = typeof dispatch.salesOrder === 'object' ? dispatch.salesOrder : null;
-    const soNum = soObj?.soNumber || dispatch.soNumber || '-';
-    const custObj = typeof soObj?.customer === 'object' ? soObj.customer : null;
-    const customerName = custObj?.companyName || dispatch.customerName || 'Customer';
+    const invObj = typeof dispatch.invoice === 'object' ? dispatch.invoice : null;
+    const soNum = isPos ? (invObj?.invoiceNumber || 'POS Invoice') : (soObj?.soNumber || dispatch.soNumber || '-');
+    const custObj = typeof soObj?.customer === 'object' ? soObj.customer : (typeof invObj?.customer === 'object' ? invObj.customer : null);
+    const customerName = custObj?.companyName || invObj?.walkInCustomer?.name || dispatch.customerName || 'Retail Customer';
 
     const status = (dispatch.deliveryStatus || 'IN_TRANSIT').toUpperCase();
     const isDelivered = status === 'DELIVERED';
@@ -127,8 +129,15 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
                         </div>
 
                         <div className="space-y-1.5 sm:text-right">
-                            <div className="text-[10px] font-bold uppercase tracking-wider text-text-muted">Sales Order & Buyer</div>
-                            <div className="font-mono font-bold text-primary">{soNum}</div>
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-text-muted">
+                                {isPos ? 'POS Sale Reference & Buyer' : 'Sales Order & Buyer'}
+                            </div>
+                            <div className="font-mono font-bold text-primary flex items-center gap-1.5 sm:justify-end">
+                                <span>{soNum}</span>
+                                <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${isPos ? 'bg-purple-100 text-purple-800 dark:bg-purple-950/50 dark:text-purple-300' : 'bg-blue-100 text-blue-800 dark:bg-blue-950/50 dark:text-blue-300'}`}>
+                                    {isPos ? 'POS Sale' : 'Sales Order'}
+                                </span>
+                            </div>
                             <div className="font-bold text-text-main">{customerName}</div>
                             <div className="text-[11px] text-text-muted">
                                 Dispatched: {dispatch.dispatchDate ? new Date(dispatch.dispatchDate).toLocaleDateString() : '-'}

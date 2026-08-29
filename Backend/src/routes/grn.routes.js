@@ -31,6 +31,19 @@ router.get('/', authenticate, checkPermission('PROCUREMENT', 'READ'), getGRNs);
  */
 router.get('/:id', authenticate, checkPermission('PROCUREMENT', 'READ'), getGRNById);
 
-// NOTE: No PUT or DELETE routes are exposed for GRNs because goods receipts are immutable audit records.
+const GRN = require('../models/grn.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
+const rejectGRNModification = (req, res) => {
+    return res.status(403).json({
+        success: false,
+        message: 'Goods Receipt Note (GRN) records are immutable audit records and cannot be modified or deleted after receipt.'
+    });
+};
+
+router.put('/:id', authenticate, rejectGRNModification);
+router.patch('/:id', authenticate, rejectGRNModification);
+router.delete('/:id', authenticate, rejectGRNModification);
+router.post('/bulk-delete', authenticate, createBulkDeleteHandler(GRN, { resourceName: 'GRNs', isImmutable: true }));
 
 module.exports = router;

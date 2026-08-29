@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { Plus, ShieldCheck, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
+import { Plus, ShieldCheck, ArrowDownLeft, ArrowUpRight, Eye } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreateQCInspectionModal from '../components/quality/CreateQCInspectionModal';
+import ViewQCInspectionModal from '../components/quality/ViewQCInspectionModal';
 
 export default function QualityPage() {
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+    const [viewingQcData, setViewingQcData] = useState(null);
     const [modalType, setModalType] = useState('INBOUND');
     const [refreshKey, setRefreshKey] = useState(0);
 
@@ -14,13 +16,20 @@ export default function QualityPage() {
             label: 'Inbound QC (Raw Materials & GRN)',
             icon: ArrowDownLeft,
             resourcePath: '/qc-inspections?inspectionType=INBOUND',
+            isEditable: false,
+            isDeletable: false,
             columns: [
                 {
                     header: 'QC CERTIFICATE #',
                     render: (row) => (
-                        <span className="font-mono font-bold text-primary uppercase">
+                        <button
+                            type="button"
+                            onClick={() => setViewingQcData(row)}
+                            className="font-mono font-bold text-primary uppercase hover:underline cursor-pointer text-left"
+                            title="View QC Certificate"
+                        >
                             {row.qcCertificateNumber || '-'}
-                        </span>
+                        </button>
                     ),
                     sortable: true
                 },
@@ -89,6 +98,22 @@ export default function QualityPage() {
                             </span>
                         );
                     }
+                },
+                {
+                    header: 'ACTIONS',
+                    render: (row) => (
+                        <div className="flex items-center justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setViewingQcData(row)}
+                                className="px-2.5 py-1 bg-app-bg hover:bg-card-bg border border-border text-text-muted hover:text-text-main rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                                title="View QC Certificate & Lab Tests"
+                            >
+                                <Eye size={13} />
+                                <span>View</span>
+                            </button>
+                        </div>
+                    )
                 }
             ]
         },
@@ -97,13 +122,20 @@ export default function QualityPage() {
             label: 'Outbound QC (Finished Bags & Production)',
             icon: ArrowUpRight,
             resourcePath: '/qc-inspections?inspectionType=OUTBOUND',
+            isEditable: false,
+            isDeletable: false,
             columns: [
                 {
                     header: 'QC CERTIFICATE #',
                     render: (row) => (
-                        <span className="font-mono font-bold text-primary uppercase">
+                        <button
+                            type="button"
+                            onClick={() => setViewingQcData(row)}
+                            className="font-mono font-bold text-primary uppercase hover:underline cursor-pointer text-left"
+                            title="View QC Certificate"
+                        >
                             {row.qcCertificateNumber || '-'}
-                        </span>
+                        </button>
                     ),
                     sortable: true
                 },
@@ -172,6 +204,22 @@ export default function QualityPage() {
                             </span>
                         );
                     }
+                },
+                {
+                    header: 'ACTIONS',
+                    render: (row) => (
+                        <div className="flex items-center justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setViewingQcData(row)}
+                                className="px-2.5 py-1 bg-app-bg hover:bg-card-bg border border-border text-text-muted hover:text-text-main rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                                title="View QC Certificate & Lab Tests"
+                            >
+                                <Eye size={13} />
+                                <span>View</span>
+                            </button>
+                        </div>
+                    )
                 }
             ]
         }
@@ -221,6 +269,13 @@ export default function QualityPage() {
                 onClose={() => setIsCreateModalOpen(false)}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />
+
+            <ViewQCInspectionModal
+                isOpen={Boolean(viewingQcData)}
+                inspection={viewingQcData}
+                onClose={() => setViewingQcData(null)}
+            />
         </>
     );
 }
+

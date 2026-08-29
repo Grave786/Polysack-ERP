@@ -858,7 +858,20 @@ export default function TabbedResourcePage({
         }
     };
 
+    const isCurrentTabEditable = (() => {
+        const k = (activeTabKey || '').toLowerCase();
+        const p = (activeTab?.resourcePath || '').toLowerCase();
+        if (activeTab?.isEditable === false) return false;
+        if (k.includes('qc') || p.includes('qc-inspection')) return false;
+        if (k.includes('invoice') || p.includes('invoice')) return false;
+        if (k.includes('grn') || p.includes('grn')) return false;
+        if (k.includes('stock-transaction') || p.includes('stock-transaction') || k.includes('valuation') || k.includes('audit-ledger')) return false;
+        if (k.includes('dispatch') || p.includes('dispatch')) return false;
+        return true;
+    })();
+
     const handleEditRow = (row) => {
+        if (!isCurrentTabEditable) return;
         setEditingItem(row);
         const codeVal = row.code || row.customerCode || row.supplierCode || row.employeeCode || row.machineCode || row.itemCode || row.shiftCode || '';
 
@@ -2578,6 +2591,7 @@ export default function TabbedResourcePage({
                     onEdit={handleEditRow}
                     onDelete={handleDeleteRow}
                     onBulkDelete={bulkDeleteItems}
+                    isEditable={isCurrentTabEditable}
                     isDeletable={(() => {
                         const k = (activeTabKey || '').toLowerCase();
                         const p = (activeTab?.resourcePath || '').toLowerCase();

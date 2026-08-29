@@ -13,15 +13,16 @@ export default function DispatchPage() {
     const [viewingDispatchData, setViewingDispatchData] = useState(null);
     const [uploadPodData, setUploadPodData] = useState(null);
 
-    // Sales Orders and Locations for drawer dropdowns
-    const [salesOrders, setSalesOrders] = useState([]);
+    // Sources (Sales Orders + POS Invoices) and Locations for drawer dropdowns
+    const [dispatchableSources, setDispatchableSources] = useState([]);
+    const [selectedSourceKey, setSelectedSourceKey] = useState('');
+    const [selectedSource, setSelectedSource] = useState(null);
     const [locations, setLocations] = useState([]);
     const [isLoadingFormOptions, setIsLoadingFormOptions] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Drawer Form State
     const [formData, setFormData] = useState({
-        salesOrder: '',
         dispatchLocation: '',
         transporter: 'V-Trans India Ltd',
         vehicleNumber: 'GJ-05-BX-1000',
@@ -31,26 +32,26 @@ export default function DispatchPage() {
     });
 
     const [dispatchItems, setDispatchItems] = useState([]);
-    const [selectedSO, setSelectedSO] = useState(null);
 
-    // Fetch Sales Orders & Locations when Drawer Opens
+    // Fetch Dispatchable Sources & Locations when Drawer Opens
     useEffect(() => {
         if (isDrawerOpen) {
             setIsLoadingFormOptions(true);
             Promise.all([
-                axiosInstance.get('/sales-orders?limit=100'),
+                axiosInstance.get('/dispatches/dispatchable-sources'),
                 axiosInstance.get('/locations?isActive=true&limit=50')
             ])
-                .then(([soRes, locRes]) => {
-                    if (soRes.data?.success && Array.isArray(soRes.data.data)) {
-                        const availableOrders = soRes.data.data.filter(
-                            (so) => so.status === 'CONFIRMED' || so.status === 'READY_FOR_DISPATCH' || so.status === 'DISPATCHED'
-                        );
-                        const list = availableOrders.length > 0 ? availableOrders : soRes.data.data;
-                        setSalesOrders(list);
+                .then(([srcRes, locRes]) => {
+                    if (srcRes.data?.success && Array.isArray(srcRes.data.data)) {
+                        const list = srcRes.data.data;
+                        setDispatchableSources(list);
 
                         if (list.length > 0) {
-                            handleSelectSalesOrder(list[0]._id, list);
+                            handleSelectSource(list[0].id, list);
+                        } else {
+                            setSelectedSource(null);
+                            setSelectedSourceKey('');
+                            setDispatchItems([]);
                         }
                     }
 
@@ -64,7 +65,7 @@ export default function DispatchPage() {
                 })
                 .catch((err) => {
                     console.error('Error fetching form options for dispatch:', err);
-                    toast.error('Failed to load Sales Orders catalog');
+                    toast.error('Failed to load dispatchable orders catalog');
                 })
                 .finally(() => {
                     setIsLoadingFormOptions(false);
@@ -72,19 +73,18 @@ export default function DispatchPage() {
         }
     }, [isDrawerOpen]);
 
-    // Handle Sales Order Selection
-    const handleSelectSalesOrder = (soId, ordersList = salesOrders) => {
-        const so = ordersList.find((o) => o._id === soId);
-        setSelectedSO(so || null);
-        setFormData((prev) => ({ ...prev, salesOrder: soId }));
+    // Handle Source Selection (SO or POS Invoice)
+    const handleSelectSource = (sourceId, sourcesList = dispatchableSources) => {
+        const src = sourcesList.find((s) => String(s.id) === String(sourceId));
+        setSelectedSource(src || null);
+        setSelectedSourceKey(src ? `${src.sourceType}_${src.id}` : '');
 
-        if (so && Array.isArray(so.items)) {
-            const prepItems = so.items.map((item) => {
-                const fgObj = typeof item.finishedGood === 'object' ? item.finishedGood : null;
-                const fgId = fgObj?._id || item.finishedGood;
-                const fgName = fgObj?.name || 'Finished Goods Bag';
-                const orderedQty = item.quantity || 0;
-                const alreadyDispatched = item.dispatchedQuantity || 0;
+        if (src && Array.isArray(src.items)) {
+            const prepItems = src.items.map((item) => {
+                const fgId = item.finishedGood?._id || item.finishedGood;
+                const fgName = item.name || item.finishedGood?.name || 'Finished Goods Bag';
+                const orderedQty = item.orderedQuantity || item.quantity || 0;
+                const alreadyDispatched = item.alreadyDispatched || 0;
                 const remainingQty = Math.max(0, orderedQty - alreadyDispatched);
 
                 return {
@@ -105,21 +105,36 @@ export default function DispatchPage() {
     const handleSubmitDispatch = async (e) => {
         e.preventDefault();
 
-        if (!formData.salesOrder || !formData.dispatchLocation || !formData.vehicleNumber.trim() || !formData.transporter.trim()) {
-            toast.error('Please fill in all required fields (Sales Order, Location, Vehicle #, Transporter)');
+        if (!selectedSource || !formData.dispatchLocation || !formData.vehicleNumber.trim() || !formData.transporter.trim()) {
+            toast.error('Please fill in all required fields (Order/Invoice Reference, Location, Vehicle #, Transporter)');
             return;
         }
 
         if (dispatchItems.length === 0) {
-            toast.error('No items found in selected Sales Order');
+            toast.error('No items found in selected Order / Invoice');
             return;
+        }
+
+        // Validate quantities do not exceed remaining
+        for (const it of dispatchItems) {
+            const numQty = Number(it.dispatchedQuantity || 0);
+            if (numQty <= 0) {
+                toast.error(`Please enter a valid quantity > 0 for '${it.finishedGoodName}'`);
+                return;
+            }
+            if (numQty > it.remainingQuantity + 0.0001) {
+                toast.error(`Cannot dispatch ${numQty} bags for '${it.finishedGoodName}' — only ${it.remainingQuantity} bags remaining`);
+                return;
+            }
         }
 
         try {
             setIsSubmitting(true);
 
             const payload = {
-                salesOrder: formData.salesOrder,
+                sourceType: selectedSource.sourceType,
+                salesOrder: selectedSource.sourceType === 'SALES_ORDER' ? selectedSource.id : undefined,
+                invoice: selectedSource.sourceType === 'POS_INVOICE' ? selectedSource.id : undefined,
                 dispatchLocation: formData.dispatchLocation,
                 vehicleNumber: formData.vehicleNumber.trim().toUpperCase(),
                 transporter: formData.transporter.trim(),
@@ -164,14 +179,26 @@ export default function DispatchPage() {
             sortable: true
         },
         {
-            header: 'SALES ORDER REF',
+            header: 'SOURCE / REFERENCE',
             render: (row) => {
-                const soObj = typeof row.salesOrder === 'object' ? row.salesOrder : null;
-                const soNum = soObj?.soNumber || row.soNumber || '-';
+                const isPos = row.sourceType === 'POS_INVOICE' || Boolean(row.invoice && !row.salesOrder);
+                const refNum = isPos
+                    ? (row.invoice?.invoiceNumber || 'POS Invoice')
+                    : (row.salesOrder?.soNumber || row.soNumber || '-');
+
                 return (
-                    <span className="font-mono font-bold uppercase text-text-muted text-xs">
-                        {soNum}
-                    </span>
+                    <div className="flex flex-col">
+                        <span className={`font-mono font-extrabold uppercase text-xs ${isPos ? 'text-purple-700 dark:text-purple-300' : 'text-blue-700 dark:text-blue-300'}`}>
+                            {refNum}
+                        </span>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded w-fit mt-0.5 border ${
+                            isPos
+                                ? 'bg-purple-100 text-purple-800 dark:bg-purple-950/50 dark:text-purple-300 border-purple-200 dark:border-purple-800'
+                                : 'bg-blue-100 text-blue-800 dark:bg-blue-950/50 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                        }`}>
+                            {isPos ? 'POS Counter Sale' : 'Sales Order'}
+                        </span>
+                    </div>
                 );
             },
             sortable: true
@@ -179,9 +206,9 @@ export default function DispatchPage() {
         {
             header: 'CUSTOMER',
             render: (row) => {
-                const soObj = typeof row.salesOrder === 'object' ? row.salesOrder : null;
-                const custObj = typeof soObj?.customer === 'object' ? soObj.customer : null;
-                const customerName = custObj?.companyName || row.customerName || '-';
+                const soCust = row.salesOrder?.customer?.companyName || row.salesOrder?.customer?.name;
+                const invCust = row.invoice?.customer?.companyName || row.invoice?.customer?.name || row.invoice?.walkInCustomer?.name;
+                const customerName = soCust || invCust || row.customerName || 'Retail Customer';
 
                 return (
                     <span className="font-extrabold text-text-main text-xs">
@@ -355,51 +382,68 @@ export default function DispatchPage() {
                 isOpen={isDrawerOpen}
                 onClose={() => setIsDrawerOpen(false)}
                 title="Plan Vehicle Dispatch & Gate Pass"
-                subtitle="Select Sales Order, assign transporter carrier, vehicle number & quantity to ship"
+                subtitle="Select Sales Order or POS Sale, assign transporter carrier, vehicle number & quantity to ship"
             >
                 <form onSubmit={handleSubmitDispatch} className="space-y-4 font-sans text-xs">
                     {isLoadingFormOptions ? (
                         <div className="flex items-center justify-center py-12 text-text-muted gap-2">
                             <RefreshCw size={18} className="animate-spin text-primary" />
-                            <span>Loading Sales Orders & Locations...</span>
+                            <span>Loading Sales Orders & POS Invoices...</span>
                         </div>
                     ) : (
                         <>
                             <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                    Select Sales Order *
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1 flex items-center justify-between">
+                                    <span>Select Order / Invoice Reference *</span>
+                                    <span className="text-[10px] text-text-muted font-normal">
+                                        {dispatchableSources.length} available to dispatch
+                                    </span>
                                 </label>
                                 <select
                                     required
-                                    value={formData.salesOrder}
-                                    onChange={(e) => handleSelectSalesOrder(e.target.value)}
+                                    value={selectedSource?.id || ''}
+                                    onChange={(e) => handleSelectSource(e.target.value)}
                                     className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
                                 >
-                                    {salesOrders.length === 0 ? (
-                                        <option value="">No active Sales Orders available</option>
+                                    {dispatchableSources.length === 0 ? (
+                                        <option value="">No pending Sales Orders or POS Invoices available</option>
                                     ) : (
-                                        salesOrders.map((so) => {
-                                            const custObj = typeof so.customer === 'object' ? so.customer : null;
-                                            const custName = custObj?.companyName || 'Retail Customer';
-                                            return (
-                                                <option key={so._id} value={so._id}>
-                                                    {so.soNumber} — {custName} ({so.status})
-                                                </option>
-                                            );
-                                        })
+                                        dispatchableSources.map((src) => (
+                                            <option key={`${src.sourceType}_${src.id}`} value={src.id}>
+                                                {src.label}
+                                            </option>
+                                        ))
                                     )}
                                 </select>
                             </div>
 
-                            {selectedSO && (
-                                <div className="bg-app-bg border border-border p-3 rounded-lg space-y-1">
+                            {selectedSource && (
+                                <div className="bg-app-bg border border-border p-3 rounded-lg space-y-1.5 shadow-2xs">
                                     <div className="flex justify-between items-center text-[11px]">
-                                        <span className="text-text-muted font-medium">Customer:</span>
-                                        <span className="font-bold text-text-main">{selectedSO.customer?.companyName || 'N/A'}</span>
+                                        <span className="text-text-muted font-medium">Source Type:</span>
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
+                                            selectedSource.sourceType === 'POS_INVOICE'
+                                                ? 'bg-purple-100 text-purple-800 border border-purple-200 dark:bg-purple-950/50 dark:text-purple-300 dark:border-purple-800'
+                                                : 'bg-blue-100 text-blue-800 border border-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-800'
+                                        }`}>
+                                            {selectedSource.sourceType === 'POS_INVOICE' ? 'POS Counter Sale (Invoice)' : 'Sales Order'}
+                                        </span>
                                     </div>
                                     <div className="flex justify-between items-center text-[11px]">
-                                        <span className="text-text-muted font-medium">Order Status:</span>
-                                        <span className="font-mono font-extrabold text-primary">{selectedSO.status}</span>
+                                        <span className="text-text-muted font-medium">Customer:</span>
+                                        <span className="font-bold text-text-main">{selectedSource.customerName}</span>
+                                    </div>
+                                    {selectedSource.deliveryAddress && (
+                                        <div className="flex justify-between items-center text-[11px]">
+                                            <span className="text-text-muted font-medium">Delivery Destination:</span>
+                                            <span className="font-medium text-text-muted">{selectedSource.deliveryAddress}</span>
+                                        </div>
+                                    )}
+                                    <div className="flex justify-between items-center text-[11px] pt-1 border-t border-border/60">
+                                        <span className="text-text-muted font-medium">Remaining to Ship:</span>
+                                        <span className="font-mono font-extrabold text-primary">
+                                            {selectedSource.remainingQuantity?.toLocaleString()} Bags
+                                        </span>
                                     </div>
                                 </div>
                             )}
@@ -496,7 +540,12 @@ export default function DispatchPage() {
                                             </div>
                                             <div className="grid grid-cols-2 gap-3 items-center">
                                                 <div>
-                                                    <span className="text-[10px] text-text-muted block">Quantity to Load (Bags)</span>
+                                                    <div className="flex justify-between items-center text-[10px] text-text-muted mb-0.5">
+                                                        <span>Quantity to Load (Bags)</span>
+                                                        <span className="font-bold text-primary">
+                                                            Max: {item.remainingQuantity}
+                                                        </span>
+                                                    </div>
                                                     <input
                                                         type="number"
                                                         required

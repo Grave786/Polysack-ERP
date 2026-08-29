@@ -31,7 +31,19 @@ router.get('/', authenticate, checkPermission('INVENTORY', 'READ'), getStockTran
  */
 router.get('/:id', authenticate, checkPermission('INVENTORY', 'READ'), getStockTransactionById);
 
-// NOTE: No PUT or DELETE routes are defined for stock transactions because ledger entries are immutable.
-// Adjustments must be made via new StockTransaction entries of type 'ADJUSTMENT'.
+const StockTransaction = require('../models/stockTransaction.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
+const rejectStockTransactionModification = (req, res) => {
+    return res.status(403).json({
+        success: false,
+        message: 'Stock ledger transactions are immutable audit records and cannot be modified or deleted after execution.'
+    });
+};
+
+router.put('/:id', authenticate, rejectStockTransactionModification);
+router.patch('/:id', authenticate, rejectStockTransactionModification);
+router.delete('/:id', authenticate, rejectStockTransactionModification);
+router.post('/bulk-delete', authenticate, createBulkDeleteHandler(StockTransaction, { resourceName: 'Stock Transactions', isImmutable: true }));
 
 module.exports = router;

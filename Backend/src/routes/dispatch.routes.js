@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const {
+    getDispatchableSources,
     createDispatch,
     updateDeliveryStatus,
     getDispatches,
@@ -12,8 +13,16 @@ router.use(authenticate);
 router.use(checkTenantModule('DISPATCH'));
 
 /**
+ * @route   GET /api/dispatches/dispatchable-sources
+ * @desc    Get combined list of dispatchable Sales Orders & POS Invoices
+ * @access  Private (SALES:READ)
+ */
+router.get('/dispatchable-sources', authenticate, checkPermission('SALES', 'READ'), getDispatchableSources);
+router.get('/dispatchable-orders', authenticate, checkPermission('SALES', 'READ'), getDispatchableSources);
+
+/**
  * @route   POST /api/dispatches
- * @desc    Create a new Dispatch note (Fulfill SalesOrder finished goods)
+ * @desc    Create a new Dispatch note (Fulfill SalesOrder or POS Invoice finished goods)
  * @access  Private (SALES:CREATE)
  */
 router.post('/', authenticate, checkPermission('SALES', 'CREATE'), createDispatch);
@@ -47,8 +56,14 @@ router.patch('/:id/delivery-status', authenticate, checkPermission('SALES', 'UPD
  * @desc    Rejects deletion of immutable dispatch movement records
  * @access  Private
  */
-router.post('/bulk-delete', authenticate, createBulkDeleteHandler(Dispatch, { resourceName: 'Dispatches', isImmutable: true }));
+const rejectDispatchModification = (req, res) => {
+    return res.status(403).json({
+        success: false,
+        message: 'Dispatch and logistics ledger records are immutable and cannot be modified or deleted directly.'
+    });
+};
 
-// NOTE: No PUT or DELETE routes are exposed for Dispatches because outbound goods movements are immutable ledger records.
+router.put('/:id', authenticate, rejectDispatchModification);
+router.delete('/:id', authenticate, rejectDispatchModification);
 
 module.exports = router;

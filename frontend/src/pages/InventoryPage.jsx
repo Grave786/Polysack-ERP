@@ -276,6 +276,8 @@ export default function InventoryPage() {
             key: 'stock-transactions',
             label: 'Audit Ledger',
             resourcePath: '/stock-transactions',
+            isEditable: false,
+            isDeletable: false,
             columns: auditLedgerColumns
         }
     ];

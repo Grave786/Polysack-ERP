@@ -32,7 +32,17 @@ const DispatchSchema = new mongoose.Schema({
     salesOrder: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'SalesOrder',
-        required: [true, 'Sales Order reference is required']
+        default: null
+    },
+    invoice: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Invoice',
+        default: null
+    },
+    sourceType: {
+        type: String,
+        enum: ['SALES_ORDER', 'POS_INVOICE'],
+        default: 'SALES_ORDER'
     },
     dispatchDate: {
         type: Date,
@@ -105,6 +115,15 @@ const DispatchSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
+DispatchSchema.pre('validate', function (next) {
+    if (!this.salesOrder && !this.invoice) {
+        this.invalidate('salesOrder', 'A dispatch must reference either a Sales Order or a POS Invoice.');
+    }
+    next();
+});
+
 DispatchSchema.index({ dispatchNumber: 1, tenant: 1 }, { unique: true });
+DispatchSchema.index({ tenant: 1, invoice: 1 });
+DispatchSchema.index({ tenant: 1, salesOrder: 1 });
 
 module.exports = mongoose.model('Dispatch', DispatchSchema);

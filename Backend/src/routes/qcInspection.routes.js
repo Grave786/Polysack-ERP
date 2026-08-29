@@ -39,6 +39,22 @@ router.get('/', authenticate, checkPermission('QUALITY', 'READ'), getQCInspectio
  */
 router.get('/:id', authenticate, checkPermission('QUALITY', 'READ'), getQCInspectionById);
 
-// NOTE: No PUT or DELETE routes are exposed for QCInspections because audit records are immutable once issued.
+const QCInspection = require('../models/qcInspection.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
+/**
+ * Immutable Audit Record Route Guards
+ */
+const rejectQCModification = (req, res) => {
+    return res.status(403).json({
+        success: false,
+        message: 'QC Inspection records are immutable quality audit records and cannot be modified or deleted after creation.'
+    });
+};
+
+router.put('/:id', authenticate, rejectQCModification);
+router.patch('/:id', authenticate, rejectQCModification);
+router.delete('/:id', authenticate, rejectQCModification);
+router.post('/bulk-delete', authenticate, createBulkDeleteHandler(QCInspection, { resourceName: 'QC Inspections', isImmutable: true }));
 
 module.exports = router;
