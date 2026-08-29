@@ -50,6 +50,16 @@ router.put('/:id', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), updat
  * @desc    Soft delete Supplier by ID
  * @access  Private (MASTER_DATA:DELETE)
  */
+const Supplier = require('../models/supplier.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('MASTER_DATA', 'DELETE'), deleteSupplier);
+
+/**
+ * @route   POST /api/suppliers/bulk-delete
+ * @desc    Bulk soft delete Suppliers
+ * @access  Private (MASTER_DATA:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('MASTER_DATA', 'DELETE'), createBulkDeleteHandler(Supplier, { resourceName: 'Suppliers' }));
 
 module.exports = router;

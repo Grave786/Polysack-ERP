@@ -43,6 +43,16 @@ router.put('/:id', authenticate, checkPermission('USERS', 'UPDATE'), updateUser)
  * @desc    Soft delete / activate user
  * @access  Private (USERS:UPDATE)
  */
+const User = require('../models/user.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.patch('/:id/toggle-active', authenticate, checkPermission('USERS', 'UPDATE'), toggleUserActive);
+
+/**
+ * @route   POST /api/users/bulk-delete
+ * @desc    Bulk soft delete / deactivate Users (with self-account deletion protection)
+ * @access  Private (USERS:UPDATE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('USERS', 'UPDATE'), createBulkDeleteHandler(User, { resourceName: 'Users', isUser: true }));
 
 module.exports = router;

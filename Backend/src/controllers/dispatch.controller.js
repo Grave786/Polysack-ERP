@@ -302,7 +302,7 @@ const createDispatch = async (req, res) => {
 };
 
 /**
- * @desc    Update Delivery Status of a Dispatch (IN_TRANSIT -> DELIVERED or RETURNED)
+ * @desc    Update Delivery Status / POD Workflow of a Dispatch (IN_TRANSIT -> POD_PENDING_APPROVAL -> DELIVERED / RETURNED)
  * @route   PATCH /api/dispatches/:id/delivery-status
  * @access  Private (SALES:UPDATE permission)
  */
@@ -316,11 +316,13 @@ const updateDeliveryStatus = async (req, res) => {
             });
         }
 
-        const { deliveryStatus } = req.body;
-        if (!deliveryStatus || (deliveryStatus !== 'DELIVERED' && deliveryStatus !== 'RETURNED')) {
+        const { action, deliveryStatus, receiverName, receiverPhone, proofDocument, proofImage, notes, rejectionReason } = req.body;
+        const requestedStatus = action || deliveryStatus;
+
+        if (!requestedStatus) {
             return res.status(400).json({
                 success: false,
-                message: "Please provide a valid deliveryStatus ('DELIVERED' or 'RETURNED')."
+                message: "Please provide a valid action ('UPLOAD_POD', 'APPROVE_POD', 'REJECT_POD', 'RETURNED')."
             });
         }
 
@@ -332,31 +334,166 @@ const updateDeliveryStatus = async (req, res) => {
             });
         }
 
-        if (dispatch.deliveryStatus !== 'IN_TRANSIT') {
-            return res.status(400).json({
-                success: false,
-                message: `Cannot update delivery status for a dispatch that is already '${dispatch.deliveryStatus}'.`
+        const Invoice = require('../models/invoice.model');
+        const Notification = require('../models/notification.model');
+
+        // STEP 1: Upload POD (Transitions IN_TRANSIT -> POD_PENDING_APPROVAL)
+        if (requestedStatus === 'UPLOAD_POD' || requestedStatus === 'POD_PENDING_APPROVAL') {
+            if (dispatch.deliveryStatus === 'DELIVERED') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'This dispatch is already marked as DELIVERED.'
+                });
+            }
+
+            dispatch.deliveryStatus = 'POD_PENDING_APPROVAL';
+            dispatch.pod = {
+                receiverName: receiverName || req.body.pod?.receiverName || dispatch.pod?.receiverName || '',
+                receiverPhone: receiverPhone || req.body.pod?.receiverPhone || dispatch.pod?.receiverPhone || '',
+                proofDocument: proofDocument || req.body.pod?.proofDocument || dispatch.pod?.proofDocument || '',
+                proofImage: proofImage || req.body.pod?.proofImage || dispatch.pod?.proofImage || '',
+                notes: notes || req.body.pod?.notes || dispatch.pod?.notes || '',
+                uploadedBy: req.user._id || req.user.id,
+                uploadedAt: new Date(),
+                rejectionReason: null,
+                rejectedAt: null
+            };
+
+            await dispatch.save();
+
+            // Notify Admin / Approvers of pending POD approval
+            try {
+                await Notification.create({
+                    tenant: tenantId,
+                    type: 'DISPATCH_ALERT',
+                    module: 'SALES',
+                    priority: 'HIGH',
+                    title: `POD Uploaded: ${dispatch.dispatchNumber}`,
+                    message: `Proof of Delivery uploaded for Dispatch ${dispatch.dispatchNumber}. Awaiting Admin Approval.`,
+                    link: `/dispatch`,
+                    data: { dispatchId: dispatch._id, dispatchNumber: dispatch.dispatchNumber }
+                });
+            } catch (notifErr) {
+                console.warn('Non-critical notification creation error:', notifErr.message);
+            }
+
+            await dispatch.populate([
+                { path: 'salesOrder', select: 'soNumber status' },
+                { path: 'dispatchLocation', select: 'name code' },
+                { path: 'items.finishedGood', select: 'name code uom' },
+                { path: 'dispatchedBy', select: 'name email' },
+                { path: 'pod.uploadedBy', select: 'name email' }
+            ]);
+
+            return res.status(200).json({
+                success: true,
+                message: `Proof of Delivery uploaded for Dispatch '${dispatch.dispatchNumber}'. Status updated to 'POD_PENDING_APPROVAL'.`,
+                data: dispatch
             });
         }
 
-        dispatch.deliveryStatus = deliveryStatus;
-        if (deliveryStatus === 'DELIVERED') {
+        // STEP 2A: Approve POD / Mark DELIVERED (Gated by mandatory POD upload & Payment Settlement)
+        if (requestedStatus === 'APPROVE_POD' || requestedStatus === 'DELIVERED') {
+            if (dispatch.deliveryStatus === 'DELIVERED') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'This dispatch is already marked as DELIVERED.'
+                });
+            }
+
+            // GATED CHECK 1: Ensure POD was uploaded first (no shortcuts to DELIVERED)
+            if (!dispatch.pod || (!dispatch.pod.proofImage && !dispatch.pod.proofDocument && !dispatch.pod.receiverName)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Cannot mark as DELIVERED directly. Driver/dispatcher must upload Proof of Delivery (POD) photo/details first.'
+                });
+            }
+
+            // GATED CHECK 2: Verify linked Invoice Payment Status is PAID
+            const linkedInvoice = await Invoice.findOne({ salesOrder: dispatch.salesOrder, tenant: tenantId });
+            if (linkedInvoice && (linkedInvoice.paymentStatus !== 'PAID' || (linkedInvoice.dueAmount && linkedInvoice.dueAmount > 0.001))) {
+                const outstandingDue = (linkedInvoice.dueAmount !== undefined ? linkedInvoice.dueAmount : linkedInvoice.grandTotal).toLocaleString();
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot approve delivery — outstanding payment of ₹${outstandingDue} remains on Invoice ${linkedInvoice.invoiceNumber}.`
+                });
+            }
+
+            dispatch.deliveryStatus = 'DELIVERED';
             dispatch.podConfirmedAt = new Date();
+
+            if (!dispatch.pod) dispatch.pod = {};
+            if (receiverName) dispatch.pod.receiverName = receiverName;
+            if (receiverPhone) dispatch.pod.receiverPhone = receiverPhone;
+            if (proofDocument) dispatch.pod.proofDocument = proofDocument;
+            if (proofImage) dispatch.pod.proofImage = proofImage;
+            if (notes) dispatch.pod.notes = notes;
+            dispatch.pod.approvedBy = req.user._id || req.user.id;
+            dispatch.pod.approvedAt = new Date();
+
+            await dispatch.save();
+
+            await dispatch.populate([
+                { path: 'salesOrder', select: 'soNumber status' },
+                { path: 'dispatchLocation', select: 'name code' },
+                { path: 'items.finishedGood', select: 'name code uom' },
+                { path: 'dispatchedBy', select: 'name email' },
+                { path: 'pod.uploadedBy', select: 'name email' },
+                { path: 'pod.approvedBy', select: 'name email' }
+            ]);
+
+            return res.status(200).json({
+                success: true,
+                message: `Dispatch '${dispatch.dispatchNumber}' delivery approved and marked as 'DELIVERED'.`,
+                data: dispatch
+            });
         }
 
-        await dispatch.save();
+        // STEP 2B: Reject POD (Reverts to IN_TRANSIT with reason)
+        if (requestedStatus === 'REJECT_POD') {
+            dispatch.deliveryStatus = 'IN_TRANSIT';
+            if (!dispatch.pod) dispatch.pod = {};
+            dispatch.pod.rejectionReason = rejectionReason || notes || 'Proof of Delivery rejected by Admin. Please re-upload.';
+            dispatch.pod.rejectedAt = new Date();
 
-        await dispatch.populate([
-            { path: 'salesOrder', select: 'soNumber status' },
-            { path: 'dispatchLocation', select: 'name code' },
-            { path: 'items.finishedGood', select: 'name code uom' },
-            { path: 'dispatchedBy', select: 'name email' }
-        ]);
+            await dispatch.save();
 
-        return res.status(200).json({
-            success: true,
-            message: `Dispatch '${dispatch.dispatchNumber}' delivery status updated to '${deliveryStatus}'.${deliveryStatus === 'RETURNED' ? ' Note: Stock/SO status reversal for returns must be processed via manual StockTransaction ADJUSTMENT.' : ''}`,
-            data: dispatch
+            await dispatch.populate([
+                { path: 'salesOrder', select: 'soNumber status' },
+                { path: 'dispatchLocation', select: 'name code' },
+                { path: 'items.finishedGood', select: 'name code uom' },
+                { path: 'dispatchedBy', select: 'name email' }
+            ]);
+
+            return res.status(200).json({
+                success: true,
+                message: `Proof of Delivery rejected for Dispatch '${dispatch.dispatchNumber}'. Status reverted to 'IN_TRANSIT'.`,
+                data: dispatch
+            });
+        }
+
+        // Return handling
+        if (requestedStatus === 'RETURNED') {
+            dispatch.deliveryStatus = 'RETURNED';
+            await dispatch.save();
+
+            await dispatch.populate([
+                { path: 'salesOrder', select: 'soNumber status' },
+                { path: 'dispatchLocation', select: 'name code' },
+                { path: 'items.finishedGood', select: 'name code uom' },
+                { path: 'dispatchedBy', select: 'name email' }
+            ]);
+
+            return res.status(200).json({
+                success: true,
+                message: `Dispatch '${dispatch.dispatchNumber}' marked as 'RETURNED'. Stock/SO status reversal must be processed via manual Stock Adjustment.`,
+                data: dispatch
+            });
+        }
+
+        return res.status(400).json({
+            success: false,
+            message: `Unsupported action '${requestedStatus}'.`
         });
     } catch (error) {
         console.error('Error in updateDeliveryStatus:', error);
@@ -396,7 +533,10 @@ const getDispatches = async (req, res) => {
         const filter = { tenant: tenantId };
 
         if (salesOrder) filter.salesOrder = salesOrder;
-        if (deliveryStatus) filter.deliveryStatus = deliveryStatus;
+        const resolvedDeliveryStatus = deliveryStatus || req.query.status;
+        if (resolvedDeliveryStatus && resolvedDeliveryStatus !== 'All' && resolvedDeliveryStatus !== 'All Statuses') {
+            filter.deliveryStatus = resolvedDeliveryStatus;
+        }
 
         if (search) {
             filter.$or = [
@@ -413,7 +553,7 @@ const getDispatches = async (req, res) => {
             Dispatch.find(filter)
                 .populate({
                     path: 'salesOrder',
-                    select: 'soNumber status customer',
+                    select: 'soNumber status customer totalValue',
                     populate: {
                         path: 'customer',
                         select: 'companyName code contactPerson phone'
@@ -422,22 +562,40 @@ const getDispatches = async (req, res) => {
                 .populate('dispatchLocation', 'name code type')
                 .populate('items.finishedGood', 'name code uom')
                 .populate('dispatchedBy', 'name email')
+                .populate('pod.uploadedBy', 'name email')
+                .populate('pod.approvedBy', 'name email')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum),
             Dispatch.countDocuments(filter)
         ]);
 
+        // Attach linked invoice payment status to each dispatch
+        const Invoice = require('../models/invoice.model');
+        const soIds = dispatches.map(d => d.salesOrder?._id || d.salesOrder).filter(Boolean);
+        const invoices = await Invoice.find({ salesOrder: { $in: soIds }, tenant: tenantId })
+            .select('invoiceNumber paymentStatus dueAmount grandTotal paidAmount salesOrder');
+
+        const invoiceMap = new Map();
+        invoices.forEach(inv => invoiceMap.set(String(inv.salesOrder), inv));
+
+        const enrichedDispatches = dispatches.map(d => {
+            const dObj = d.toObject ? d.toObject() : d;
+            const soIdStr = String(d.salesOrder?._id || d.salesOrder);
+            dObj.invoice = invoiceMap.get(soIdStr) || null;
+            return dObj;
+        });
+
         return res.status(200).json({
             success: true,
-            count: dispatches.length,
+            count: enrichedDispatches.length,
             pagination: {
                 total,
                 page: pageNum,
                 limit: limitNum,
                 pages: Math.ceil(total / limitNum) || 1
             },
-            data: dispatches
+            data: enrichedDispatches
         });
     } catch (error) {
         console.error('Error in getDispatches:', error);
@@ -484,7 +642,9 @@ const getDispatchById = async (req, res) => {
                 select: 'name code uom currentStock pricePerBag',
                 populate: { path: 'uom', select: 'name symbol' }
             })
-            .populate('dispatchedBy', 'name email');
+            .populate('dispatchedBy', 'name email')
+            .populate('pod.uploadedBy', 'name email')
+            .populate('pod.approvedBy', 'name email');
 
         if (!dispatch) {
             return res.status(404).json({
@@ -493,9 +653,16 @@ const getDispatchById = async (req, res) => {
             });
         }
 
+        const Invoice = require('../models/invoice.model');
+        const linkedInvoice = await Invoice.findOne({ salesOrder: dispatch.salesOrder?._id || dispatch.salesOrder, tenant: tenantId })
+            .select('invoiceNumber paymentStatus dueAmount grandTotal paidAmount');
+
+        const responseData = dispatch.toObject();
+        responseData.invoice = linkedInvoice || null;
+
         return res.status(200).json({
             success: true,
-            data: dispatch
+            data: responseData
         });
     } catch (error) {
         console.error('Error in getDispatchById:', error);

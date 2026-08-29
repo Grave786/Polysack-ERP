@@ -6,7 +6,8 @@ const {
     getAllTenants,
     getTenantProfileByTenantId,
     updateTenantProfileByTenantId,
-    toggleTenantStatus
+    toggleTenantStatus,
+    getTenantAdmins
 } = require('../controllers/superAdmin.controller');
 
 /**
@@ -63,6 +64,7 @@ router.use(requireSuperAdmin);
 
 // Tenant Management Endpoints
 router.get('/tenants', getAllTenants);
+router.get('/tenant-admins', getTenantAdmins);
 router.get('/tenants/:tenantId/company-profile', getTenantProfileByTenantId);
 router.patch('/tenants/:tenantId/company-profile', updateTenantProfileByTenantId);
 router.put('/tenants/:tenantId/company-profile', updateTenantProfileByTenantId);

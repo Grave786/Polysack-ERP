@@ -68,6 +68,7 @@ export default function StockAdjustmentPanel({ isOpen, onClose, onSuccess }) {
             const absoluteQuantity = Math.abs(numQty);
 
             const payload = {
+                referenceNumber: `ADJ-${Date.now().toString().slice(-6)}`,
                 itemType,
                 item: selectedItem,
                 transactionType,

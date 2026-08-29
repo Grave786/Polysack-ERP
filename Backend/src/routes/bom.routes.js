@@ -42,6 +42,16 @@ router.put('/:id', authenticate, checkPermission('PRODUCTION', 'UPDATE'), update
  * @desc    Soft delete BOM by ID
  * @access  Private (PRODUCTION:DELETE)
  */
+const BOM = require('../models/bom.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('PRODUCTION', 'DELETE'), deleteBOM);
+
+/**
+ * @route   POST /api/boms/bulk-delete
+ * @desc    Bulk soft delete BOMs
+ * @access  Private (PRODUCTION:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('PRODUCTION', 'DELETE'), createBulkDeleteHandler(BOM, { resourceName: 'Bills of Materials' }));
 
 module.exports = router;

@@ -73,13 +73,26 @@ const DispatchSchema = new mongoose.Schema({
         type: String,
         default: 'IN_TRANSIT',
         enum: {
-            values: ['IN_TRANSIT', 'DELIVERED', 'RETURNED'],
+            values: ['IN_TRANSIT', 'POD_PENDING_APPROVAL', 'DELIVERED', 'RETURNED'],
             message: '{VALUE} is not a valid delivery status.'
         }
     },
     podConfirmedAt: {
         type: Date,
         default: null
+    },
+    pod: {
+        receiverName: { type: String, trim: true },
+        receiverPhone: { type: String, trim: true },
+        proofDocument: { type: String }, // Document name/reference
+        proofImage: { type: String }, // Base64 data URL or image path
+        notes: { type: String, trim: true },
+        uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        uploadedAt: { type: Date },
+        approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        approvedAt: { type: Date },
+        rejectionReason: { type: String, trim: true },
+        rejectedAt: { type: Date }
     },
     notes: {
         type: String,

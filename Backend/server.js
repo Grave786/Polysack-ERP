@@ -45,10 +45,12 @@ const crmRoutes = require('./src/routes/crm.routes');
 const analyticsRoutes = require('./src/routes/analytics.routes');
 const superAdminRoutes = require('./src/routes/superAdmin.routes');
 const dashboardRoutes = require('./src/routes/dashboard.routes');
+const notificationRoutes = require('./src/routes/notification.routes');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // Boot check to ensure permissions are seeded
 const initializeSystem = async () => {
@@ -146,6 +148,7 @@ app.use('/api/crm', crmRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

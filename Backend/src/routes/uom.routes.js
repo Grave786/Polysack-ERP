@@ -19,16 +19,16 @@ router.post('/', authenticate, checkPermission('MASTER_DATA', 'CREATE'), createU
 /**
  * @route   GET /api/uom
  * @desc    Get all UOMs for current tenant
- * @access  Private (MASTER_DATA:READ)
+ * @access  Private (Authenticated users)
  */
-router.get('/', authenticate, checkPermission('MASTER_DATA', 'READ'), getUOMs);
+router.get('/', authenticate, getUOMs);
 
 /**
  * @route   GET /api/uom/:id
  * @desc    Get UOM by ID
- * @access  Private (MASTER_DATA:READ)
+ * @access  Private (Authenticated users)
  */
-router.get('/:id', authenticate, checkPermission('MASTER_DATA', 'READ'), getUOMById);
+router.get('/:id', authenticate, getUOMById);
 
 /**
  * @route   PUT /api/uom/:id
@@ -42,6 +42,16 @@ router.put('/:id', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), updat
  * @desc    Soft delete UOM by ID
  * @access  Private (MASTER_DATA:DELETE)
  */
+const UOM = require('../models/uom.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('MASTER_DATA', 'DELETE'), deleteUOM);
+
+/**
+ * @route   POST /api/uom/bulk-delete
+ * @desc    Bulk soft delete UOMs
+ * @access  Private (MASTER_DATA:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('MASTER_DATA', 'DELETE'), createBulkDeleteHandler(UOM, { resourceName: 'Units of Measurement' }));
 
 module.exports = router;

@@ -50,6 +50,16 @@ router.patch('/:id/status', authenticate, checkPermission('SALES', 'UPDATE'), up
  * @desc    Soft delete Sales Order (Allowed ONLY when DRAFT or CANCELLED)
  * @access  Private (SALES:DELETE)
  */
+const SalesOrder = require('../models/salesOrder.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('SALES', 'DELETE'), deleteSalesOrder);
+
+/**
+ * @route   POST /api/sales-orders/bulk-delete
+ * @desc    Bulk cancel / soft delete Sales Orders
+ * @access  Private (SALES:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('SALES', 'DELETE'), createBulkDeleteHandler(SalesOrder, { resourceName: 'Sales Orders', statusField: 'status', statusValue: 'CANCELLED' }));
 
 module.exports = router;

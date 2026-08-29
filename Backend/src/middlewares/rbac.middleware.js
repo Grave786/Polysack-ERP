@@ -26,7 +26,7 @@ const getCachedTenantStatus = async (tenantIdInput) => {
     const now = Date.now();
 
     if (cached && cached.expiresAt > now) {
-        console.log(`🔒 [TENANT CACHE HIT] Tenant: ${tenantId} | isActive: ${cached.isActive}`);
+        // console.log(`🔒 [TENANT CACHE HIT] Tenant: ${tenantId} | isActive: ${cached.isActive}`);
         return cached.isActive;
     }
 
@@ -201,8 +201,9 @@ const checkPermission = (requiredModule, requiredAction) => {
 
             // 4. Check if role has matching permission for requiredModule and requiredAction
             const permissions = user.role.permissions || [];
+            const modules = Array.isArray(requiredModule) ? requiredModule : [requiredModule];
             const hasPermission = permissions.some((perm) =>
-                perm.module === requiredModule && perm.action === requiredAction
+                modules.includes(perm.module) && perm.action === requiredAction
             );
 
             if (!hasPermission) {

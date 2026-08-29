@@ -2,10 +2,12 @@ const FinishedGood = require('../models/finishedGood.model');
 const Category = require('../models/category.model');
 const UOM = require('../models/uom.model');
 const Location = require('../models/location.model');
+const BOM = require('../models/bom.model');
+const RawMaterial = require('../models/rawMaterial.model');
 const { generateCsv, sendCsvResponse } = require('../utils/csvExport');
 
 /**
- * @desc    Create a new Finished Good
+ * @desc    Create a new Finished Good (along with its Material Requirements / Recipe)
  * @route   POST /api/finished-goods
  * @access  Private (INVENTORY:CREATE permission)
  */
@@ -37,6 +39,8 @@ const createFinishedGood = async (req, res) => {
             isActive
         } = req.body;
 
+        const rawMaterialReqs = req.body.materialRequirements || req.body.rawMaterials || req.body.recipe || req.body.components || [];
+
         // 1. Basic validation
         if (!code || !name || !category || !uom) {
             return res.status(400).json({
@@ -45,10 +49,55 @@ const createFinishedGood = async (req, res) => {
             });
         }
 
+        // 2. Validate Material Requirements (BOM Recipe)
+        if (!Array.isArray(rawMaterialReqs) || rawMaterialReqs.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please define at least one Raw Material requirement (recipe) for this Finished Good.'
+            });
+        }
+
+        const validRecipeItems = [];
+        const seenRawMaterialIds = new Set();
+
+        for (const item of rawMaterialReqs) {
+            const rmId = item.rawMaterial?._id || item.rawMaterial;
+            const qty = Number(item.quantityPerUnit !== undefined ? item.quantityPerUnit : item.quantity);
+
+            if (!rmId || isNaN(qty) || qty <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Each raw material requirement must have a valid Raw Material selected and a quantity greater than 0.'
+                });
+            }
+
+            const rmIdStr = String(rmId);
+            if (seenRawMaterialIds.has(rmIdStr)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Duplicate raw material found in recipe. Please specify each material once.'
+                });
+            }
+            seenRawMaterialIds.add(rmIdStr);
+
+            const rmDoc = await RawMaterial.findOne({ _id: rmId, tenant: tenantId });
+            if (!rmDoc) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Raw Material does not exist or does not belong to your organization.`
+                });
+            }
+
+            validRecipeItems.push({
+                rawMaterial: rmId,
+                quantityPerUnit: qty
+            });
+        }
+
         const formattedCode = String(code).trim().toUpperCase();
         const formattedName = String(name).trim();
 
-        // 2. Validate tenant-ownership of referenced models
+        // 3. Validate tenant-ownership of referenced models
         const categoryDoc = await Category.findOne({ _id: category, tenant: tenantId });
         if (!categoryDoc) {
             return res.status(400).json({
@@ -75,7 +124,7 @@ const createFinishedGood = async (req, res) => {
             }
         }
 
-        // 3. Duplicate checks
+        // 4. Duplicate checks
         const existingCode = await FinishedGood.findOne({ code: formattedCode, tenant: tenantId });
         if (existingCode) {
             return res.status(400).json({
@@ -92,7 +141,7 @@ const createFinishedGood = async (req, res) => {
             });
         }
 
-        // 4. Create FinishedGood
+        // 5. Create FinishedGood
         const finishedGood = new FinishedGood({
             code: formattedCode,
             name: formattedName,
@@ -110,16 +159,31 @@ const createFinishedGood = async (req, res) => {
 
         await finishedGood.save();
 
+        // 6. Create default active BOM Document
+        const bomDoc = new BOM({
+            tenant: tenantId,
+            finishedGood: finishedGood._id,
+            name: `${formattedName} Recipe`,
+            items: validRecipeItems,
+            isActive: true,
+            isDefault: true
+        });
+
+        await bomDoc.save();
+
         await finishedGood.populate([
             { path: 'category', select: 'name type' },
             { path: 'uom', select: 'name symbol type' },
             { path: 'defaultLocation', select: 'name code type' }
         ]);
 
+        const responseData = finishedGood.toObject();
+        responseData.materialRequirements = validRecipeItems;
+
         return res.status(201).json({
             success: true,
-            message: 'Finished Good created successfully.',
-            data: finishedGood
+            message: 'Finished Good and its Material Requirements saved successfully.',
+            data: responseData
         });
     } catch (error) {
         if (error.name === 'ValidationError') {
@@ -197,6 +261,26 @@ const getFinishedGoods = async (req, res) => {
             FinishedGood.countDocuments(filter)
         ]);
 
+        // Attach linked active default BOM recipe items to each Finished Good
+        const fgIds = items.map((f) => f._id);
+        const boms = await BOM.find({ finishedGood: { $in: fgIds }, tenant: tenantId, isActive: true })
+            .populate('items.rawMaterial', 'name code uom currentStock materialGrade color pricePerUnit');
+
+        const bomMap = new Map();
+        boms.forEach((b) => {
+            const fgKey = String(b.finishedGood);
+            if (!bomMap.has(fgKey) || b.isDefault) {
+                bomMap.set(fgKey, b);
+            }
+        });
+
+        const enrichedItems = items.map((fg) => {
+            const fgObj = fg.toObject ? fg.toObject() : fg;
+            const linkedBom = bomMap.get(String(fg._id));
+            fgObj.materialRequirements = linkedBom ? linkedBom.items : [];
+            return fgObj;
+        });
+
         return res.status(200).json({
             success: true,
             count: items.length,
@@ -206,7 +290,7 @@ const getFinishedGoods = async (req, res) => {
                 limit: limitNum,
                 pages: Math.ceil(total / limitNum) || 1
             },
-            data: items
+            data: enrichedItems
         });
     } catch (error) {
         console.error('Error in getFinishedGoods:', error);
@@ -305,9 +389,18 @@ const getFinishedGoodById = async (req, res) => {
             });
         }
 
+        const linkedBom = await BOM.findOne({ finishedGood: finishedGood._id, tenant: tenantId, isActive: true, isDefault: true })
+            .populate('items.rawMaterial', 'name code uom currentStock materialGrade color pricePerUnit');
+
+        const fallbackBom = !linkedBom ? await BOM.findOne({ finishedGood: finishedGood._id, tenant: tenantId, isActive: true })
+            .populate('items.rawMaterial', 'name code uom currentStock materialGrade color pricePerUnit') : null;
+
+        const responseData = finishedGood.toObject();
+        responseData.materialRequirements = (linkedBom || fallbackBom)?.items || [];
+
         return res.status(200).json({
             success: true,
-            data: finishedGood
+            data: responseData
         });
     } catch (error) {
         console.error('Error in getFinishedGoodById:', error);
@@ -359,6 +452,8 @@ const updateFinishedGood = async (req, res) => {
             pricePerBag,
             isActive
         } = req.body;
+
+        const rawMaterialReqs = req.body.materialRequirements || req.body.rawMaterials || req.body.recipe || req.body.components;
 
         if (code) {
             const formattedCode = String(code).trim().toUpperCase();
@@ -440,16 +535,85 @@ const updateFinishedGood = async (req, res) => {
 
         await finishedGood.save();
 
+        // If Material Requirements are provided, update or create the default active BOM
+        let updatedRecipeItems = null;
+        if (Array.isArray(rawMaterialReqs) && rawMaterialReqs.length > 0) {
+            const validRecipeItems = [];
+            const seenRawMaterialIds = new Set();
+
+            for (const item of rawMaterialReqs) {
+                const rmId = item.rawMaterial?._id || item.rawMaterial;
+                const qty = Number(item.quantityPerUnit !== undefined ? item.quantityPerUnit : item.quantity);
+
+                if (!rmId || isNaN(qty) || qty <= 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Each raw material requirement must have a valid Raw Material selected and a quantity greater than 0.'
+                    });
+                }
+
+                const rmIdStr = String(rmId);
+                if (seenRawMaterialIds.has(rmIdStr)) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Duplicate raw material found in recipe. Please specify each material once.'
+                    });
+                }
+                seenRawMaterialIds.add(rmIdStr);
+
+                const rmDoc = await RawMaterial.findOne({ _id: rmId, tenant: tenantId });
+                if (!rmDoc) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Raw Material does not exist or does not belong to your organization.'
+                    });
+                }
+
+                validRecipeItems.push({
+                    rawMaterial: rmId,
+                    quantityPerUnit: qty
+                });
+            }
+
+            let bomDoc = await BOM.findOne({ finishedGood: finishedGood._id, tenant: tenantId, isDefault: true, isActive: true });
+            if (!bomDoc) {
+                bomDoc = await BOM.findOne({ finishedGood: finishedGood._id, tenant: tenantId, isActive: true });
+            }
+
+            if (bomDoc) {
+                bomDoc.items = validRecipeItems;
+                bomDoc.name = `${finishedGood.name} Recipe`;
+                bomDoc.isDefault = true;
+                await bomDoc.save();
+            } else {
+                bomDoc = new BOM({
+                    tenant: tenantId,
+                    finishedGood: finishedGood._id,
+                    name: `${finishedGood.name} Recipe`,
+                    items: validRecipeItems,
+                    isActive: true,
+                    isDefault: true
+                });
+                await bomDoc.save();
+            }
+            updatedRecipeItems = validRecipeItems;
+        }
+
         await finishedGood.populate([
             { path: 'category', select: 'name type' },
             { path: 'uom', select: 'name symbol type' },
             { path: 'defaultLocation', select: 'name code type' }
         ]);
 
+        const responseData = finishedGood.toObject();
+        if (updatedRecipeItems) {
+            responseData.materialRequirements = updatedRecipeItems;
+        }
+
         return res.status(200).json({
             success: true,
             message: 'Finished Good updated successfully.',
-            data: finishedGood
+            data: responseData
         });
     } catch (error) {
         if (error.name === 'ValidationError') {

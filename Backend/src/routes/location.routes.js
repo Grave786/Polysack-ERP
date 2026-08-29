@@ -19,16 +19,16 @@ router.post('/', authenticate, checkPermission('MASTER_DATA', 'CREATE'), createL
 /**
  * @route   GET /api/locations
  * @desc    Get all Locations for current tenant
- * @access  Private (MASTER_DATA:READ)
+ * @access  Private (Authenticated users)
  */
-router.get('/', authenticate, checkPermission('MASTER_DATA', 'READ'), getLocations);
+router.get('/', authenticate, getLocations);
 
 /**
  * @route   GET /api/locations/:id
  * @desc    Get Location by ID
- * @access  Private (MASTER_DATA:READ)
+ * @access  Private (Authenticated users)
  */
-router.get('/:id', authenticate, checkPermission('MASTER_DATA', 'READ'), getLocationById);
+router.get('/:id', authenticate, getLocationById);
 
 /**
  * @route   PUT /api/locations/:id
@@ -42,6 +42,16 @@ router.put('/:id', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), updat
  * @desc    Soft delete Location by ID
  * @access  Private (MASTER_DATA:DELETE)
  */
+const Location = require('../models/location.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('MASTER_DATA', 'DELETE'), deleteLocation);
+
+/**
+ * @route   POST /api/locations/bulk-delete
+ * @desc    Bulk soft delete Locations
+ * @access  Private (MASTER_DATA:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('MASTER_DATA', 'DELETE'), createBulkDeleteHandler(Location, { resourceName: 'Locations' }));
 
 module.exports = router;

@@ -151,6 +151,9 @@ export default function AdministrationPage() {
                             line2: t.registeredAddress?.line2 || '',
                             city: t.registeredAddress?.city || '',
                             pincode: t.registeredAddress?.pincode || ''
+                        },
+                        productionSettings: {
+                            activeStartingStage: t.productionSettings?.activeStartingStage || 'FLEXO_PRINTING'
                         }
                     });
                     setIsEditTenantDrawerOpen(true);
@@ -179,7 +182,8 @@ export default function AdministrationPage() {
                 pan: tenantProfileForm.pan.trim().toUpperCase(),
                 email: tenantProfileForm.contactEmail.trim(),
                 phone: tenantProfileForm.contactPhone.trim(),
-                registeredAddress: tenantProfileForm.registeredAddress
+                registeredAddress: tenantProfileForm.registeredAddress,
+                productionSettings: tenantProfileForm.productionSettings
             };
 
             const res = await axiosInstance.patch(`/super-admin/tenants/${selectedTenantId}/company-profile`, payload);

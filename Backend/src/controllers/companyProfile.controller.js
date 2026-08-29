@@ -13,7 +13,8 @@ const ALLOWED_PROFILE_FIELDS = [
     'pan',
     'contactEmail',
     'contactPhone',
-    'logoUrl'
+    'logoUrl',
+    'productionSettings'
 ];
 
 /**
@@ -34,6 +35,10 @@ const formatProfileResponse = (tenant) => {
         contactEmail: tenant.contactEmail || tenant.email,
         contactPhone: tenant.contactPhone || tenant.phone,
         logoUrl: tenant.logoUrl || null,
+        productionSettings: tenant.productionSettings || {
+            activeStartingStage: 'FLEXO_PRINTING',
+            stageConfigs: []
+        },
         createdAt: tenant.createdAt,
         updatedAt: tenant.updatedAt
     };
@@ -166,6 +171,13 @@ const updateCompanyProfile = async (req, res) => {
                     line2: req.body.registeredAddress.line2 !== undefined ? String(req.body.registeredAddress.line2).trim() : tenant.registeredAddress?.line2,
                     city: req.body.registeredAddress.city !== undefined ? String(req.body.registeredAddress.city).trim() : tenant.registeredAddress?.city,
                     pincode: req.body.registeredAddress.pincode !== undefined ? String(req.body.registeredAddress.pincode).trim() : tenant.registeredAddress?.pincode
+                };
+            } else if (key === 'productionSettings' && typeof req.body.productionSettings === 'object') {
+                tenant.productionSettings = {
+                    activeStartingStage: req.body.productionSettings.activeStartingStage || tenant.productionSettings?.activeStartingStage || 'FLEXO_PRINTING',
+                    stageConfigs: Array.isArray(req.body.productionSettings.stageConfigs)
+                        ? req.body.productionSettings.stageConfigs
+                        : (tenant.productionSettings?.stageConfigs || [])
                 };
             } else if (req.body[key] !== undefined) {
                 tenant[key] = typeof req.body[key] === 'string' ? req.body[key].trim() : req.body[key];

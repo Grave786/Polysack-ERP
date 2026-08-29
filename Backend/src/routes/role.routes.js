@@ -37,6 +37,16 @@ router.put('/:id', authenticate, checkPermission('ROLES', 'UPDATE'), updateRole)
  * @desc    Delete a custom role
  * @access  Private (ROLES:DELETE)
  */
+const Role = require('../models/role.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('ROLES', 'DELETE'), deleteRole);
+
+/**
+ * @route   POST /api/roles/bulk-delete
+ * @desc    Bulk soft delete Roles
+ * @access  Private (ROLES:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('ROLES', 'DELETE'), createBulkDeleteHandler(Role, { resourceName: 'Roles' }));
 
 module.exports = router;

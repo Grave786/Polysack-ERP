@@ -3,6 +3,7 @@ const StockTransaction = require('../models/stockTransaction.model');
 const RawMaterial = require('../models/rawMaterial.model');
 const FinishedGood = require('../models/finishedGood.model');
 const Location = require('../models/location.model');
+const { checkAndTriggerLowStockAlert } = require('../services/notification.service');
 
 /**
  * Core internal helper to process stock transactions and update item currentStock
@@ -150,6 +151,11 @@ const executeStockTransactionCore = async (params, sessionOption = {}) => {
     }
     await itemDoc.save(sessionOption);
 
+    // Step C: Trigger Low Stock Alert Check if item is Raw Material
+    if (itemType === 'RAW_MATERIAL') {
+        await checkAndTriggerLowStockAlert(itemDoc, sessionOption);
+    }
+
     return {
         transaction: txnDocs[0],
         updatedItemStock: {
@@ -188,10 +194,14 @@ const createStockTransaction = async (req, res) => {
         notes
     } = req.body;
 
-    if (!referenceNumber || !itemType || !item || !transactionType || !quantity) {
+    const effectiveRefNumber = referenceNumber && referenceNumber.trim()
+        ? referenceNumber.trim()
+        : `ADJ-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`;
+
+    if (!itemType || !item || !transactionType || !quantity) {
         return res.status(400).json({
             success: false,
-            message: 'Please provide all required fields: referenceNumber, itemType, item, transactionType, and quantity.'
+            message: 'Please provide all required fields: itemType, item, transactionType, and quantity.'
         });
     }
 
@@ -217,7 +227,7 @@ const createStockTransaction = async (req, res) => {
 
         const result = await executeStockTransactionCore({
             tenantId,
-            referenceNumber,
+            referenceNumber: effectiveRefNumber,
             itemType,
             item,
             transactionType,

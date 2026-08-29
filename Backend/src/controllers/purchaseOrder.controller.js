@@ -2,6 +2,7 @@ const PurchaseOrder = require('../models/purchaseOrder.model');
 const Supplier = require('../models/supplier.model');
 const Location = require('../models/location.model');
 const RawMaterial = require('../models/rawMaterial.model');
+const { createPoApprovalNotification, resolvePoApprovalNotification } = require('../services/notification.service');
 
 /**
  * Helper function to auto-generate unique PO number per tenant & year
@@ -161,6 +162,10 @@ const createPurchaseOrder = async (req, res) => {
         });
 
         await purchaseOrder.save();
+
+        if (purchaseOrder.status === 'PENDING_APPROVAL') {
+            await createPoApprovalNotification(purchaseOrder);
+        }
 
         await purchaseOrder.populate([
             { path: 'supplier', select: 'name contactPerson phone' },
@@ -525,6 +530,10 @@ const updateStatus = async (req, res) => {
         }
 
         await purchaseOrder.save();
+
+        if (status === 'SENT_TO_SUPPLIER' || status === 'CANCELLED') {
+            await resolvePoApprovalNotification(purchaseOrder._id, tenantId);
+        }
 
         return res.status(200).json({
             success: true,

@@ -4,6 +4,7 @@ const UOM = require('../models/uom.model');
 const Supplier = require('../models/supplier.model');
 const Location = require('../models/location.model');
 const { generateCsv, sendCsvResponse } = require('../utils/csvExport');
+const { checkAndTriggerLowStockAlert } = require('../services/notification.service');
 
 /**
  * @desc    Create a new Raw Material
@@ -116,6 +117,7 @@ const createRawMaterial = async (req, res) => {
         });
 
         await rawMaterial.save();
+        await checkAndTriggerLowStockAlert(rawMaterial);
 
         await rawMaterial.populate([
             { path: 'category', select: 'name type' },
@@ -457,6 +459,7 @@ const updateRawMaterial = async (req, res) => {
         if (isActive !== undefined) rawMaterial.isActive = isActive;
 
         await rawMaterial.save();
+        await checkAndTriggerLowStockAlert(rawMaterial);
 
         await rawMaterial.populate([
             { path: 'category', select: 'name type' },

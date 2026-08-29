@@ -52,6 +52,16 @@ router.put('/:id', authenticate, checkPermission('PROCUREMENT', 'UPDATE'), updat
  * @desc    Soft delete Purchase Order (Allowed ONLY when DRAFT or CANCELLED)
  * @access  Private (PROCUREMENT:DELETE)
  */
+const PurchaseOrder = require('../models/purchaseOrder.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('PROCUREMENT', 'DELETE'), deletePurchaseOrder);
+
+/**
+ * @route   POST /api/purchase-orders/bulk-delete
+ * @desc    Bulk cancel / soft delete Purchase Orders
+ * @access  Private (PROCUREMENT:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('PROCUREMENT', 'DELETE'), createBulkDeleteHandler(PurchaseOrder, { resourceName: 'Purchase Orders', statusField: 'status', statusValue: 'CANCELLED' }));
 
 module.exports = router;

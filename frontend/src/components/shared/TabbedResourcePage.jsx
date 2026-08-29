@@ -192,7 +192,8 @@ export default function TabbedResourcePage({
         setPage,
         createItem,
         updateItem,
-        deleteItem
+        deleteItem,
+        bulkDeleteItems
     } = useResourceApi(isTabPlaceholder ? null : activeTab?.resourcePath);
 
     // Keep tab count badge updated when pagination total changes for active tab
@@ -203,10 +204,12 @@ export default function TabbedResourcePage({
                 [activeTab.key]: pagination.total
             }));
         }
+    }, [activeTab?.key, isTabPlaceholder, pagination?.total]);
 
-        // Fetch counts for all other tabs with resourcePath
+    // Fetch counts for other tabs on tab change
+    useEffect(() => {
         tabs.forEach((t) => {
-            if (t.resourcePath && !t.isPlaceholder) {
+            if (t.resourcePath && !t.isPlaceholder && t.key !== activeTabKey) {
                 axiosInstance.get(t.resourcePath, { params: { limit: 1 } })
                     .then((res) => {
                         if (res.data?.success && res.data?.pagination?.total !== undefined) {
@@ -219,7 +222,7 @@ export default function TabbedResourcePage({
                     .catch(() => { });
             }
         });
-    }, [activeTab, isTabPlaceholder, pagination?.total, tabs]);
+    }, [activeTabKey]);
 
     // Fetch shift, location, category, UOM, and BOM options when active tab or drawer opens
     const fetchDropdownOptions = () => {
@@ -295,6 +298,13 @@ export default function TabbedResourcePage({
             axiosInstance.get('/bag-shapes?isActive=true').then((res) => {
                 if (res.data?.success && Array.isArray(res.data.data)) {
                     setBagShapesList(res.data.data);
+                }
+            }).catch(() => { });
+
+            // Fetch Raw Materials options for Finished Goods recipe definitions
+            axiosInstance.get('/raw-materials?isActive=true&limit=200').then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    setRawMaterialsList(res.data.data);
                 }
             }).catch(() => { });
         }
@@ -700,6 +710,18 @@ export default function TabbedResourcePage({
         }
 
         if (key === 'finished-goods' || key === 'finishedbags' || key === 'finishedproducts') {
+            const validIngredients = bomIngredients
+                .map((i) => ({
+                    rawMaterial: typeof i.rawMaterial === 'object' ? i.rawMaterial?._id : i.rawMaterial,
+                    quantityPerUnit: Number(i.quantityPerUnit || i.quantity || 0)
+                }))
+                .filter((i) => i.rawMaterial && i.quantityPerUnit > 0);
+
+            if (validIngredients.length === 0) {
+                toast.error('Please define at least one Raw Material requirement (with quantity > 0) for this Finished Good.');
+                return;
+            }
+
             const catVal = typeof formData.category === 'object' ? formData.category?._id : formData.category;
             const uomVal = typeof formData.uom === 'object' ? formData.uom?._id : formData.uom;
             const locVal = typeof formData.defaultLocation === 'object' ? formData.defaultLocation?._id : formData.defaultLocation;
@@ -720,6 +742,8 @@ export default function TabbedResourcePage({
                     length: Number(formData.dimensions.length || 0)
                 };
             }
+
+            payload.materialRequirements = validIngredients;
         }
 
         if (key === 'boms' || key === 'bom') {
@@ -838,13 +862,35 @@ export default function TabbedResourcePage({
         setEditingItem(row);
         const codeVal = row.code || row.customerCode || row.supplierCode || row.employeeCode || row.machineCode || row.itemCode || row.shiftCode || '';
 
-        if (row.items && Array.isArray(row.items)) {
+        if (row.materialRequirements && Array.isArray(row.materialRequirements) && row.materialRequirements.length > 0) {
+            setBomIngredients(
+                row.materialRequirements.map((i) => ({
+                    rawMaterial: typeof i.rawMaterial === 'object' ? i.rawMaterial?._id : i.rawMaterial,
+                    quantityPerUnit: i.quantityPerUnit || i.quantity || ''
+                }))
+            );
+        } else if (row.items && Array.isArray(row.items) && row.items.length > 0) {
             setBomIngredients(
                 row.items.map((i) => ({
                     rawMaterial: typeof i.rawMaterial === 'object' ? i.rawMaterial?._id : i.rawMaterial,
-                    quantityPerUnit: i.quantityPerUnit || ''
+                    quantityPerUnit: i.quantityPerUnit || i.quantity || ''
                 }))
             );
+        } else if (row._id && (activeTabKey === 'finished-goods' || activeTabKey === 'finishedbags' || activeTabKey === 'finishedproducts')) {
+            setBomIngredients([{ rawMaterial: '', quantityPerUnit: '' }]);
+            axiosInstance.get(`/boms?finishedGood=${row._id}`).then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data) && res.data.data.length > 0) {
+                    const defaultBom = res.data.data.find((b) => b.isDefault) || res.data.data[0];
+                    if (defaultBom?.items?.length > 0) {
+                        setBomIngredients(
+                            defaultBom.items.map((i) => ({
+                                rawMaterial: typeof i.rawMaterial === 'object' ? i.rawMaterial?._id : i.rawMaterial,
+                                quantityPerUnit: i.quantityPerUnit || ''
+                            }))
+                        );
+                    }
+                }
+            }).catch(() => { });
         } else {
             setBomIngredients([{ rawMaterial: '', quantityPerUnit: '' }]);
         }
@@ -2178,6 +2224,93 @@ export default function TabbedResourcePage({
                         </div>
                     </div>
 
+                    {/* Raw Materials Required (per unit/bag) */}
+                    <div className="pt-3 border-t border-border space-y-2.5">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                    Raw Materials Required (per bag) *
+                                </label>
+                                <p className="text-[11px] text-text-muted mt-0.5">
+                                    Define the raw material ingredients and quantities needed to produce 1 bag.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setBomIngredients((prev) => [...prev, { rawMaterial: '', quantityPerUnit: '' }])}
+                                className="text-xs bg-primary/10 text-primary hover:bg-primary/20 font-bold px-2.5 py-1 rounded-md flex items-center gap-1 transition-all cursor-pointer shrink-0"
+                            >
+                                <Plus size={13} />
+                                <span>+ Add Material</span>
+                            </button>
+                        </div>
+
+                        <div className="space-y-2">
+                            {bomIngredients.map((item, idx) => {
+                                const selectedRmId = typeof item.rawMaterial === 'object' ? item.rawMaterial?._id : item.rawMaterial;
+                                const selectedRm = rawMaterialsList.find((rm) => rm._id === selectedRmId);
+                                const uomLabel = typeof selectedRm?.uom === 'object' ? (selectedRm.uom?.symbol || selectedRm.uom?.name) : (selectedRm?.uom || 'Kg');
+
+                                return (
+                                    <div key={idx} className="flex items-center gap-2 bg-app-bg p-2 rounded-lg border border-border">
+                                        <div className="flex-1 min-w-0">
+                                            <select
+                                                required
+                                                value={selectedRmId || ''}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    setBomIngredients((prev) =>
+                                                        prev.map((ing, i) => (i === idx ? { ...ing, rawMaterial: val } : ing))
+                                                    );
+                                                }}
+                                                className="h-9 w-full border border-border rounded-md px-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer truncate"
+                                            >
+                                                <option value="">-- Select Raw Material --</option>
+                                                {rawMaterialsList.map((rm) => (
+                                                    <option key={rm._id} value={rm._id}>
+                                                        {rm.name} ({rm.code || 'RM'}) — Stock: {rm.currentStock || 0} {typeof rm.uom === 'object' ? rm.uom?.symbol : (rm.uom || 'kg')}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div className="w-28 relative">
+                                            <input
+                                                type="number"
+                                                step="any"
+                                                min="0.0001"
+                                                required
+                                                placeholder="Qty/bag"
+                                                value={item.quantityPerUnit || ''}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    setBomIngredients((prev) =>
+                                                        prev.map((ing, i) => (i === idx ? { ...ing, quantityPerUnit: val } : ing))
+                                                    );
+                                                }}
+                                                className="h-9 w-full border border-border rounded-md pl-2 pr-7 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-bold"
+                                            />
+                                            <span className="absolute right-2 top-2.5 text-[10px] font-bold text-text-muted uppercase pointer-events-none">
+                                                {uomLabel}
+                                            </span>
+                                        </div>
+
+                                        {bomIngredients.length > 1 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setBomIngredients((prev) => prev.filter((_, i) => i !== idx))}
+                                                className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-md transition-all cursor-pointer shrink-0"
+                                                title="Remove Material"
+                                            >
+                                                <Trash2 size={15} />
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
                     {renderIsActiveToggle()}
                 </div>
             );
@@ -2331,15 +2464,15 @@ export default function TabbedResourcePage({
     };
 
     return (
-        <div className="space-y-5 font-sans">
+        <div className="space-y-4 sm:space-y-5 font-sans w-full max-w-full">
             {/* Top Main Page Header with Dynamic Add Record Button */}
-            <div className="flex justify-between items-start gap-4">
-                <div>
-                    <h1 className="text-xl font-bold text-text-main tracking-tight">{title}</h1>
-                    {description && <p className="text-xs text-text-muted mt-0.5">{description}</p>}
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4 w-full">
+                <div className="min-w-0 flex-1">
+                    <h1 className="text-lg sm:text-xl font-bold text-text-main tracking-tight break-words">{title}</h1>
+                    {description && <p className="text-xs text-text-muted mt-0.5 leading-relaxed break-words">{description}</p>}
                 </div>
 
-                <div className="flex items-center gap-2.5 shrink-0">
+                <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap w-full sm:w-auto shrink-0">
                     {/* Optional Custom Header Action Buttons */}
                     {typeof headerActions === 'function' ? headerActions(handleOpenDrawer) : headerActions}
 
@@ -2347,7 +2480,7 @@ export default function TabbedResourcePage({
                     {!headerActions && (
                         <button
                             type="button"
-                            className="flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+                            className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
                             onClick={handleOpenDrawer}
                         >
                             <Plus size={15} />
@@ -2359,44 +2492,46 @@ export default function TabbedResourcePage({
 
             {/* Tab Bar */}
             {showTabBar && (
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-border pb-2.5">
-                    <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto">
-                        {tabs.map((tab) => {
-                            const isActive = tab.key === activeTabKey;
-                            const isPlaceholderTab = tab.isPlaceholder || (!tab.resourcePath && !tab.customRender);
-                            const count = isPlaceholderTab ? '—' : tabCounts[tab.key];
-                            const TabIcon = tab.icon;
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 sm:gap-3 border-b border-border pb-2.5 w-full max-w-full">
+                    <div className="w-full sm:w-auto max-w-full overflow-x-auto pb-1 -mb-1">
+                        <div className="flex items-center gap-1.5 sm:gap-2 min-w-max">
+                            {tabs.map((tab) => {
+                                const isActive = tab.key === activeTabKey;
+                                const isPlaceholderTab = tab.isPlaceholder || (!tab.resourcePath && !tab.customRender);
+                                const count = isPlaceholderTab ? '—' : tabCounts[tab.key];
+                                const TabIcon = tab.icon;
 
-                            return (
-                                <button
-                                    key={tab.key}
-                                    onClick={() => {
-                                        handleTabChange(tab.key);
-                                        setSearch('');
-                                        setPage(1);
-                                    }}
-                                    className={`flex items-center gap-2 text-sm font-medium whitespace-nowrap transition-all duration-150 cursor-pointer ${isActive
-                                        ? 'bg-primary text-sidebar-bg font-medium px-4 py-1.5 rounded-md text-sm shadow-xs'
-                                        : 'text-text-muted hover:text-text-main px-3 py-1.5 rounded-md text-sm border border-transparent'
-                                        }`}
-                                >
-                                    {TabIcon && <TabIcon size={15} className="shrink-0" />}
-                                    <span>{tab.label}</span>
-                                    <span
-                                        className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${isActive
-                                            ? 'bg-sidebar-bg/20 text-sidebar-bg'
-                                            : 'bg-status-neutral-bg text-status-neutral-text'
+                                return (
+                                    <button
+                                        key={tab.key}
+                                        onClick={() => {
+                                            handleTabChange(tab.key);
+                                            setSearch('');
+                                            setPage(1);
+                                        }}
+                                        className={`flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm font-medium whitespace-nowrap transition-all duration-150 cursor-pointer shrink-0 ${isActive
+                                            ? 'bg-primary text-sidebar-bg font-medium px-3.5 sm:px-4 py-1.5 rounded-lg shadow-xs'
+                                            : 'text-text-muted hover:text-text-main px-2.5 sm:px-3 py-1.5 rounded-lg border border-transparent hover:bg-app-bg'
                                             }`}
                                     >
-                                        {count !== undefined ? count : '...'}
-                                    </span>
-                                </button>
-                            );
-                        })}
+                                        {TabIcon && <TabIcon size={14} className="shrink-0" />}
+                                        <span className="truncate">{tab.label}</span>
+                                        <span
+                                            className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold shrink-0 ${isActive
+                                                ? 'bg-sidebar-bg/20 text-sidebar-bg'
+                                                : 'bg-status-neutral-bg text-status-neutral-text'
+                                                }`}
+                                        >
+                                            {count !== undefined ? count : '...'}
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>
 
                     {tabBarActions && (
-                        <div className="shrink-0 self-end sm:self-auto">
+                        <div className="w-full sm:w-auto flex items-center justify-start sm:justify-end shrink-0 pt-1 sm:pt-0">
                             {tabBarActions}
                         </div>
                     )}
@@ -2426,8 +2561,12 @@ export default function TabbedResourcePage({
                     onSearchChange={setSearch}
                     statusFilter={statusFilter}
                     onStatusFilterChange={setStatusFilter}
-                    availableStatuses={(() => {
+                    availableStatuses={activeTab?.availableStatuses || (() => {
                         const k = (activeTabKey || '').toLowerCase();
+                        if (k === 'dispatches' || k === 'dispatch') return ['IN_TRANSIT', 'DELIVERED'];
+                        if (k === 'sales-orders' || k === 'salesorders') return ['DRAFT', 'CONFIRMED', 'READY_FOR_DISPATCH', 'DISPATCHED', 'CANCELLED'];
+                        if (k === 'invoices' || k === 'invoice') return ['UNPAID', 'PARTIALLY_PAID', 'PAID'];
+                        if (k === 'purchase-orders' || k === 'purchaseorders') return ['DRAFT', 'ISSUED', 'RECEIVED', 'CANCELLED'];
                         if (k === 'customers' || k === 'customer') return ['Active', 'Inactive', 'Lead'];
                         if (k === 'machines' || k === 'machine') return ['Available', 'In Use', 'Under Maintenance', 'Out of Service'];
                         if (k === 'work-orders' || k === 'workorders' || k === 'stage-monitor') return ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
@@ -2438,6 +2577,18 @@ export default function TabbedResourcePage({
                     activeTabLabel={activeTab?.label}
                     onEdit={handleEditRow}
                     onDelete={handleDeleteRow}
+                    onBulkDelete={bulkDeleteItems}
+                    isDeletable={(() => {
+                        const k = (activeTabKey || '').toLowerCase();
+                        const p = (activeTab?.resourcePath || '').toLowerCase();
+                        if (activeTab?.isDeletable === false) return false;
+                        if (k.includes('invoice') || p.includes('invoice')) return false;
+                        if (k.includes('grn') || p.includes('grn')) return false;
+                        if (k.includes('stock-transaction') || p.includes('stock-transaction') || k.includes('valuation') || k.includes('audit-ledger')) return false;
+                        if (k.includes('qc-inspection') || p.includes('qc-inspection')) return false;
+                        if (k.includes('dispatch') || p.includes('dispatch')) return false;
+                        return true;
+                    })()}
                     onExportCsv={handleExportCsv}
                 />
             )}

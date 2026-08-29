@@ -195,8 +195,9 @@ const getInvoices = async (req, res) => {
 
         const filter = { tenant: tenantId };
 
-        if (paymentStatus) {
-            filter.paymentStatus = paymentStatus;
+        const resolvedPaymentStatus = paymentStatus || req.query.status;
+        if (resolvedPaymentStatus && resolvedPaymentStatus !== 'All' && resolvedPaymentStatus !== 'All Statuses') {
+            filter.paymentStatus = resolvedPaymentStatus;
         }
 
         if (customer) {
@@ -318,10 +319,10 @@ const recordPayment = async (req, res) => {
             });
         }
 
-        const { amount } = req.body;
-        const numAmount = Number(amount);
+        const rawAmt = req.body.amount !== undefined ? req.body.amount : (req.body.paymentAmount !== undefined ? req.body.paymentAmount : req.body.paidAmount);
+        const numAmount = Number(rawAmt);
 
-        if (isNaN(numAmount) || numAmount <= 0) {
+        if (rawAmt === undefined || rawAmt === null || isNaN(numAmount) || numAmount <= 0) {
             return res.status(400).json({
                 success: false,
                 message: 'Please provide a valid payment amount greater than 0.'

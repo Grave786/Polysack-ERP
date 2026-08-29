@@ -144,6 +144,72 @@ export function useResourceApi(resourcePath, initialParams = {}) {
         }
     };
 
+    /**
+     * Bulk Delete / Deactivate Items
+     * Sends POST `${resourcePath}/bulk-delete` with { ids } (or parallel fallback)
+     */
+    const bulkDeleteItems = async (ids) => {
+        if (!resourcePath || !Array.isArray(ids) || ids.length === 0) {
+            return { success: false, error: 'No items selected' };
+        }
+        try {
+            setIsLoading(true);
+            let response;
+            try {
+                response = await axiosInstance.post(`${resourcePath}/bulk-delete`, { ids });
+            } catch (postErr) {
+                // If 404/405 endpoint not on backend, fallback to per-item delete
+                if (postErr.response?.status === 404 || postErr.response?.status === 405) {
+                    let successCount = 0;
+                    let lastErrMsg = null;
+                    for (const singleId of ids) {
+                        try {
+                            await axiosInstance.delete(`${resourcePath}/${singleId}`);
+                            successCount++;
+                        } catch (sErr) {
+                            lastErrMsg = sErr.response?.data?.message || sErr.message;
+                        }
+                    }
+                    if (successCount > 0) {
+                        toast.success(`${successCount} record(s) deactivated successfully.`);
+                        await fetchData();
+                        return { success: true, count: successCount };
+                    } else {
+                        throw new Error(lastErrMsg || 'Failed to deactivate selected records');
+                    }
+                } else {
+                    throw postErr;
+                }
+            }
+
+            const result = response.data;
+            if (result.success) {
+                const deletedCount = result.deletedCount !== undefined ? result.deletedCount : (result.data?.deletedCount !== undefined ? result.data.deletedCount : ids.length);
+                const skippedCount = result.skippedCount || result.data?.skippedCount || 0;
+                const skippedReason = result.skippedReason || result.data?.skippedReason || '';
+
+                if (skippedCount > 0 && skippedReason) {
+                    toast.success(`${deletedCount} record(s) deleted. ${skippedCount} skipped (${skippedReason}).`);
+                } else if (skippedCount > 0) {
+                    toast.success(`${deletedCount} record(s) deleted, ${skippedCount} skipped.`);
+                } else {
+                    toast.success(`${deletedCount} record(s) deactivated successfully.`);
+                }
+
+                await fetchData();
+                return { success: true, count: deletedCount };
+            } else {
+                throw new Error(result.message || 'Failed to delete selected records');
+            }
+        } catch (err) {
+            const errMsg = err.response?.data?.message || err.message || 'Failed to delete selected records';
+            toast.error(errMsg);
+            return { success: false, error: errMsg };
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     return {
         data,
         pagination,
@@ -166,6 +232,7 @@ export function useResourceApi(resourcePath, initialParams = {}) {
         refetch: fetchData,
         createItem,
         updateItem,
-        deleteItem
+        deleteItem,
+        bulkDeleteItems
     };
 }

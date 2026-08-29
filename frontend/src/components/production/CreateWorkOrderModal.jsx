@@ -3,22 +3,35 @@ import SlideOverPanel from '../shared/SlideOverPanel';
 import axiosInstance from '../../api/axiosInstance';
 import WorkOrderShortageModal from './WorkOrderShortageModal';
 import toast from 'react-hot-toast';
+import { Layers, Info } from 'lucide-react';
 
-const ALL_PIPELINE_STAGES = [
-    { key: 'TAPE_EXTRUSION', label: 'Tape Extrusion' },
-    { key: 'CIRCULAR_WEAVING', label: 'Circular Weaving' },
-    { key: 'EXTRUSION_LAMINATION', label: 'Extrusion Lamination' },
-    { key: 'FLEXO_PRINTING', label: 'Flexo Printing' },
-    { key: 'CUTTING_SEWING', label: 'Cutting & Sewing' },
-    { key: 'STITCHING', label: 'Stitching' },
-    { key: 'HANDLE_ATTACHMENT', label: 'Handle Attachment' },
-    { key: 'BALING_PACKING', label: 'Baling & Packing' }
+const STAGE_LABELS = {
+    'TAPE_EXTRUSION': 'Stage 1: Tape Extrusion',
+    'CIRCULAR_WEAVING': 'Stage 2: Circular Weaving',
+    'EXTRUSION_LAMINATION': 'Stage 3: Extrusion Lamination',
+    'FLEXO_PRINTING': 'Stage 4: Flexo Printing',
+    'CUTTING_SEWING': 'Stage 5: Cutting & Sewing',
+    'STITCHING': 'Stage 6: Stitching',
+    'HANDLE_ATTACHMENT': 'Stage 7: Handle Attachment',
+    'BALING_PACKING': 'Stage 8: Baling & Packing'
+};
+
+const ALL_STAGE_KEYS = [
+    'TAPE_EXTRUSION',
+    'CIRCULAR_WEAVING',
+    'EXTRUSION_LAMINATION',
+    'FLEXO_PRINTING',
+    'CUTTING_SEWING',
+    'STITCHING',
+    'HANDLE_ATTACHMENT',
+    'BALING_PACKING'
 ];
 
 export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [customers, setCustomers] = useState([]);
     const [finishedGoods, setFinishedGoods] = useState([]);
     const [machines, setMachines] = useState([]);
+    const [activeStartingStage, setActiveStartingStage] = useState('FLEXO_PRINTING');
     const [isLoadingDropdowns, setIsLoadingDropdowns] = useState(false);
 
     const [customer, setCustomer] = useState('');
@@ -26,13 +39,6 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [targetQuantity, setTargetQuantity] = useState('');
     const [priority, setPriority] = useState('MEDIUM');
     const [assignedMachine, setAssignedMachine] = useState('');
-    const [selectedStages, setSelectedStages] = useState([
-        'FLEXO_PRINTING',
-        'CUTTING_SEWING',
-        'STITCHING',
-        'HANDLE_ATTACHMENT',
-        'BALING_PACKING'
-    ]);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Shortage Modal State
@@ -40,17 +46,18 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [isShortageModalOpen, setIsShortageModalOpen] = useState(false);
     const [selectedFgObj, setSelectedFgObj] = useState(null);
 
-    // Fetch dropdown options when modal opens
+    // Fetch dropdown options & tenant production settings when modal opens
     useEffect(() => {
         if (!isOpen) return;
 
         const fetchDropdowns = async () => {
             try {
                 setIsLoadingDropdowns(true);
-                const [custRes, fgRes, mchRes] = await Promise.all([
+                const [custRes, fgRes, mchRes, profileRes] = await Promise.all([
                     axiosInstance.get('/customers?isActive=true&limit=100'),
                     axiosInstance.get('/finished-goods?isActive=true&limit=100'),
-                    axiosInstance.get('/machines?isActive=true&limit=100')
+                    axiosInstance.get('/machines?isActive=true&limit=100'),
+                    axiosInstance.get('/admin/company-profile').catch(() => null)
                 ]);
 
                 if (custRes.data?.success) {
@@ -72,6 +79,10 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 if (mchRes.data?.success) {
                     setMachines(mchRes.data.data || []);
                 }
+
+                if (profileRes?.data?.success && profileRes.data?.data?.productionSettings?.activeStartingStage) {
+                    setActiveStartingStage(profileRes.data.data.productionSettings.activeStartingStage);
+                }
             } catch (err) {
                 console.error('Failed to load dropdown options:', err);
                 toast.error('Failed to load customers, products, or machine options.');
@@ -88,6 +99,11 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const selectedMachineObj = machines.find((m) => m._id === assignedMachine);
     const primaryOperator = selectedMachineObj?.currentOperator || (assignedMachine ? 'No Operator Assigned' : '');
     const isFormValid = customer && finishedGood && targetQuantity && Number(targetQuantity) >= 1;
+
+    const startingIndex = ALL_STAGE_KEYS.indexOf(activeStartingStage);
+    const resolvedStartingIndex = startingIndex === -1 ? 3 : startingIndex;
+    const activeCount = ALL_STAGE_KEYS.length - resolvedStartingIndex;
+    const skippedCount = resolvedStartingIndex;
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -148,14 +164,13 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 }
             }
 
-            // Step 2: Proceed with WO creation if no raw material shortage
+            // Step 2: Proceed with WO creation (pipeline routing is automatically resolved by backend from Company Settings)
             const payload = {
                 customer,
                 finishedGood,
                 targetQuantity: targetQtyNum,
                 priority: priority || 'MEDIUM',
-                assignedMachine: assignedMachine || null,
-                selectedStages
+                assignedMachine: assignedMachine || null
             };
 
             const res = await axiosInstance.post('/work-orders', payload);
@@ -321,43 +336,29 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                         </div>
                     </div>
 
-                    {/* Production Routing Sequence */}
-                    <div className="space-y-2 pt-3 border-t border-border font-sans">
-                        <div className="flex justify-between items-center">
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
-                                Production Routing Sequence (Uncheck to Skip Stages)
-                            </label>
-                            <span className="text-[10px] text-primary font-bold">
-                                {selectedStages.length} Stages Active
+                    {/* Read-Only Routing Sequence Banner governed solely by Company Settings */}
+                    <div className="bg-app-bg border border-border/80 rounded-xl p-3.5 space-y-2 font-sans">
+                        <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-text-main flex items-center gap-1.5">
+                                <Layers size={14} className="text-primary" />
+                                <span>Facility Production Routing</span>
+                            </span>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                                {activeCount} Stages Active
                             </span>
                         </div>
-                        <div className="grid grid-cols-2 gap-2.5 bg-app-bg border border-border rounded-lg p-3">
-                            {ALL_PIPELINE_STAGES.map((stg) => {
-                                const isChecked = selectedStages.includes(stg.key);
-                                return (
-                                    <label key={stg.key} className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-text-main hover:text-primary transition-colors">
-                                        <input
-                                            type="checkbox"
-                                            checked={isChecked}
-                                            onChange={(e) => {
-                                                if (e.target.checked) {
-                                                    setSelectedStages(prev => [...prev, stg.key]);
-                                                } else {
-                                                    if (selectedStages.length <= 1) {
-                                                        toast.error('Work Order must include at least one active stage.');
-                                                        return;
-                                                    }
-                                                    setSelectedStages(prev => prev.filter(k => k !== stg.key));
-                                                }
-                                            }}
-                                            className="rounded border-border text-primary focus:ring-primary h-4 w-4 cursor-pointer"
-                                        />
-                                        <span className={isChecked ? 'text-text-main font-semibold' : 'text-text-muted line-through font-normal'}>
-                                            {stg.label}
-                                        </span>
-                                    </label>
-                                );
-                            })}
+                        <p className="text-[11px] text-text-muted leading-relaxed">
+                            Work Order will automatically start at{' '}
+                            <strong className="text-text-main font-bold">
+                                {STAGE_LABELS[activeStartingStage] || activeStartingStage}
+                            </strong>
+                            {skippedCount > 0
+                                ? ` (Stages 1–${skippedCount} skipped per Company Settings)`
+                                : ' (Full 8-stage sequence active)'}.
+                        </p>
+                        <div className="flex items-center gap-1 text-[10px] text-text-muted pt-0.5">
+                            <Info size={12} className="shrink-0 text-text-muted/70" />
+                            <span>Configured in Company Settings &middot; Governs all tenant Work Orders</span>
                         </div>
                     </div>
                 </form>

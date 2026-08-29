@@ -29,12 +29,22 @@ router.get('/', authenticate, checkPermission('SALES', 'READ'), getInvoices);
  */
 router.get('/:id', authenticate, checkPermission('SALES', 'READ'), getInvoiceById);
 
+const Invoice = require('../models/invoice.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 /**
  * @route   PATCH /api/invoices/:id/payment
  * @desc    Record payment against an Invoice
  * @access  Private (SALES:UPDATE)
  */
 router.patch('/:id/payment', authenticate, checkPermission('SALES', 'UPDATE'), recordPayment);
+
+/**
+ * @route   POST /api/invoices/bulk-delete
+ * @desc    Rejects deletion of immutable tax invoices
+ * @access  Private
+ */
+router.post('/bulk-delete', authenticate, createBulkDeleteHandler(Invoice, { resourceName: 'Invoices', isImmutable: true }));
 
 // NOTE: No PUT or DELETE routes are exposed for Invoices because generated invoices are immutable financial records.
 

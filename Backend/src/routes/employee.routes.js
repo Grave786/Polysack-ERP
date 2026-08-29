@@ -64,6 +64,16 @@ router.patch('/:id', authenticate, checkPermission('USERS', 'UPDATE'), updateEmp
  * @desc    Soft delete Employee
  * @access  Private (USERS:DELETE / MASTER_DATA:DELETE)
  */
+const Employee = require('../models/employee.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('USERS', 'DELETE'), deleteEmployee);
+
+/**
+ * @route   POST /api/employees/bulk-delete
+ * @desc    Bulk soft delete Employees
+ * @access  Private (USERS:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('USERS', 'DELETE'), createBulkDeleteHandler(Employee, { resourceName: 'Employees' }));
 
 module.exports = router;

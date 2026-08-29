@@ -1,5 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const CustomerInteraction = require('../models/customerInteraction.model');
+const Complaint = require('../models/complaint.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
 const {
     // Interactions
     createInteraction,
@@ -65,6 +68,13 @@ router.put('/interactions/:id', authenticate, checkPermission('SALES', 'UPDATE')
  */
 router.delete('/interactions/:id', authenticate, checkPermission('SALES', 'DELETE'), deleteInteraction);
 
+/**
+ * @route   POST /api/crm/interactions/bulk-delete
+ * @desc    Bulk Soft Delete Customer Interactions
+ * @access  Private (SALES:DELETE)
+ */
+router.post('/interactions/bulk-delete', authenticate, checkPermission('SALES', 'DELETE'), createBulkDeleteHandler(CustomerInteraction, { resourceName: 'CRM Interactions' }));
+
 // ==========================================
 // 2. CUSTOMER COMPLAINTS ROUTES
 // ==========================================
@@ -110,5 +120,12 @@ router.put('/complaints/:id', authenticate, checkPermission('SALES', 'UPDATE'), 
  * @access  Private (SALES:DELETE)
  */
 router.delete('/complaints/:id', authenticate, checkPermission('SALES', 'DELETE'), deleteComplaint);
+
+/**
+ * @route   POST /api/crm/complaints/bulk-delete
+ * @desc    Bulk Soft Delete Complaints
+ * @access  Private (SALES:DELETE)
+ */
+router.post('/complaints/bulk-delete', authenticate, checkPermission('SALES', 'DELETE'), createBulkDeleteHandler(Complaint, { resourceName: 'CRM Complaints' }));
 
 module.exports = router;

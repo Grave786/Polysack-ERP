@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Loader2, Database, ArrowUpDown, Pencil, Trash2, Columns, Download, Filter } from 'lucide-react';
+import { Loader2, Database, ArrowUpDown, Pencil, Trash2, Columns, Download, Filter, X, AlertTriangle } from 'lucide-react';
 import SearchBar from './SearchBar';
 import Pagination from './Pagination';
 
@@ -18,6 +18,8 @@ export default function DataTable({
     activeTabLabel = '',
     onEdit = (row) => console.log('Edit row:', row),
     onDelete = (row) => console.log('Deactivate row:', row),
+    onBulkDelete = null,
+    isDeletable = true,
     onExportCsv = null
 }) {
     // State to manage visible columns dynamically
@@ -26,6 +28,8 @@ export default function DataTable({
 
     // State to manage row selections for "Select All" header checkbox
     const [selectedRowIds, setSelectedRowIds] = useState([]);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const dropdownRef = useRef(null);
 
@@ -89,12 +93,66 @@ export default function DataTable({
 
     const hasCustomActionsColumn = columns.some((col) => col.header && String(col.header).toUpperCase() === 'ACTIONS');
 
+    const handleConfirmBulkDelete = async () => {
+        if (!onBulkDelete || selectedRowIds.length === 0) return;
+        try {
+            setIsDeleting(true);
+            await onBulkDelete(selectedRowIds);
+            setSelectedRowIds([]);
+            setShowDeleteConfirm(false);
+        } catch (err) {
+            console.error('Bulk delete error:', err);
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
     return (
-        <div className="w-full space-y-3 font-sans">
+        <div className="w-full max-w-full space-y-3 font-sans">
+            {/* Contextual Bulk Action Bar */}
+            {selectedRowIds.length > 0 && (
+                <div className="flex items-center justify-between bg-primary/10 border border-primary/30 p-2.5 sm:p-3 rounded-xl shadow-xs text-xs font-sans animate-in fade-in slide-in-from-top-1 duration-200">
+                    <div className="flex items-center gap-2.5">
+                        <span className="inline-flex items-center justify-center bg-primary text-sidebar-bg font-mono font-extrabold w-6 h-6 rounded-full text-xs">
+                            {selectedRowIds.length}
+                        </span>
+                        <span className="font-bold text-text-main">
+                            {selectedRowIds.length} {selectedRowIds.length === 1 ? 'record' : 'records'} selected
+                        </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setSelectedRowIds([])}
+                            className="px-2.5 py-1.5 text-text-muted hover:text-text-main hover:bg-card-bg border border-transparent hover:border-border rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                        >
+                            <X size={14} />
+                            <span>Clear selection</span>
+                        </button>
+
+                        {isDeletable !== false && onBulkDelete ? (
+                            <button
+                                type="button"
+                                onClick={() => setShowDeleteConfirm(true)}
+                                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
+                            >
+                                <Trash2 size={14} />
+                                <span>Delete Selected</span>
+                            </button>
+                        ) : (
+                            <span className="text-[11px] text-text-muted italic px-2">
+                                (Immutable records cannot be deleted)
+                            </span>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* Top Action Bar Above Table: Search Bar on LEFT, Columns & Export CSV on RIGHT */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-card-bg p-3.5 border border-border rounded-xl shadow-2xs">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3 bg-card-bg p-3 sm:p-3.5 border border-border rounded-xl shadow-2xs w-full max-w-full">
                 {/* Search Bar on Left */}
-                <div className="w-full sm:w-auto flex-1 max-w-sm sm:max-w-md">
+                <div className="w-full sm:w-auto flex-1 max-w-full sm:max-w-md">
                     <SearchBar
                         value={search}
                         onChange={onSearchChange}
@@ -103,7 +161,7 @@ export default function DataTable({
                 </div>
 
                 {/* Right Action Controls: Status Filter, Columns & Export CSV */}
-                <div className="flex items-center gap-2 w-full sm:w-auto justify-end shrink-0 flex-wrap sm:flex-nowrap">
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end shrink-0 flex-wrap sm:flex-nowrap">
                     {/* Dynamic Status Filter Dropdown */}
                     <div className="flex items-center gap-1.5 bg-card-bg border border-border rounded-lg px-2.5 py-1.5 text-xs text-text-main shadow-2xs select-none">
                         <Filter size={14} className="text-text-muted shrink-0" />
@@ -163,19 +221,62 @@ export default function DataTable({
                     </div>
 
                     {/* Export CSV Button */}
-                    <button
-                        type="button"
-                        className="flex items-center gap-1.5 px-3 py-2 bg-card-bg border border-border hover:bg-app-bg text-text-muted hover:text-text-main rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-2xs select-none"
-                        onClick={onExportCsv || (() => alert('Exporting CSV feature coming soon!'))}
-                    >
-                        <Download size={15} />
-                        <span>Export CSV</span>
-                    </button>
+                    {onExportCsv && (
+                        <button
+                            type="button"
+                            className="flex items-center gap-1.5 px-3 py-2 bg-card-bg border border-border hover:bg-app-bg text-text-muted hover:text-text-main rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-2xs select-none"
+                            onClick={onExportCsv}
+                        >
+                            <Download size={15} />
+                            <span>Export CSV</span>
+                        </button>
+                    )}
                 </div>
             </div>
 
-            {/* Table & Mobile Cards Container */}
-            <div className="w-full space-y-3">
+            {/* Confirmation Dialog for Bulk Delete */}
+            {showDeleteConfirm && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-card-bg border border-border rounded-xl shadow-xl w-full max-w-md p-5 space-y-4 font-sans text-xs">
+                        <div className="flex items-start gap-3">
+                            <div className="p-2.5 bg-rose-100 text-rose-700 rounded-full shrink-0">
+                                <AlertTriangle size={20} />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-sm text-text-main">
+                                    Delete {selectedRowIds.length} {selectedRowIds.length === 1 ? 'Record' : 'Records'}?
+                                </h3>
+                                <p className="text-text-muted mt-1 leading-relaxed">
+                                    Are you sure you want to deactivate {selectedRowIds.length} selected {activeTabLabel || 'record'}(s)? This will mark them as inactive.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end gap-2.5 pt-3 border-t border-border">
+                            <button
+                                type="button"
+                                disabled={isDeleting}
+                                onClick={() => setShowDeleteConfirm(false)}
+                                className="px-4 py-2 border border-border rounded-lg text-xs font-bold text-text-muted hover:text-text-main hover:bg-app-bg transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={isDeleting}
+                                onClick={handleConfirmBulkDelete}
+                                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                            >
+                                <Trash2 size={14} />
+                                <span>{isDeleting ? 'Deleting...' : 'Confirm Deletion'}</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Table or Mobile Cards Content */}
+            <div className="w-full max-w-full">
                 {isLoading ? (
                     <div className="flex flex-col items-center justify-center py-20 bg-card-bg border border-border rounded-xl text-text-muted font-sans">
                         <Loader2 className="animate-spin mb-2 text-primary" size={32} />
@@ -190,7 +291,7 @@ export default function DataTable({
                 ) : (
                     <>
                         {/* Mobile Card-Based List View (visible below sm breakpoint) */}
-                        <div className="sm:hidden space-y-3 font-sans">
+                        <div className="sm:hidden space-y-3 font-sans w-full max-w-full">
                             {data.map((row, rowIndex) => {
                                 const rowId = row._id || rowIndex;
                                 const isRowSelected = selectedRowIds.includes(rowId);
@@ -199,7 +300,7 @@ export default function DataTable({
                                 return (
                                     <div
                                         key={rowId}
-                                        className={`bg-card-bg border rounded-xl p-4 shadow-2xs space-y-2.5 transition-all ${
+                                        className={`bg-card-bg border rounded-xl p-3.5 shadow-2xs space-y-2.5 transition-all w-full max-w-full box-border ${
                                             isInactiveRecord
                                                 ? 'border-border/60 bg-gray-100/50 text-text-muted opacity-75'
                                                 : isRowSelected
@@ -252,11 +353,11 @@ export default function DataTable({
                                                 }
 
                                                 return (
-                                                    <div key={colIndex} className="flex items-center justify-between gap-3 text-xs">
-                                                        <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted shrink-0">
+                                                    <div key={colIndex} className="flex items-start justify-between gap-2 text-xs">
+                                                        <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted shrink-0 max-w-[45%]">
                                                             {col.header}
                                                         </span>
-                                                        <span className="font-semibold text-text-main text-right truncate">
+                                                        <span className="font-semibold text-text-main text-right break-words max-w-[55%]">
                                                             {cellValue !== null && cellValue !== undefined ? cellValue : '-'}
                                                         </span>
                                                     </div>
@@ -291,8 +392,8 @@ export default function DataTable({
                         </div>
 
                         {/* Standard Desktop / Tablet HTML Table (visible sm and above) */}
-                        <div className="hidden sm:block w-full overflow-x-auto border border-border rounded-xl shadow-2xs bg-card-bg">
-                            <table className="w-full text-left border-collapse text-xs">
+                        <div className="hidden sm:block w-full max-w-full overflow-x-auto border border-border rounded-xl shadow-2xs bg-card-bg">
+                            <table className="w-full text-left border-collapse text-xs min-w-[600px]">
                                 <thead>
                                     <tr className="bg-table-header-bg text-table-header-text font-extrabold uppercase tracking-wider text-[11px]">
                                         <th className="px-4 py-3.5 border-b border-border/40 w-10 text-center">

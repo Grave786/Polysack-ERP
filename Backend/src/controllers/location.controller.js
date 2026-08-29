@@ -88,16 +88,21 @@ const createLocation = async (req, res) => {
 const getLocations = async (req, res) => {
     try {
         const tenantId = req.user?.tenant;
-        if (!tenantId) {
-            return res.status(403).json({
-                success: false,
-                message: 'Tenant context is missing or invalid. Please log in again.'
-            });
-        }
-
         const { type, status, isActive, search, page = 1, limit = 20 } = req.query;
 
-        const filter = { tenant: tenantId };
+        const filter = {};
+        if (tenantId) {
+            filter.tenant = tenantId;
+        } else {
+            // Super Admin context (no tenant)
+            const isSuperAdmin = !req.user?.tenant || req.user?.roleName === 'SUPER_ADMIN' || req.user?.role?.name === 'SUPER_ADMIN' || req.user?.email === 'superadmin@polysack.com';
+            if (!isSuperAdmin) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Tenant context is missing or invalid. Please log in again.'
+                });
+            }
+        }
 
         if (type) {
             filter.type = type;

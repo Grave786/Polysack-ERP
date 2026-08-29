@@ -111,7 +111,8 @@ const updateTenantProfileByTenantId = async (req, res) => {
             pan,
             phone,
             email,
-            registeredAddress
+            registeredAddress,
+            productionSettings
         } = req.body;
 
         if (companyName) tenant.companyName = companyName.trim();
@@ -129,6 +130,15 @@ const updateTenantProfileByTenantId = async (req, res) => {
                 line2: registeredAddress.line2 || tenant.registeredAddress?.line2 || '',
                 city: registeredAddress.city || tenant.registeredAddress?.city || '',
                 pincode: registeredAddress.pincode || tenant.registeredAddress?.pincode || ''
+            };
+        }
+
+        if (productionSettings && typeof productionSettings === 'object') {
+            tenant.productionSettings = {
+                activeStartingStage: productionSettings.activeStartingStage || tenant.productionSettings?.activeStartingStage || 'FLEXO_PRINTING',
+                stageConfigs: Array.isArray(productionSettings.stageConfigs)
+                    ? productionSettings.stageConfigs
+                    : (tenant.productionSettings?.stageConfigs || [])
             };
         }
 
@@ -193,9 +203,82 @@ const toggleTenantStatus = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get top-level Tenant Administrators across tenant organizations (1 per tenant)
+ * @route   GET /api/super-admin/tenant-admins
+ * @access  Private (Super Admin Only)
+ */
+const getTenantAdmins = async (req, res) => {
+    try {
+        const { search } = req.query;
+
+        // Query Tenant Admin roles
+        const adminRoleDocs = await Role.find({
+            name: { $in: ['TENANT_ADMIN', 'Tenant Admin', 'Tenant Administrator', 'Admin', 'ADMIN'] }
+        }).select('_id name');
+        const adminRoleIds = adminRoleDocs.map((r) => r._id);
+
+        const users = await User.find({
+            tenant: { $ne: null },
+            $or: [
+                { role: { $in: adminRoleIds } },
+                { roleName: { $in: ['TENANT_ADMIN', 'Tenant Admin', 'Tenant Administrator', 'Admin', 'ADMIN'] } }
+            ]
+        })
+            .select('-password')
+            .populate('tenant', 'name companyName subdomain status isActive email phone')
+            .populate('role', 'name permissions')
+            .sort({ createdAt: -1 });
+
+        // Filter strictly for Tenant Admins
+        const tenantAdmins = users.filter((u) => {
+            const roleName = (u.role?.name || u.roleName || (typeof u.role === 'string' ? u.role : '')).toUpperCase();
+            return roleName === 'TENANT_ADMIN' || roleName === 'TENANT ADMIN' || roleName === 'TENANT ADMINISTRATOR' || roleName === 'ADMIN';
+        });
+
+        // Deduplicate to guarantee exactly one primary admin row per tenant organization
+        const seenTenants = new Set();
+        const deduplicatedAdmins = [];
+        for (const admin of tenantAdmins) {
+            const tenantKey = String(admin.tenant?._id || admin.tenant);
+            if (!seenTenants.has(tenantKey)) {
+                seenTenants.add(tenantKey);
+                deduplicatedAdmins.push(admin);
+            }
+        }
+
+        let data = deduplicatedAdmins;
+
+        if (search && search.trim()) {
+            const s = search.trim().toLowerCase();
+            data = data.filter((u) => {
+                const name = (u.name || '').toLowerCase();
+                const email = (u.email || '').toLowerCase();
+                const company = (u.tenant?.companyName || u.tenant?.name || '').toLowerCase();
+                const subdomain = (u.tenant?.subdomain || '').toLowerCase();
+                return name.includes(s) || email.includes(s) || company.includes(s) || subdomain.includes(s);
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            count: data.length,
+            data
+        });
+    } catch (error) {
+        console.error('Error in getTenantAdmins:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch tenant administrators list.',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     getAllTenants,
     getTenantProfileByTenantId,
     updateTenantProfileByTenantId,
-    toggleTenantStatus
+    toggleTenantStatus,
+    getTenantAdmins
 };

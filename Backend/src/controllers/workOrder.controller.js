@@ -54,7 +54,9 @@ const createWorkOrder = async (req, res) => {
     let useTransaction = true;
 
     try {
-        const tenantId = req.user?.tenant;
+        const rawTenantId = req.user?.tenant;
+        const tenantId = rawTenantId ? (typeof rawTenantId === 'object' ? String(rawTenantId._id || rawTenantId.id || rawTenantId) : String(rawTenantId)) : null;
+
         if (!tenantId) {
             return res.status(403).json({
                 success: false,
@@ -66,6 +68,7 @@ const createWorkOrder = async (req, res) => {
         delete req.body.completedQuantity;
         delete req.body.workOrderNumber;
         delete req.body.stages;
+        delete req.body.selectedStages;
 
         const {
             customer,
@@ -141,8 +144,8 @@ const createWorkOrder = async (req, res) => {
             });
         }
 
-        // 4. Fetch Tenant production settings & setup 8 pipeline stages
-        const tenantDoc = await Tenant.findById(tenantId);
+        // 4. Fetch Tenant production settings fresh from database & setup 8 pipeline stages
+        const tenantDoc = await Tenant.findById(tenantId).lean();
         const startingStageKey = tenantDoc?.productionSettings?.activeStartingStage || 'FLEXO_PRINTING';
 
         const ALL_STAGE_NAMES = [
@@ -159,6 +162,8 @@ const createWorkOrder = async (req, res) => {
         let startingIndex = ALL_STAGE_NAMES.indexOf(startingStageKey);
         if (startingIndex === -1) startingIndex = 3; // Default to FLEXO_PRINTING (Index 3, Step 4)
 
+        console.log(`🏭 [WORK ORDER CREATE] Tenant: ${tenantId} | activeStartingStage: ${startingStageKey} | startingIndex: ${startingIndex} (${ALL_STAGE_NAMES[startingIndex]})`);
+
         const workOrderNumber = await generateWorkOrderNumber(tenantId);
         const now = new Date();
 
@@ -166,11 +171,7 @@ const createWorkOrder = async (req, res) => {
 
         const stages = ALL_STAGE_NAMES.map((stageName, index) => {
             const sequence = index + 1;
-            const isExplicitlySelected = Array.isArray(selectedStages)
-                ? selectedStages.includes(stageName)
-                : index >= startingIndex;
-
-            if (!isExplicitlySelected || index < startingIndex) {
+            if (index < startingIndex) {
                 return {
                     stageName,
                     sequence,

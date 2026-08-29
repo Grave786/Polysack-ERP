@@ -90,6 +90,14 @@ const RawMaterialSchema = new mongoose.Schema({
     isActive: {
         type: Boolean,
         default: true
+    },
+    isLowStockAlerted: {
+        type: Boolean,
+        default: false
+    },
+    lastLowStockAlertAt: {
+        type: Date,
+        default: null
     }
 }, { timestamps: true });
 

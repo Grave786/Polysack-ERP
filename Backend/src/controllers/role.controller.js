@@ -75,7 +75,16 @@ const getRoles = async (req, res) => {
         const userTenant = req.user?.tenant || null;
         const { status, search } = req.query;
 
-        const filter = { tenant: userTenant };
+        const filter = {};
+        if (userTenant) {
+            filter.tenant = userTenant;
+        } else {
+            // Super Admin should ONLY see genuine platform-level roles (tenant: null)
+            filter.$or = [
+                { tenant: null },
+                { tenant: { $exists: false } }
+            ];
+        }
 
         if (status && status !== 'All Statuses' && status !== 'All' && status !== 'ALL') {
             if (status.toLowerCase() === 'active') {

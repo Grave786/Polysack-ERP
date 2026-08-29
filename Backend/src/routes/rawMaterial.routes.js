@@ -50,6 +50,16 @@ router.put('/:id', authenticate, checkPermission('INVENTORY', 'UPDATE'), updateR
  * @desc    Soft delete Raw Material by ID
  * @access  Private (INVENTORY:DELETE)
  */
+const RawMaterial = require('../models/rawMaterial.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('INVENTORY', 'DELETE'), deleteRawMaterial);
+
+/**
+ * @route   POST /api/raw-materials/bulk-delete
+ * @desc    Bulk soft delete Raw Materials
+ * @access  Private (INVENTORY:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('INVENTORY', 'DELETE'), createBulkDeleteHandler(RawMaterial, { resourceName: 'Raw Materials' }));
 
 module.exports = router;

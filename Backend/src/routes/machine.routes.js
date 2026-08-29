@@ -58,6 +58,16 @@ router.put('/:id', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), updat
  * @desc    Soft delete Machine by ID
  * @access  Private (MASTER_DATA:DELETE)
  */
+const Machine = require('../models/machine.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('MASTER_DATA', 'DELETE'), deleteMachine);
+
+/**
+ * @route   POST /api/machines/bulk-delete
+ * @desc    Bulk soft delete Machines
+ * @access  Private (MASTER_DATA:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('MASTER_DATA', 'DELETE'), createBulkDeleteHandler(Machine, { resourceName: 'Machines', statusField: 'status', statusValue: 'Out of Service' }));
 
 module.exports = router;

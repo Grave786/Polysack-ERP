@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Plus, UserCheck, UserX, UserPlus, RefreshCw, ShieldCheck, CheckCircle2, Pencil, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Plus, UserCheck, UserX, UserPlus, RefreshCw, ShieldCheck, CheckCircle2, Pencil, X, Building2, ExternalLink } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
@@ -10,6 +11,14 @@ export default function UserManagementPage() {
     const currentUser = useAuthStore((state) => state.user);
     const [isAddUserOpen, setIsAddUserOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
+
+    const isSuperAdmin = Boolean(
+        !currentUser?.tenant ||
+        currentUser?.email === 'superadmin@polysack.com' ||
+        currentUser?.roleName === 'SUPER_ADMIN' ||
+        currentUser?.role?.name === 'SUPER_ADMIN' ||
+        currentUser?.role === 'SUPER_ADMIN'
+    );
 
     // Form state for creating new user
     const [roles, setRoles] = useState([]);
@@ -50,14 +59,16 @@ export default function UserManagementPage() {
                 console.error('Error fetching roles:', err);
             });
 
-        axiosInstance.get('/locations?isActive=true')
-            .then((res) => {
-                if (res.data?.success && Array.isArray(res.data.data)) {
-                    setLocationsList(res.data.data);
-                }
-            })
-            .catch(() => {});
-    }, [refreshKey]);
+        if (!isSuperAdmin) {
+            axiosInstance.get('/locations?isActive=true')
+                .then((res) => {
+                    if (res.data?.success && Array.isArray(res.data.data)) {
+                        setLocationsList(res.data.data);
+                    }
+                })
+                .catch(() => {});
+        }
+    }, [refreshKey, isSuperAdmin]);
 
     // Open Edit User Modal (Blocked for self to prevent lockout)
     const handleOpenEditUser = (user) => {
@@ -213,10 +224,10 @@ export default function UserManagementPage() {
             }
         },
         {
-            header: 'FACILITY / UNIT',
+            header: isSuperAdmin ? 'ACCESS SCOPE' : 'FACILITY / UNIT',
             render: (row) => (
                 <span className="font-mono text-xs font-semibold text-text-main">
-                    {row.facility_id || row.facilityName || 'MAIN_UNIT'}
+                    {isSuperAdmin ? 'Platform Super Admin (Global)' : (row.facility_id || row.facilityName || 'MAIN_UNIT')}
                 </span>
             )
         },
@@ -287,16 +298,119 @@ export default function UserManagementPage() {
         }
     ];
 
-    const tabs = [
+    const tenantAdminColumns = [
         {
-            key: 'users',
-            label: 'User Accounts',
-            resourcePath: '/users',
-            columns: columns
+            header: 'TENANT / ORGANIZATION',
+            render: (row) => {
+                const t = row.tenant;
+                const companyName = t?.companyName || t?.name || 'Tenant Organization';
+                const subdomain = t?.subdomain;
+                const isTenantActive = t?.isActive !== false;
+
+                return (
+                    <div className="space-y-0.5">
+                        <div className="flex items-center gap-1.5 font-bold text-text-main">
+                            <Building2 size={13} className="text-primary shrink-0" />
+                            <span>{companyName}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            {subdomain && (
+                                <span className="font-mono text-[10px] text-text-muted">
+                                    ({subdomain}.polysack.com)
+                                </span>
+                            )}
+                            <span className={`px-1.5 py-0.2 rounded text-[9px] font-extrabold uppercase ${
+                                isTenantActive
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : 'bg-rose-50 text-rose-700 border border-rose-200'
+                            }`}>
+                                {isTenantActive ? 'Active' : 'Suspended'}
+                            </span>
+                        </div>
+                    </div>
+                );
+            },
+            sortable: true
+        },
+        {
+            header: 'ADMINISTRATOR',
+            render: (row) => (
+                <div className="font-bold text-text-main">
+                    {row.name || '-'}
+                </div>
+            ),
+            sortable: true
+        },
+        {
+            header: 'EMAIL ADDRESS',
+            render: (row) => (
+                <span className="font-mono text-xs text-text-muted">{row.email || '-'}</span>
+            ),
+            sortable: true
+        },
+        {
+            header: 'ASSIGNED ROLE',
+            render: (row) => {
+                const roleName = row.role?.name || 'Tenant Admin';
+                return (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-300">
+                        • {roleName}
+                    </span>
+                );
+            }
+        },
+        {
+            header: 'ACCOUNT STATUS',
+            render: (row) => (
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${
+                    row.isActive !== false
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        : 'bg-rose-100 text-rose-800 border border-rose-300'
+                }`}>
+                    {row.isActive !== false ? '• Active' : '• Deactivated'}
+                </span>
+            )
+        },
+        {
+            header: 'ACTIONS',
+            render: (row) => (
+                <Link
+                    to="/administration/tenants"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-app-bg hover:bg-primary/10 text-text-muted hover:text-primary border border-border rounded text-[11px] font-extrabold transition-all"
+                    title="View & Manage Tenant Organization"
+                >
+                    <ExternalLink size={12} />
+                    <span>Manage Tenant</span>
+                </Link>
+            )
         }
     ];
 
-    const headerButton = (
+    const tabs = isSuperAdmin
+        ? [
+              {
+                  key: 'platform-admins',
+                  label: 'Platform Super Admins',
+                  resourcePath: '/users',
+                  columns: columns
+              },
+              {
+                  key: 'tenant-admins',
+                  label: 'Tenant Administrators (Across Organizations)',
+                  resourcePath: '/super-admin/tenant-admins',
+                  columns: tenantAdminColumns
+              }
+          ]
+        : [
+              {
+                  key: 'users',
+                  label: 'User Accounts',
+                  resourcePath: '/users',
+                  columns: columns
+              }
+          ];
+
+    const headerButton = !isSuperAdmin ? (
         <button
             type="button"
             onClick={() => setIsAddUserOpen(true)}
@@ -305,14 +419,14 @@ export default function UserManagementPage() {
             <Plus size={15} />
             <span>+ Add New User</span>
         </button>
-    );
+    ) : null;
 
     return (
         <>
             <TabbedResourcePage
                 key={refreshKey}
-                title="User Accounts & Access Management"
-                description="Manage tenant user accounts, assigned RBAC roles, facility access, and account activation status."
+                title={isSuperAdmin ? "Platform Users & Tenant Administrators" : "User Accounts & Access Management"}
+                description={isSuperAdmin ? "Overview of Platform Super Admins and organization Tenant Administrators." : "Manage tenant user accounts, assigned RBAC roles, facility access, and account activation status."}
                 tabs={tabs}
                 headerActions={headerButton}
             />

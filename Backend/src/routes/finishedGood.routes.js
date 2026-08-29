@@ -50,6 +50,16 @@ router.put('/:id', authenticate, checkPermission('INVENTORY', 'UPDATE'), updateF
  * @desc    Soft delete Finished Good by ID
  * @access  Private (INVENTORY:DELETE)
  */
+const FinishedGood = require('../models/finishedGood.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('INVENTORY', 'DELETE'), deleteFinishedGood);
+
+/**
+ * @route   POST /api/finished-goods/bulk-delete
+ * @desc    Bulk soft delete Finished Goods
+ * @access  Private (INVENTORY:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('INVENTORY', 'DELETE'), createBulkDeleteHandler(FinishedGood, { resourceName: 'Finished Goods' }));
 
 module.exports = router;

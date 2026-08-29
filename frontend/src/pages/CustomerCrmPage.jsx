@@ -352,12 +352,12 @@ export default function CustomerCrmPage() {
 
     // Primary action button (orange theme per prototype)
     const headerButton = (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap w-full sm:w-auto">
             {activeTab === 'complaints' ? (
                 <button
                     type="button"
                     onClick={() => setIsComplaintDrawerOpen(true)}
-                    className="flex items-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer shrink-0"
+                    className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
                 >
                     <AlertTriangle size={15} />
                     <span>+ File Complaint Ticket</span>
@@ -366,7 +366,7 @@ export default function CustomerCrmPage() {
                 <button
                     type="button"
                     onClick={() => setIsInteractionDrawerOpen(true)}
-                    className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer shrink-0"
+                    className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
                 >
                     <PhoneCall size={15} />
                     <span>+ Log Customer Interaction</span>

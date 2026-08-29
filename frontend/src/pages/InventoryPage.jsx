@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Sliders, LayoutGrid, List } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import FinishedGoodSpecCard from '../components/inventory/FinishedGoodSpecCard';
@@ -7,10 +8,21 @@ import InventoryValuationSummary from '../components/inventory/InventoryValuatio
 import StockAdjustmentPanel from '../components/inventory/StockAdjustmentPanel';
 
 export default function InventoryPage() {
-    const [activeTabKey, setActiveTabKey] = useState('finished-goods');
+    const [searchParams] = useSearchParams();
+    const tabFromUrl = searchParams.get('tab');
+    const searchFromUrl = searchParams.get('search');
+
+    const [activeTabKey, setActiveTabKey] = useState(tabFromUrl || 'finished-goods');
     const [viewMode, setViewMode] = useState('cards'); // 'cards' | 'table'
     const [isAdjustmentPanelOpen, setIsAdjustmentPanelOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
+
+    // Synchronize active tab with URL query parameter when changed
+    useEffect(() => {
+        if (tabFromUrl) {
+            setActiveTabKey(tabFromUrl);
+        }
+    }, [tabFromUrl]);
 
     // Columns config for Finished Bags Data Table View
     const finishedGoodsColumns = [
@@ -270,12 +282,12 @@ export default function InventoryPage() {
 
     // Dual Top-Right Action Buttons: "+ Add New Bag Specification" & "Stock Adjustment Audit"
     const renderHeaderActionButtons = (handleOpenDrawer) => (
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap w-full sm:w-auto">
             {/* Dark Primary Button: + Add New Bag Specification */}
             <button
                 type="button"
                 onClick={() => handleOpenDrawer && handleOpenDrawer()}
-                className="flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+                className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
             >
                 <Plus size={15} />
                 <span>+ Add New Bag Specification</span>
@@ -285,7 +297,7 @@ export default function InventoryPage() {
             <button
                 type="button"
                 onClick={() => setIsAdjustmentPanelOpen(true)}
-                className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+                className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
                 title="Perform Manual Stock Adjustment"
             >
                 <Sliders size={15} />
@@ -297,12 +309,13 @@ export default function InventoryPage() {
     return (
         <>
             <TabbedResourcePage
-                key={refreshKey}
+                key={`${refreshKey}-${searchFromUrl || ''}`}
                 title="Poly & Paper Bag Inventory Master"
                 description="Editable Bag Specifications: Custom GSM, Shape, Size Dimensions (Length/Width/Capacity), Pricing & Stock Management"
                 tabs={tabs}
                 activeTabKey={activeTabKey}
                 onTabChange={setActiveTabKey}
+                initialSearch={searchFromUrl || ''}
                 headerActions={renderHeaderActionButtons}
                 tabBarActions={renderViewModeToggle}
             />

@@ -27,16 +27,16 @@ router.post('/seed-default', authenticate, checkPermission('MASTER_DATA', 'CREAT
 /**
  * @route   GET /api/shifts
  * @desc    Get all Shifts for current tenant
- * @access  Private (MASTER_DATA:READ)
+ * @access  Private (Authenticated users)
  */
-router.get('/', authenticate, checkPermission('MASTER_DATA', 'READ'), getShifts);
+router.get('/', authenticate, getShifts);
 
 /**
  * @route   GET /api/shifts/:id
  * @desc    Get Shift by ID
- * @access  Private (MASTER_DATA:READ)
+ * @access  Private (Authenticated users)
  */
-router.get('/:id', authenticate, checkPermission('MASTER_DATA', 'READ'), getShiftById);
+router.get('/:id', authenticate, getShiftById);
 
 /**
  * @route   PUT /api/shifts/:id
@@ -57,6 +57,16 @@ router.patch('/:id', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), upd
  * @desc    Soft delete Shift
  * @access  Private (MASTER_DATA:DELETE)
  */
+const Shift = require('../models/shift.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('MASTER_DATA', 'DELETE'), deleteShift);
+
+/**
+ * @route   POST /api/shifts/bulk-delete
+ * @desc    Bulk soft delete Shifts
+ * @access  Private (MASTER_DATA:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('MASTER_DATA', 'DELETE'), createBulkDeleteHandler(Shift, { resourceName: 'Shifts' }));
 
 module.exports = router;

@@ -220,7 +220,7 @@ export default function ProcurementPage() {
         <button
             type="button"
             onClick={() => setIsCreatePoOpen(true)}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+            className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
         >
             <Plus size={15} />
             <span>+ Issue New Purchase Order</span>

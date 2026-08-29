@@ -178,14 +178,14 @@ export default function QualityPage() {
     ];
 
     const createQcButton = (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap w-full sm:w-auto">
             <button
                 type="button"
                 onClick={() => {
                     setModalType('INBOUND');
                     setIsCreateModalOpen(true);
                 }}
-                className="flex items-center gap-1.5 px-3 py-2 bg-card-bg hover:bg-app-bg border border-border text-text-main font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+                className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3 py-2 bg-card-bg hover:bg-app-bg border border-border text-text-main font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
             >
                 <Plus size={14} className="text-primary" />
                 <span>+ Log Inbound QC</span>
@@ -197,7 +197,7 @@ export default function QualityPage() {
                     setModalType('OUTBOUND');
                     setIsCreateModalOpen(true);
                 }}
-                className="flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+                className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
             >
                 <Plus size={15} />
                 <span>+ Log Outbound QC</span>

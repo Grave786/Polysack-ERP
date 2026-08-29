@@ -29,12 +29,22 @@ router.get('/', authenticate, checkPermission('SALES', 'READ'), getDispatches);
  */
 router.get('/:id', authenticate, checkPermission('SALES', 'READ'), getDispatchById);
 
+const Dispatch = require('../models/dispatch.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 /**
  * @route   PATCH /api/dispatches/:id/delivery-status
  * @desc    Update Delivery Status (IN_TRANSIT -> DELIVERED / RETURNED)
  * @access  Private (SALES:UPDATE)
  */
 router.patch('/:id/delivery-status', authenticate, checkPermission('SALES', 'UPDATE'), updateDeliveryStatus);
+
+/**
+ * @route   POST /api/dispatches/bulk-delete
+ * @desc    Rejects deletion of immutable dispatch movement records
+ * @access  Private
+ */
+router.post('/bulk-delete', authenticate, createBulkDeleteHandler(Dispatch, { resourceName: 'Dispatches', isImmutable: true }));
 
 // NOTE: No PUT or DELETE routes are exposed for Dispatches because outbound goods movements are immutable ledger records.
 

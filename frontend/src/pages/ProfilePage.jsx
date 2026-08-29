@@ -1,12 +1,14 @@
 import { useState } from 'react';
-import { User, ShieldCheck, Lock, Save, KeyRound, Building2 } from 'lucide-react';
+import { User, ShieldCheck, Lock, Save, KeyRound, Building2, Globe } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
+import { checkIsSuperAdmin } from '../utils/permissionUtils';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 
 export default function ProfilePage() {
     const user = useAuthStore((state) => state.user);
     const checkAuth = useAuthStore((state) => state.checkAuth);
+    const isSuperAdmin = checkIsSuperAdmin(user);
 
     const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
     const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -148,15 +150,27 @@ export default function ProfilePage() {
                                 </span>
                             </div>
 
-                            <div className="flex items-center justify-between bg-app-bg p-2.5 rounded-lg border border-border">
-                                <span className="flex items-center gap-1.5 text-text-muted font-medium text-[11px]">
-                                    <Building2 size={14} className="text-amber-500" />
-                                    FACILITY / UNIT
-                                </span>
-                                <span className="font-bold text-text-main text-[11px]">
-                                    {facilityName}
-                                </span>
-                            </div>
+                            {isSuperAdmin ? (
+                                <div className="flex items-center justify-between bg-app-bg p-2.5 rounded-lg border border-border">
+                                    <span className="flex items-center gap-1.5 text-text-muted font-medium text-[11px]">
+                                        <Globe size={14} className="text-blue-500" />
+                                        SYSTEM ACCESS
+                                    </span>
+                                    <span className="font-extrabold text-text-main text-[11px]">
+                                        Platform Super Admin (Global)
+                                    </span>
+                                </div>
+                            ) : (
+                                <div className="flex items-center justify-between bg-app-bg p-2.5 rounded-lg border border-border">
+                                    <span className="flex items-center gap-1.5 text-text-muted font-medium text-[11px]">
+                                        <Building2 size={14} className="text-amber-500" />
+                                        FACILITY / UNIT
+                                    </span>
+                                    <span className="font-bold text-text-main text-[11px]">
+                                        {facilityName}
+                                    </span>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

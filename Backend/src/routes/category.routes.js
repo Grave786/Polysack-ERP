@@ -19,16 +19,16 @@ router.post('/', authenticate, checkPermission('MASTER_DATA', 'CREATE'), createC
 /**
  * @route   GET /api/categories
  * @desc    Get all Categories for current tenant
- * @access  Private (MASTER_DATA:READ)
+ * @access  Private (Authenticated users)
  */
-router.get('/', authenticate, checkPermission('MASTER_DATA', 'READ'), getCategories);
+router.get('/', authenticate, getCategories);
 
 /**
  * @route   GET /api/categories/:id
  * @desc    Get Category by ID
- * @access  Private (MASTER_DATA:READ)
+ * @access  Private (Authenticated users)
  */
-router.get('/:id', authenticate, checkPermission('MASTER_DATA', 'READ'), getCategoryById);
+router.get('/:id', authenticate, getCategoryById);
 
 /**
  * @route   PUT /api/categories/:id
@@ -42,6 +42,16 @@ router.put('/:id', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), updat
  * @desc    Soft delete Category by ID
  * @access  Private (MASTER_DATA:DELETE)
  */
+const Category = require('../models/category.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('MASTER_DATA', 'DELETE'), deleteCategory);
+
+/**
+ * @route   POST /api/categories/bulk-delete
+ * @desc    Bulk soft delete Categories
+ * @access  Private (MASTER_DATA:DELETE)
+ */
+router.post('/bulk-delete', authenticate, checkPermission('MASTER_DATA', 'DELETE'), createBulkDeleteHandler(Category, { resourceName: 'Categories' }));
 
 module.exports = router;

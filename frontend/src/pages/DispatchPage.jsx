@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
-import { Truck, Plus, RefreshCw, CheckCircle2, AlertCircle, Clock, PackageCheck } from 'lucide-react';
+import { Truck, Plus, RefreshCw, CheckCircle2, Eye, PackageCheck, AlertCircle, UploadCloud, ShieldCheck } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
+import ViewDispatchModal from '../components/dispatch/ViewDispatchModal';
+import UploadPodModal from '../components/dispatch/UploadPodModal';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 
 export default function DispatchPage() {
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
+    const [viewingDispatchData, setViewingDispatchData] = useState(null);
+    const [uploadPodData, setUploadPodData] = useState(null);
 
     // Sales Orders and Locations for drawer dropdowns
     const [salesOrders, setSalesOrders] = useState([]);
@@ -144,14 +148,18 @@ export default function DispatchPage() {
         }
     };
 
-    // Exact 7 Columns sequence required
+    // Columns sequence
     const columns = [
         {
             header: 'DISPATCH #',
             render: (row) => (
-                <span className="font-mono font-bold uppercase text-text-main text-xs">
+                <button
+                    type="button"
+                    onClick={() => setViewingDispatchData(row)}
+                    className="font-mono font-bold uppercase text-primary hover:underline text-xs cursor-pointer text-left"
+                >
                     {row.dispatchNumber || '-'}
-                </span>
+                </button>
             ),
             sortable: true
         },
@@ -161,7 +169,7 @@ export default function DispatchPage() {
                 const soObj = typeof row.salesOrder === 'object' ? row.salesOrder : null;
                 const soNum = soObj?.soNumber || row.soNumber || '-';
                 return (
-                    <span className="font-mono font-bold uppercase text-primary text-xs">
+                    <span className="font-mono font-bold uppercase text-text-muted text-xs">
                         {soNum}
                     </span>
                 );
@@ -202,7 +210,6 @@ export default function DispatchPage() {
         {
             header: 'BAGS SHIPPED',
             render: (row) => {
-                // Dynamically compute bags and bales (1 Bale = ~300 bags)
                 const itemsList = row.items || [];
                 const totalBags = itemsList.reduce((acc, i) => acc + Number(i.dispatchedQuantity || i.quantity || 0), 0);
                 const totalBales = totalBags > 0 ? Math.ceil(totalBags / 300) : 0;
@@ -226,15 +233,84 @@ export default function DispatchPage() {
             render: (row) => {
                 const status = (row.deliveryStatus || row.status || 'IN_TRANSIT').toUpperCase();
                 const isDelivered = status === 'DELIVERED';
+                const isPendingApproval = status === 'POD_PENDING_APPROVAL';
+                const isReturned = status === 'RETURNED';
 
                 return (
                     <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${
                         isDelivered
                             ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                            : isPendingApproval
+                            ? 'bg-purple-50 text-purple-800 border border-purple-200'
+                            : isReturned
+                            ? 'bg-danger/10 text-danger border border-danger/20'
                             : 'bg-amber-50 text-amber-800 border border-amber-200'
                     }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${isDelivered ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
-                        <span>{isDelivered ? 'Delivered' : 'In Transit'}</span>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                            isDelivered
+                                ? 'bg-emerald-500'
+                                : isPendingApproval
+                                ? 'bg-purple-600 animate-pulse'
+                                : isReturned
+                                ? 'bg-danger'
+                                : 'bg-amber-500 animate-pulse'
+                        }`} />
+                        <span>
+                            {isDelivered
+                                ? 'Delivered'
+                                : isPendingApproval
+                                ? 'POD Pending Approval'
+                                : isReturned
+                                ? 'Returned'
+                                : 'In Transit'}
+                        </span>
+                    </div>
+                );
+            }
+        },
+        {
+            header: 'ACTIONS',
+            render: (row) => {
+                const status = (row.deliveryStatus || row.status || 'IN_TRANSIT').toUpperCase();
+                const isDelivered = status === 'DELIVERED';
+                const isPendingApproval = status === 'POD_PENDING_APPROVAL';
+                const isInTransit = status === 'IN_TRANSIT';
+
+                return (
+                    <div className="flex items-center gap-1.5 justify-end">
+                        <button
+                            type="button"
+                            onClick={() => setViewingDispatchData(row)}
+                            className="px-2.5 py-1 bg-app-bg hover:bg-card-bg border border-border text-text-muted hover:text-text-main rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                            title="View Gate Pass / Challan & Details"
+                        >
+                            <Eye size={13} />
+                            <span>View</span>
+                        </button>
+
+                        {isInTransit && (
+                            <button
+                                type="button"
+                                onClick={() => setUploadPodData(row)}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                                title="Mark as Delivered — Upload Proof of Delivery (Photo & Receiver)"
+                            >
+                                <UploadCloud size={12} />
+                                <span>Mark as Delivered</span>
+                            </button>
+                        )}
+
+                        {isPendingApproval && (
+                            <button
+                                type="button"
+                                onClick={() => setViewingDispatchData(row)}
+                                className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                                title="Step 2: Review Proof Photo & Approve Delivery"
+                            >
+                                <CheckCircle2 size={12} />
+                                <span>Review POD / Approve</span>
+                            </button>
+                        )}
                     </div>
                 );
             }
@@ -246,7 +322,8 @@ export default function DispatchPage() {
             key: 'dispatches',
             label: 'Vehicle Dispatches',
             resourcePath: '/dispatches',
-            columns: columns
+            columns: columns,
+            availableStatuses: ['IN_TRANSIT', 'POD_PENDING_APPROVAL', 'DELIVERED', 'RETURNED']
         }
     ];
 
@@ -254,7 +331,7 @@ export default function DispatchPage() {
         <button
             type="button"
             onClick={() => setIsDrawerOpen(true)}
-            className="flex items-center gap-1.5 px-4 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer shrink-0"
+            className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
         >
             <Truck size={16} />
             <span>+ Plan Vehicle Dispatch</span>
@@ -269,6 +346,8 @@ export default function DispatchPage() {
                 description="Vehicle loading, Delivery Challan, Baling Strapping & POD Confirmation"
                 tabs={tabs}
                 headerActions={headerButton}
+                onAddClick={() => setIsDrawerOpen(true)}
+                onEditClick={(row) => setViewingDispatchData(row)}
             />
 
             {/* SlideOverPanel Drawer for "+ Plan Vehicle Dispatch" */}
@@ -422,6 +501,7 @@ export default function DispatchPage() {
                                                         type="number"
                                                         required
                                                         min={1}
+                                                        max={item.remainingQuantity || item.orderedQuantity || 999999}
                                                         value={item.dispatchedQuantity}
                                                         onChange={(e) => {
                                                             const val = e.target.value;
@@ -466,6 +546,23 @@ export default function DispatchPage() {
                     )}
                 </form>
             </SlideOverPanel>
+
+            {/* Modal: View Dispatch & Step 2 POD Approval */}
+            <ViewDispatchModal
+                isOpen={Boolean(viewingDispatchData)}
+                dispatch={viewingDispatchData}
+                onClose={() => setViewingDispatchData(null)}
+                onOpenUploadPod={(disp) => setUploadPodData(disp)}
+                onSuccess={() => setRefreshKey((prev) => prev + 1)}
+            />
+
+            {/* Modal: Step 1 Upload POD */}
+            <UploadPodModal
+                isOpen={Boolean(uploadPodData)}
+                dispatch={uploadPodData}
+                onClose={() => setUploadPodData(null)}
+                onSuccess={() => setRefreshKey((prev) => prev + 1)}
+            />
         </>
     );
 }

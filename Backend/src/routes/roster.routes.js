@@ -5,6 +5,10 @@ const { authenticate, checkPermission } = require('../middlewares/rbac.middlewar
 
 router.post('/', authenticate, checkPermission('USERS', 'CREATE'), createRoster);
 router.get('/', authenticate, checkPermission('USERS', 'READ'), getRosters);
+const Roster = require('../models/roster.model');
+const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
+
 router.delete('/:id', authenticate, checkPermission('USERS', 'DELETE'), deleteRoster);
+router.post('/bulk-delete', authenticate, checkPermission('USERS', 'DELETE'), createBulkDeleteHandler(Roster, { resourceName: 'Rosters' }));
 
 module.exports = router;
