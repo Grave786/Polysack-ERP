@@ -3,6 +3,7 @@ import { ShoppingCart, Search, Plus, Minus, Trash2, CheckCircle, RefreshCw, User
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import PrintInvoiceModal from '../components/pos/PrintInvoiceModal';
+import FinishedGoodSpecCard from '../components/inventory/FinishedGoodSpecCard';
 
 export default function PosPage() {
     const [finishedGoods, setFinishedGoods] = useState([]);
@@ -366,8 +367,8 @@ export default function PosPage() {
                                         type="button"
                                         onClick={() => setSelectedCategory(cat)}
                                         className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${selectedCategory === cat
-                                                ? 'bg-primary text-sidebar-bg font-bold shadow-2xs'
-                                                : 'bg-app-bg text-text-muted hover:text-text-main border border-border'
+                                            ? 'bg-primary text-sidebar-bg font-bold shadow-2xs'
+                                            : 'bg-app-bg text-text-muted hover:text-text-main border border-border'
                                             }`}
                                     >
                                         {cat}
@@ -420,7 +421,7 @@ export default function PosPage() {
                             No finished bag products match your search/filter criteria.
                         </div>
                     ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        <div className="grid lg:grid-cols-2 gap-3">
                             {filteredProducts.map((fg) => {
                                 const stock = fg.currentStock || 0;
                                 const isAvailable = stock > 0;
@@ -428,36 +429,9 @@ export default function PosPage() {
                                 const qtyInCart = cartItem ? cartItem.quantity : 0;
 
                                 return (
-                                    <div
-                                        key={fg._id}
-                                        className="bg-card-bg border border-border rounded-xl p-3.5 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-2.5 font-sans"
-                                    >
-                                        {/* Top Row: Code & Stock Badge */}
-                                        <div className="flex items-center justify-between">
-                                            <span className="text-[10px] font-mono font-bold text-text-muted uppercase">
-                                                {fg.code}
-                                            </span>
-
-                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${isAvailable
-                                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                                    : 'bg-rose-100 text-rose-800 border border-rose-300'
-                                                }`}>
-                                                {isAvailable ? `${stock} Available` : 'Out of Stock'}
-                                            </span>
-                                        </div>
-
-                                        {/* Product Name & Specs */}
-                                        <div>
-                                            <h3 className="text-xs font-bold text-text-main leading-snug line-clamp-2">
-                                                {fg.name}
-                                            </h3>
-                                            <p className="text-[10px] text-text-muted mt-0.5 font-mono">
-                                                {fg.fabricGSM ? `${fg.fabricGSM} GSM` : ''} {fg.bagShape ? `• ${fg.bagShape}` : ''}
-                                            </p>
-                                        </div>
-
-                                        {/* Price & Add to Cart Button */}
-                                        <div className="pt-2 border-t border-border flex items-center justify-between">
+                                    <div className='bg-card-bg border border-border rounded-xl p-4 hover:shadow-md transition-all duration-200'>
+                                        <FinishedGoodSpecCard key={fg._id} finishedGood={fg} />
+                                        <div className="pt-3 flex items-center justify-between">
                                             <div>
                                                 <span className="text-[9px] text-text-muted uppercase font-bold block">PRICE</span>
                                                 <span className="text-xs font-mono font-bold text-primary">
@@ -481,8 +455,8 @@ export default function PosPage() {
                                                     disabled={!isAvailable}
                                                     onClick={() => handleAddToCart(fg)}
                                                     className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${qtyInCart > 0
-                                                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
-                                                            : 'bg-primary hover:bg-primary-hover text-sidebar-bg shadow-xs'
+                                                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                                                        : 'bg-primary hover:bg-primary-hover text-sidebar-bg shadow-xs'
                                                         }`}
                                                 >
                                                     <Plus size={14} />
@@ -511,8 +485,8 @@ export default function PosPage() {
                                     type="button"
                                     onClick={() => setCustomerType('WALK_IN')}
                                     className={`py-2 px-3 rounded-lg border text-center transition-all cursor-pointer ${customerType === 'WALK_IN'
-                                            ? 'bg-primary text-sidebar-bg font-extrabold border-primary shadow-2xs'
-                                            : 'bg-app-bg text-text-muted border-border hover:text-text-main'
+                                        ? 'bg-primary text-sidebar-bg font-extrabold border-primary shadow-2xs'
+                                        : 'bg-app-bg text-text-muted border-border hover:text-text-main'
                                         }`}
                                 >
                                     Walk-in Retail
@@ -521,8 +495,8 @@ export default function PosPage() {
                                     type="button"
                                     onClick={() => setCustomerType('REGISTERED')}
                                     className={`py-2 px-3 rounded-lg border text-center transition-all cursor-pointer ${customerType === 'REGISTERED'
-                                            ? 'bg-primary text-sidebar-bg font-extrabold border-primary shadow-2xs'
-                                            : 'bg-app-bg text-text-muted border-border hover:text-text-main'
+                                        ? 'bg-primary text-sidebar-bg font-extrabold border-primary shadow-2xs'
+                                        : 'bg-app-bg text-text-muted border-border hover:text-text-main'
                                         }`}
                                 >
                                     Registered B2B
@@ -696,8 +670,8 @@ export default function PosPage() {
                                         type="button"
                                         onClick={() => setPaymentMode(mode)}
                                         className={`py-1.5 px-2 rounded-md border text-center transition-all cursor-pointer ${paymentMode === mode
-                                                ? 'bg-emerald-600 text-white font-extrabold border-emerald-600 shadow-2xs'
-                                                : 'bg-app-bg text-text-muted border-border hover:text-text-main'
+                                            ? 'bg-emerald-600 text-white font-extrabold border-emerald-600 shadow-2xs'
+                                            : 'bg-app-bg text-text-muted border-border hover:text-text-main'
                                             }`}
                                     >
                                         {mode}
