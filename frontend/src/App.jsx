@@ -22,6 +22,7 @@ import UserManagementPage from './pages/UserManagementPage';
 import RolesManagementPage from './pages/RolesManagementPage';
 import ProfilePage from './pages/ProfilePage';
 import Forbidden403Page from './pages/Forbidden403Page';
+import LandingPage from './pages/LandingPage';
 
 function DefaultRouteRedirect() {
     const user = useAuthStore((state) => state.user);
@@ -30,6 +31,21 @@ function DefaultRouteRedirect() {
         return <Navigate to="/403" state={{ message: 'No modules assigned — contact your administrator.' }} replace />;
     }
     return <Navigate to={targetRoute} replace />;
+}
+
+function RootRoute() {
+    const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+    const user = useAuthStore((state) => state.user);
+
+    if (isAuthenticated && user) {
+        const targetRoute = getFirstPermittedRoute(user);
+        if (targetRoute === '/403') {
+            return <Navigate to="/403" state={{ message: 'No modules assigned — contact your administrator.' }} replace />;
+        }
+        return <Navigate to={targetRoute} replace />;
+    }
+
+    return <LandingPage />;
 }
 
 function TenantUsersRoute() {
@@ -66,7 +82,10 @@ export default function App() {
 
     return (
         <Routes>
-            {/* Public Route */}
+            {/* Public Routes */}
+            <Route path="/" element={<RootRoute />} />
+            <Route path="/home" element={<LandingPage />} />
+            <Route path="/landing" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
 
             {/* Protected Group Routes */}
@@ -140,8 +159,8 @@ export default function App() {
                 </Route>
             </Route>
 
-            {/* Global Root Fallback */}
-            <Route path="/" element={<DefaultRouteRedirect />} />
+            {/* Global Fallback */}
+            <Route path="*" element={<RootRoute />} />
         </Routes>
     );
 }
