@@ -51,6 +51,111 @@ const WorkOrderStageSchema = new mongoose.Schema({
     }
 }, { _id: false });
 
+const JobOrderFileSchema = new mongoose.Schema({
+    name: { type: String, trim: true },
+    size: { type: Number },
+    fileType: { type: String, trim: true },
+    data: { type: String } // Base64 data URL or storage URL
+}, { _id: false });
+
+const JobOrderDetailsSchema = new mongoose.Schema({
+    orderDate: {
+        type: Date,
+        default: Date.now
+    },
+    productCategory: {
+        type: String,
+        enum: ['Print', 'Plain', ''],
+        default: 'Print'
+    },
+    jobDescriptionPrintColours: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    jobDescriptionPrintSide: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    materialQualityFabric: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    fabricLaminationType: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    materialColour: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    printingColour: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    fabricGrammage: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    bagWeightGms: {
+        type: Number,
+        min: [0, 'Bag weight cannot be negative'],
+        default: null
+    },
+    fabricAverage: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    fabricSizeInInch: {
+        width: { type: Number, min: 0, default: null },
+        length: { type: Number, min: 0, default: null }
+    },
+    customerContactNumber: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    contactPersonName: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    contactPersonDesignation: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    totalOrderQuantity: {
+        type: Number,
+        min: [0, 'Total order quantity cannot be negative'],
+        default: null
+    },
+    totalOrderQuantityUnit: {
+        type: String,
+        enum: ['Pcs', 'Kgs', 'Bags'],
+        default: 'Pcs'
+    },
+    orderConfirmed: {
+        type: Boolean,
+        default: false
+    },
+    expectedDeliveryDate: {
+        type: Date,
+        default: null
+    },
+    purchaseOrderFiles: {
+        type: [JobOrderFileSchema],
+        default: []
+    }
+}, { _id: false });
+
 const WorkOrderSchema = new mongoose.Schema({
     tenant: {
         type: mongoose.Schema.Types.ObjectId,
@@ -117,6 +222,10 @@ const WorkOrderSchema = new mongoose.Schema({
             },
             message: 'WorkOrder must have exactly 8 stages.'
         }
+    },
+    jobOrderDetails: {
+        type: JobOrderDetailsSchema,
+        default: () => ({})
     },
     isActive: {
         type: Boolean,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Plus, ShieldCheck, Edit2, Trash2, CheckCircle2, Shield, Lock, RefreshCw } from 'lucide-react';
+import { Plus, ShieldCheck, Edit2, Trash2, Lock, RefreshCw, RotateCcw } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
 import axiosInstance from '../api/axiosInstance';
@@ -36,6 +36,9 @@ export default function RolesManagementPage() {
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [editingRoleId, setEditingRoleId] = useState(null);
     const [refreshKey, setRefreshKey] = useState(0);
+
+    // Status filter — drives the ?status= query param sent to the API
+    const [statusFilter, setStatusFilter] = useState('All Statuses');
 
     // Form State
     const [roleName, setRoleName] = useState('');
@@ -123,21 +126,44 @@ export default function RolesManagementPage() {
         setIsDrawerOpen(true);
     };
 
-    // Delete Role
+    // Deactivate Role (soft-delete)
     const handleDeleteRole = async (role) => {
-        if (!window.confirm(`Are you sure you want to delete role '${role.name}'?`)) {
+        if (!window.confirm(`Deactivate role '${role.name}'?\n\nUsers currently assigned to this role keep their access until manually reassigned.`)) {
             return;
         }
 
         try {
             const res = await axiosInstance.delete(`/roles/${role._id}`);
             if (res.data?.success) {
-                toast.success(`Role '${role.name}' deleted successfully.`);
+                toast.success(`Role '${role.name}' deactivated.`);
                 setRefreshKey((prev) => prev + 1);
             }
         } catch (err) {
-            console.error('Error deleting role:', err);
-            toast.error(err.response?.data?.message || 'Failed to delete role');
+            console.error('Error deactivating role:', err);
+            toast.error(err.response?.data?.message || 'Failed to deactivate role');
+        }
+    };
+
+    // Toggle isActive status — handles both reactivate and deactivate
+    const handleToggleStatus = async (role) => {
+        if (role.isActive !== false) {
+            if (!window.confirm(`Deactivate role '${role.name}'?\n\nExisting users keep their access until reassigned.`)) return;
+        }
+
+        try {
+            const res = await axiosInstance.patch(`/roles/${role._id}/status`);
+            if (res.data?.success) {
+                const isNowActive = res.data.data?.isActive;
+                if (isNowActive) {
+                    toast.success(`\u2705 Role '${role.name}' successfully reactivated.`);
+                } else {
+                    toast(`Role '${role.name}' deactivated.`, { icon: '\uD83D\uDD34' });
+                }
+                setRefreshKey((prev) => prev + 1);
+            }
+        } catch (err) {
+            console.error('Error toggling role status:', err);
+            toast.error(err.response?.data?.message || 'Failed to toggle role status');
         }
     };
 
@@ -210,8 +236,13 @@ export default function RolesManagementPage() {
             header: 'ROLE NAME',
             render: (row) => (
                 <div className="flex items-center gap-2">
-                    <ShieldCheck size={16} className="text-primary shrink-0" />
-                    <span className="font-extrabold text-text-main">{row.name}</span>
+                    <ShieldCheck
+                        size={16}
+                        className={`shrink-0 ${row.isActive !== false ? 'text-primary' : 'text-text-muted/40'}`}
+                    />
+                    <span className={`font-extrabold ${row.isActive !== false ? 'text-text-main' : 'text-text-muted line-through'}`}>
+                        {row.name}
+                    </span>
                 </div>
             ),
             sortable: true
@@ -237,34 +268,64 @@ export default function RolesManagementPage() {
         },
         {
             header: 'STATUS',
-            render: (row) => (
-                <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 text-[10px] font-extrabold uppercase">
-                    • Active Role
-                </span>
-            )
+            render: (row) => {
+                const isActive = row.isActive !== false;
+                return (
+                    <button
+                        type="button"
+                        onClick={() => handleToggleStatus(row)}
+                        title={isActive ? 'Click to deactivate this role' : 'Click to reactivate this role'}
+                        className={`group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-extrabold uppercase transition-all cursor-pointer ${
+                            isActive
+                                ? 'bg-emerald-100 border-emerald-300 text-emerald-800 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-700'
+                                : 'bg-rose-100 border-rose-300 text-rose-700 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-800'
+                        }`}
+                    >
+                        <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-500' : 'bg-rose-400'}`} />
+                        <span className="group-hover:hidden">{isActive ? 'Active Role' : 'Inactive'}</span>
+                        <span className="hidden group-hover:inline">{isActive ? 'Deactivate?' : 'Reactivate?'}</span>
+                    </button>
+                );
+            }
         },
         {
             header: 'ACTIONS',
-            render: (row) => (
-                <div className="flex items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={() => handleOpenEdit(row)}
-                        className="p-1.5 rounded-md bg-app-bg hover:bg-primary/10 text-text-muted hover:text-primary border border-border transition-colors cursor-pointer"
-                        title="Edit Role & Permission Matrix"
-                    >
-                        <Edit2 size={14} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => handleDeleteRole(row)}
-                        className="p-1.5 rounded-md bg-app-bg hover:bg-rose-50 text-text-muted hover:text-rose-600 border border-border transition-colors cursor-pointer"
-                        title="Delete Role"
-                    >
-                        <Trash2 size={14} />
-                    </button>
-                </div>
-            )
+            render: (row) => {
+                const isActive = row.isActive !== false;
+                return (
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => handleOpenEdit(row)}
+                            className="p-1.5 rounded-md bg-app-bg hover:bg-primary/10 text-text-muted hover:text-primary border border-border transition-colors cursor-pointer"
+                            title="Edit Role & Permission Matrix"
+                        >
+                            <Edit2 size={14} />
+                        </button>
+
+                        {isActive ? (
+                            <button
+                                type="button"
+                                onClick={() => handleDeleteRole(row)}
+                                className="p-1.5 rounded-md bg-app-bg hover:bg-rose-50 text-text-muted hover:text-rose-600 border border-border transition-colors cursor-pointer"
+                                title="Deactivate Role"
+                            >
+                                <Trash2 size={14} />
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => handleToggleStatus(row)}
+                                className="flex items-center gap-1 px-2 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[11px] font-bold transition-colors cursor-pointer"
+                                title="Restore / Reactivate this role"
+                            >
+                                <RotateCcw size={12} />
+                                <span>Restore</span>
+                            </button>
+                        )}
+                    </div>
+                );
+            }
         }
     ];
 
@@ -272,20 +333,37 @@ export default function RolesManagementPage() {
         {
             key: 'roles',
             label: 'Defined Roles',
-            resourcePath: '/roles',
+            resourcePath: `/roles${statusFilter !== 'All Statuses' ? `?status=${statusFilter.toLowerCase()}` : ''}`,
             columns: columns
         }
     ];
 
     const headerButton = (
-        <button
-            type="button"
-            onClick={handleOpenCreate}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
-        >
-            <Plus size={15} />
-            <span>+ Add New Role</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+            {/* Status filter dropdown */}
+            <select
+                value={statusFilter}
+                onChange={(e) => {
+                    setStatusFilter(e.target.value);
+                    setRefreshKey((prev) => prev + 1);
+                }}
+                className="border border-border rounded-lg px-3 py-2 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer transition-colors"
+                title="Filter roles by status"
+            >
+                <option value="All Statuses">All Statuses</option>
+                <option value="Active">Active Only</option>
+                <option value="Inactive">Inactive / Deactivated</option>
+            </select>
+
+            <button
+                type="button"
+                onClick={handleOpenCreate}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+            >
+                <Plus size={15} />
+                <span>+ Add New Role</span>
+            </button>
+        </div>
     );
 
     return (

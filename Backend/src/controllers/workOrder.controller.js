@@ -75,7 +75,8 @@ const createWorkOrder = async (req, res) => {
             finishedGood,
             targetQuantity,
             priority,
-            assignedMachine
+            assignedMachine,
+            jobOrderDetails: incomingJobDetails
         } = req.body;
 
         // 1. Basic Validation
@@ -230,7 +231,50 @@ const createWorkOrder = async (req, res) => {
             createdStockTransactions.push(txnResult.transaction);
         }
 
-        // Step B: Create WorkOrder document
+        // Step B: Build optional Job Order / Job Card details
+        const rawJobDetails = incomingJobDetails || {};
+        const jobOrderDetails = {
+            orderDate: rawJobDetails.orderDate ? new Date(rawJobDetails.orderDate) : new Date(),
+            productCategory: rawJobDetails.productCategory || 'Print',
+            jobDescriptionPrintColours: rawJobDetails.jobDescriptionPrintColours || '',
+            jobDescriptionPrintSide: rawJobDetails.jobDescriptionPrintSide || '',
+            materialQualityFabric: rawJobDetails.materialQualityFabric || '',
+            fabricLaminationType: rawJobDetails.fabricLaminationType || '',
+            materialColour: rawJobDetails.materialColour || '',
+            printingColour: rawJobDetails.printingColour || '',
+            fabricGrammage: rawJobDetails.fabricGrammage || '',
+            bagWeightGms: rawJobDetails.bagWeightGms !== undefined && rawJobDetails.bagWeightGms !== '' && rawJobDetails.bagWeightGms !== null
+                ? Number(rawJobDetails.bagWeightGms)
+                : null,
+            fabricAverage: rawJobDetails.fabricAverage || '',
+            fabricSizeInInch: {
+                width: rawJobDetails.fabricSizeInInch?.width !== undefined && rawJobDetails.fabricSizeInInch?.width !== '' && rawJobDetails.fabricSizeInInch?.width !== null
+                    ? Number(rawJobDetails.fabricSizeInInch.width)
+                    : null,
+                length: rawJobDetails.fabricSizeInInch?.length !== undefined && rawJobDetails.fabricSizeInInch?.length !== '' && rawJobDetails.fabricSizeInInch?.length !== null
+                    ? Number(rawJobDetails.fabricSizeInInch.length)
+                    : null
+            },
+            customerContactNumber: rawJobDetails.customerContactNumber || '',
+            contactPersonName: rawJobDetails.contactPersonName || '',
+            contactPersonDesignation: rawJobDetails.contactPersonDesignation || '',
+            totalOrderQuantity: rawJobDetails.totalOrderQuantity !== undefined && rawJobDetails.totalOrderQuantity !== '' && rawJobDetails.totalOrderQuantity !== null
+                ? Number(rawJobDetails.totalOrderQuantity)
+                : null,
+            totalOrderQuantityUnit: rawJobDetails.totalOrderQuantityUnit || 'Pcs',
+            orderConfirmed: Boolean(rawJobDetails.orderConfirmed),
+            expectedDeliveryDate: rawJobDetails.expectedDeliveryDate ? new Date(rawJobDetails.expectedDeliveryDate) : null,
+            purchaseOrderFiles: Array.isArray(rawJobDetails.purchaseOrderFiles)
+                ? rawJobDetails.purchaseOrderFiles.slice(0, 5).map(f => ({
+                    name: f.name || '',
+                    size: Number(f.size || 0),
+                    fileType: f.fileType || '',
+                    data: f.data || ''
+                }))
+                : []
+        };
+
+        // Step C: Create WorkOrder document
         const woDocs = await WorkOrder.create([{
             tenant: tenantId,
             workOrderNumber,
@@ -243,6 +287,7 @@ const createWorkOrder = async (req, res) => {
             status: 'IN_PROGRESS',
             assignedMachine: assignedMachine || null,
             stages,
+            jobOrderDetails,
             isActive: true
         }], sessionOption);
 

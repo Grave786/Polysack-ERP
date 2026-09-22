@@ -11,6 +11,7 @@ export default function FinishedGoodSpecCard({ finishedGood, onEdit }) {
 
     const width = finishedGood.dimensions?.width || 0;
     const length = finishedGood.dimensions?.length || 0;
+    const dimUnit = finishedGood.dimensions?.unit || finishedGood.dimensionUnit || 'cm';
     const capacity = finishedGood.bagCapacity || finishedGood.capacity || 0;
     const currentStock = finishedGood.currentStock || 0;
     const pendingQCStock = finishedGood.pendingQCStock || 0;
@@ -77,7 +78,7 @@ export default function FinishedGoodSpecCard({ finishedGood, onEdit }) {
                         DIMENSIONS (W × L)
                     </span>
                     <span className="text-xs font-bold text-slate-900 mt-0.5 font-mono">
-                        {width} × {length} cm
+                        {width} × {length} {dimUnit}
                     </span>
                 </div>
 

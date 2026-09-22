@@ -12,6 +12,11 @@ const FinishedGoodSchema = new mongoose.Schema({
         required: [true, 'Finished Good name is required'],
         trim: true
     },
+    baseName: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     tenant: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Tenant',
@@ -43,7 +48,13 @@ const FinishedGoodSchema = new mongoose.Schema({
     },
     dimensions: {
         width: { type: Number, min: 0 },
-        length: { type: Number, min: 0 }
+        length: { type: Number, min: 0 },
+        unit: { type: String, enum: ['cm', 'inch'], default: 'cm' }
+    },
+    dimensionUnit: {
+        type: String,
+        enum: ['cm', 'inch'],
+        default: 'cm'
     },
     bagCapacity: {
         type: Number,

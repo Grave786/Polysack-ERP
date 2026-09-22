@@ -10,7 +10,7 @@ const Footer = () => {
                 <span>© {currentYear} Polysack ERP. All Rights Reserved.</span>
                 <span className="hidden sm:inline text-slate-300">•</span>
                 <div className="flex items-center gap-1">
-                    <span>Designed & Developed by</span>
+                    <span>Designed & Developed by </span>
                     <Heart className="h-3.5 w-3.5 fill-red-500 text-red-500 inline-block" />
                     <a
                         href="https://requinsolutions.com"

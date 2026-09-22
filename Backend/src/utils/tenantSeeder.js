@@ -3,6 +3,8 @@ const Location = require('../models/location.model');
 const Shift = require('../models/shift.model');
 const Category = require('../models/category.model');
 const BagShape = require('../models/bagShape.model');
+const RawMaterialAttribute = require('../models/rawMaterialAttribute.model');
+const { DEFAULT_RAW_MATERIAL_ATTRIBUTES } = require('../constants/rawMaterialAttributes.constants');
 
 /**
  * Seed default master data for a newly onboarded tenant.
@@ -100,7 +102,18 @@ const seedTenantMasterData = async (tenantId) => {
             );
         }
 
-        console.log(`✅ Default master data (UOM, Locations, Shifts, Categories, Bag Shapes) seeded for Tenant ID: ${tenantId}`);
+        // 6. Seed Standard Default Raw Material Attributes
+        for (const [attributeType, options] of Object.entries(DEFAULT_RAW_MATERIAL_ATTRIBUTES)) {
+            for (const optionName of options) {
+                await RawMaterialAttribute.updateOne(
+                    { tenant: tenantId, attributeType, name: optionName },
+                    { $setOnInsert: { tenant: tenantId, attributeType, name: optionName, isActive: true } },
+                    { upsert: true }
+                );
+            }
+        }
+
+        console.log(`✅ Default master data (UOM, Locations, Shifts, Categories, Bag Shapes, RM Attributes) seeded for Tenant ID: ${tenantId}`);
     } catch (error) {
         console.error('Error seeding tenant default master data:', error);
     }

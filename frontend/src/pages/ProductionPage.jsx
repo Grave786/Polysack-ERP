@@ -2,7 +2,8 @@ import { useState } from 'react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import ProductionStageMonitor from '../components/production/ProductionStageMonitor';
 import CreateWorkOrderModal from '../components/production/CreateWorkOrderModal';
-import { Layers, Activity, FileText, Plus } from 'lucide-react';
+import DetailViewModal from '../components/shared/DetailViewModal';
+import { Layers, Activity, FileText, Plus, Eye } from 'lucide-react';
 
 const STAGE_LABELS = {
     TAPE_EXTRUSION: 'Tape Extrusion',
@@ -19,6 +20,7 @@ export default function ProductionPage() {
     const [selectedWorkOrderId, setSelectedWorkOrderId] = useState(null);
     const [activeTabKey, setActiveTabKey] = useState('work-orders');
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+    const [viewOrderRecord, setViewOrderRecord] = useState(null);
     const [refreshKey, setRefreshKey] = useState(0);
 
     const handleTrackJob = (workOrderId) => {
@@ -124,23 +126,31 @@ export default function ProductionPage() {
                 {
                     header: 'ACTIONS',
                     render: (row) => (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5">
+                            <button
+                                type="button"
+                                onClick={() => setViewOrderRecord(row)}
+                                className="p-1.5 text-text-muted hover:text-primary rounded-md hover:bg-app-bg transition-colors cursor-pointer"
+                                title="View Job Card Details"
+                            >
+                                <Eye size={15} />
+                            </button>
                             <button
                                 type="button"
                                 onClick={() => handleTrackJob(row._id)}
-                                className="bg-sidebar-bg hover:bg-black text-white px-3 py-1 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
+                                className="bg-sidebar-bg hover:bg-black text-white px-2.5 py-1 rounded-md text-xs font-bold flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
                             >
                                 <Activity size={13} />
-                                <span>Track Job</span>
+                                <span>Track</span>
                             </button>
                             {row.status !== 'COMPLETED' && row.status !== 'CANCELLED' && (
                                 <button
                                     type="button"
                                     onClick={() => handleCancelWorkOrder(row._id)}
-                                    className="border border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-900 px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer"
+                                    className="border border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-900 px-2 py-1 rounded-md text-xs font-bold transition-all cursor-pointer"
                                     title="Cancel Work Order"
                                 >
-                                    Cancel Order
+                                    Cancel
                                 </button>
                             )}
                         </div>
@@ -193,6 +203,14 @@ export default function ProductionPage() {
                 isOpen={isCreateModalOpen}
                 onClose={() => setIsCreateModalOpen(false)}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
+            />
+
+            <DetailViewModal
+                isOpen={Boolean(viewOrderRecord)}
+                onClose={() => setViewOrderRecord(null)}
+                record={viewOrderRecord}
+                tabKey="work-orders"
+                tabLabel="Work Order"
             />
         </>
     );

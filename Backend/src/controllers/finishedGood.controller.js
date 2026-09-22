@@ -34,6 +34,7 @@ const createFinishedGood = async (req, res) => {
             fabricGSM,
             bagShape,
             dimensions,
+            dimensionUnit,
             bagCapacity,
             pricePerBag,
             isActive
@@ -142,6 +143,13 @@ const createFinishedGood = async (req, res) => {
         }
 
         // 5. Create FinishedGood
+        const selectedUnit = (dimensions && dimensions.unit) || dimensionUnit || 'cm';
+        const formattedDimensions = dimensions ? {
+            width: Number(dimensions.width || 0),
+            length: Number(dimensions.length || 0),
+            unit: selectedUnit
+        } : undefined;
+
         const finishedGood = new FinishedGood({
             code: formattedCode,
             name: formattedName,
@@ -150,7 +158,8 @@ const createFinishedGood = async (req, res) => {
             defaultLocation: defaultLocation || null,
             fabricGSM: fabricGSM !== undefined ? Number(fabricGSM) : undefined,
             bagShape,
-            dimensions,
+            dimensions: formattedDimensions,
+            dimensionUnit: selectedUnit,
             bagCapacity: bagCapacity !== undefined ? Number(bagCapacity) : undefined,
             pricePerBag: pricePerBag !== undefined ? Number(pricePerBag) : 0,
             isActive: isActive !== undefined ? isActive : true,
@@ -344,7 +353,7 @@ const exportFinishedGoods = async (req, res) => {
             { label: 'Bag Type', key: (f) => (typeof f.category === 'object' ? f.category?.name : f.category) || '' },
             { label: 'Bag Shape', key: (f) => f.bagShape || 'Flat' },
             { label: 'GSM', key: (f) => f.fabricGSM || '' },
-            { label: 'Dimensions', key: (f) => f.dimensions?.width && f.dimensions?.length ? `${f.dimensions.width}x${f.dimensions.length} cm` : '' },
+            { label: 'Dimensions', key: (f) => f.dimensions?.width && f.dimensions?.length ? `${f.dimensions.width}x${f.dimensions.length} ${f.dimensions?.unit || f.dimensionUnit || 'cm'}` : '' },
             { label: 'Bag Capacity (Kg)', key: (f) => f.bagCapacity || '' },
             { label: 'Price Per Bag (INR)', key: (f) => f.pricePerBag || 0 },
             { label: 'Current Stock', key: (f) => f.currentStock || 0 },
@@ -448,6 +457,7 @@ const updateFinishedGood = async (req, res) => {
             fabricGSM,
             bagShape,
             dimensions,
+            dimensionUnit,
             bagCapacity,
             pricePerBag,
             isActive
@@ -528,7 +538,20 @@ const updateFinishedGood = async (req, res) => {
 
         if (fabricGSM !== undefined) finishedGood.fabricGSM = Number(fabricGSM);
         if (bagShape !== undefined) finishedGood.bagShape = bagShape;
-        if (dimensions !== undefined) finishedGood.dimensions = dimensions;
+        if (dimensions !== undefined) {
+            const unit = dimensions.unit || dimensionUnit || finishedGood.dimensionUnit || finishedGood.dimensions?.unit || 'cm';
+            finishedGood.dimensions = {
+                width: Number(dimensions.width || 0),
+                length: Number(dimensions.length || 0),
+                unit
+            };
+            finishedGood.dimensionUnit = unit;
+        } else if (dimensionUnit !== undefined) {
+            finishedGood.dimensionUnit = dimensionUnit;
+            if (finishedGood.dimensions) {
+                finishedGood.dimensions.unit = dimensionUnit;
+            }
+        }
         if (bagCapacity !== undefined) finishedGood.bagCapacity = Number(bagCapacity);
         if (pricePerBag !== undefined) finishedGood.pricePerBag = Number(pricePerBag);
         if (isActive !== undefined) finishedGood.isActive = isActive;

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Loader2, Database, ArrowUpDown, Pencil, Trash2, Columns, Download, Filter, X, AlertTriangle } from 'lucide-react';
+import { Loader2, Database, ArrowUpDown, Pencil, Trash2, Columns, Download, Filter, X, AlertTriangle, Eye } from 'lucide-react';
 import SearchBar from './SearchBar';
 import Pagination from './Pagination';
 
@@ -16,6 +16,8 @@ export default function DataTable({
     pagination = {},
     onPageChange = () => {},
     activeTabLabel = '',
+    onView = null,
+    isViewable = true,
     onEdit = (row) => console.log('Edit row:', row),
     onDelete = (row) => console.log('Deactivate row:', row),
     onBulkDelete = null,
@@ -93,7 +95,7 @@ export default function DataTable({
     };
 
     const hasCustomActionsColumn = columns.some((col) => col.header && String(col.header).toUpperCase() === 'ACTIONS');
-    const showActionColumn = !hasCustomActionsColumn && (isEditable || isDeletable);
+    const showActionColumn = !hasCustomActionsColumn && (isEditable || isDeletable || (isViewable && Boolean(onView)));
 
     const handleConfirmBulkDelete = async () => {
         if (!onBulkDelete || selectedRowIds.length === 0) return;
@@ -370,6 +372,17 @@ export default function DataTable({
                                         {/* Card Actions Footer */}
                                         {showActionColumn && (
                                             <div className="flex items-center justify-end gap-3 pt-2.5 border-t border-border/40">
+                                                {isViewable && onView && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onView(row)}
+                                                        className="flex items-center gap-1 text-xs font-semibold text-text-muted hover:text-primary transition-colors cursor-pointer"
+                                                        title="View Record Details"
+                                                    >
+                                                        <Eye size={14} />
+                                                        <span>View</span>
+                                                    </button>
+                                                )}
                                                 {isEditable && (
                                                     <button
                                                         type="button"
@@ -497,6 +510,17 @@ export default function DataTable({
                                                 {showActionColumn && (
                                                     <td className="px-4 py-3.5 text-right whitespace-nowrap">
                                                         <div className="flex items-center justify-end gap-2">
+                                                            {isViewable && onView && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => onView(row)}
+                                                                    className="p-1 text-text-muted hover:text-primary transition-colors cursor-pointer rounded"
+                                                                    title="View Details"
+                                                                >
+                                                                    <Eye size={15} />
+                                                                </button>
+                                                            )}
+
                                                             {isEditable && (
                                                                 <button
                                                                     type="button"

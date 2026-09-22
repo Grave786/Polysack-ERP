@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Plus, Download, Truck, FileText, Check } from 'lucide-react';
+import { Plus, Download, Truck, FileText, Check, ClipboardList } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreatePurchaseOrderPanel from '../components/procurement/CreatePurchaseOrderPanel';
 import CreateGRNPanel from '../components/procurement/CreateGRNPanel';
+import CreateMaterialReceiptPanel from '../components/procurement/CreateMaterialReceiptPanel';
 import PrintPOModal from '../components/procurement/PrintPOModal';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
@@ -11,7 +12,9 @@ export default function ProcurementPage() {
     const [isCreatePoOpen, setIsCreatePoOpen] = useState(false);
     const [selectedPoForGrn, setSelectedPoForGrn] = useState(null);
     const [isGrnPanelOpen, setIsGrnPanelOpen] = useState(false);
+    const [isMatReceiptOpen, setIsMatReceiptOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
+    const [activeTab, setActiveTab] = useState('purchase-orders');
 
     // Print PO Modal State
     const [isPrintPoOpen, setIsPrintPoOpen] = useState(false);
@@ -62,7 +65,8 @@ export default function ProcurementPage() {
         }
     };
 
-    const columns = [
+    // ─── Purchase Orders columns ─────────────────────────────────────────────
+    const poColumns = [
         {
             header: 'PO NUMBER',
             render: (row) => <span className="font-mono font-bold text-primary uppercase">{row.poNumber || '-'}</span>,
@@ -207,16 +211,108 @@ export default function ProcurementPage() {
         }
     ];
 
+    // ─── Material Receipts columns ────────────────────────────────────────────
+    const mrColumns = [
+        {
+            header: 'RECEIPT #',
+            render: (row) => <span className="font-mono font-bold text-primary uppercase">{row.receiptNumber || '-'}</span>,
+            sortable: true
+        },
+        {
+            header: 'DATE',
+            render: (row) => (
+                <span className="font-mono text-xs text-text-muted">
+                    {row.date ? new Date(row.date).toLocaleDateString('en-IN') : '-'}
+                </span>
+            )
+        },
+        {
+            header: 'CUSTOMER',
+            render: (row) => (
+                <span className="font-semibold text-text-main">
+                    {typeof row.customer === 'object'
+                        ? (row.customer?.companyName || row.customer?.name || '-')
+                        : (row.customer || '-')}
+                </span>
+            ),
+            sortable: true
+        },
+        {
+            header: 'MATERIAL',
+            render: (row) => (
+                <span className="text-xs text-text-muted">
+                    {[row.materialDescription, row.laminationType].filter(Boolean).join(' / ') || '-'}
+                </span>
+            )
+        },
+        {
+            header: 'QTY (KG)',
+            render: (row) => (
+                <span className="font-mono text-xs font-semibold text-text-main">
+                    {row.totalQuantityKg != null ? row.totalQuantityKg.toLocaleString('en-IN') : '-'}
+                </span>
+            )
+        },
+        {
+            header: 'QTY (PCS)',
+            render: (row) => (
+                <span className="font-mono text-xs font-semibold text-text-main">
+                    {row.totalQuantityPcs != null ? row.totalQuantityPcs.toLocaleString('en-IN') : '-'}
+                </span>
+            )
+        },
+        {
+            header: 'TOTAL AMOUNT (₹)',
+            render: (row) => (
+                <span className="font-mono font-bold text-text-main">
+                    ₹{(row.totalInvoiceAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
+            header: 'PRINT/PLAIN',
+            render: (row) => {
+                const v = row.printOrPlain || 'PLAIN';
+                return (
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${v === 'PRINT'
+                        ? 'bg-violet-100 text-violet-800 border-violet-300'
+                        : 'bg-slate-100 text-slate-700 border-slate-300'}`}>
+                        {v}
+                    </span>
+                );
+            }
+        }
+    ];
+
+    // ─── Tabs config ──────────────────────────────────────────────────────────
     const tabs = [
         {
             key: 'purchase-orders',
             label: 'Purchase Orders',
             resourcePath: '/purchase-orders',
-            columns: columns
+            columns: poColumns
+        },
+        {
+            key: 'material-receipts',
+            label: 'Job-Work Material Receipts',
+            resourcePath: '/material-receipts',
+            columns: mrColumns,
+            isDeletable: false,
+            isEditable: false
         }
     ];
 
-    const headerActions = (
+    // ─── Dynamic header actions (depend on active tab) ─────────────────────────
+    const headerActions = activeTab === 'material-receipts' ? (
+        <button
+            type="button"
+            onClick={() => setIsMatReceiptOpen(true)}
+            className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+        >
+            <ClipboardList size={15} />
+            <span>Log New Material Receipt</span>
+        </button>
+    ) : (
         <button
             type="button"
             onClick={() => setIsCreatePoOpen(true)}
@@ -231,10 +327,12 @@ export default function ProcurementPage() {
         <>
             <TabbedResourcePage
                 key={refreshKey}
-                title="Purchase Orders & Goods Receipt (GRN)"
-                description="Procure Poly Granules, Kraft Rolls & Inks with automated stock inward triggers"
+                title="Purchase & Job-Work Procurement"
+                description="Manage Purchase Orders, GRN inward stock, and Job-Work Material Receipts"
                 tabs={tabs}
                 headerActions={headerActions}
+                activeTabKey={activeTab}
+                onTabChange={setActiveTab}
             />
 
             {/* Issue Purchase Order Panel */}
@@ -252,6 +350,13 @@ export default function ProcurementPage() {
                     setSelectedPoForGrn(null);
                 }}
                 po={selectedPoForGrn}
+                onSuccess={() => setRefreshKey((prev) => prev + 1)}
+            />
+
+            {/* Job-Work Material Receipt Panel */}
+            <CreateMaterialReceiptPanel
+                isOpen={isMatReceiptOpen}
+                onClose={() => setIsMatReceiptOpen(false)}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />
 

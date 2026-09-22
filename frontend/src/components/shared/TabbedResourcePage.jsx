@@ -4,6 +4,193 @@ import DataTable from './DataTable';
 import { Construction, Plus, X, Clock, Sparkles, Pencil, Trash2, MapPin } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import InlineLookupSelect from './InlineLookupSelect';
+import DetailViewModal from './DetailViewModal';
+
+// Helper to auto-compose descriptive Raw Material title from attributes
+// Pattern: [Lamination Type] [Material Description] [Capacity/Weight if applicable] (Dimensions if applicable, [Fabric Grammage] - [Material Colour])
+// Example: "Unlaminated PP Woven Sack 10Kg (45x75cm, 60 GSM - Milky White)"
+export const composeRawMaterialTitle = (data = {}) => {
+    const isPresent = (val) => {
+        if (!val || typeof val !== 'string') return false;
+        const trimmed = val.trim();
+        if (!trimmed) return false;
+        const lower = trimmed.toLowerCase();
+        return (
+            lower !== 'not applicable' &&
+            lower !== 'n/a' &&
+            lower !== 'na' &&
+            lower !== 'none' &&
+            lower !== '-' &&
+            lower !== 'null' &&
+            lower !== 'undefined'
+        );
+    };
+
+    const lamination = isPresent(data.laminationType) ? data.laminationType.trim() : '';
+    const materialDesc = isPresent(data.materialDescription) ? data.materialDescription.trim() : '';
+    const rawBase = data.baseName !== undefined ? data.baseName : data.name;
+    const baseLabel = isPresent(rawBase) ? String(rawBase).trim() : '';
+
+    // Main title prefix / name: [Lamination Type] [Material Description] [Capacity/Weight/Base]
+    const mainParts = [];
+    if (lamination) {
+        mainParts.push(lamination);
+    }
+    if (materialDesc) {
+        if (!mainParts.some((p) => p.toLowerCase().includes(materialDesc.toLowerCase()))) {
+            mainParts.push(materialDesc);
+        }
+    }
+
+    if (baseLabel) {
+        const joinedMain = mainParts.join(' ').toLowerCase();
+        const baseLower = baseLabel.toLowerCase();
+        if (!joinedMain.includes(baseLower)) {
+            mainParts.push(baseLabel);
+        }
+    }
+
+    const mainTitle = mainParts.join(' ').trim();
+
+    // Parenthetical specs: (Dimensions if applicable, [Fabric Grammage] - [Material Colour])
+    const dim = isPresent(data.fabricSize) ? data.fabricSize.trim() : '';
+    let gsm = isPresent(data.fabricGrammage) ? data.fabricGrammage.trim() : '';
+    if (gsm && /^\d+$/.test(gsm)) {
+        gsm = `${gsm} GSM`;
+    }
+    const col = isPresent(data.materialColour || data.color) ? (data.materialColour || data.color).trim() : '';
+
+    let gsmColorPart = '';
+    if (gsm && col) {
+        gsmColorPart = `${gsm} - ${col}`;
+    } else if (gsm) {
+        gsmColorPart = gsm;
+    } else if (col) {
+        gsmColorPart = col;
+    }
+
+    let parenthetical = '';
+    if (dim && gsmColorPart) {
+        parenthetical = `${dim}, ${gsmColorPart}`;
+    } else if (dim) {
+        parenthetical = dim;
+    } else if (gsmColorPart) {
+        parenthetical = gsmColorPart;
+    }
+
+    if (mainTitle && parenthetical) {
+        return `${mainTitle} (${parenthetical})`;
+    } else if (mainTitle) {
+        return mainTitle;
+    } else if (parenthetical) {
+        return `(${parenthetical})`;
+    }
+    return '';
+};
+
+// Helper to auto-compose descriptive Finished Bag title from classification fields
+// Pattern: "[Bag Shape] [Bag Type/Category] [Capacity]Kg ([Width]x[Length][unit], [GSM] GSM - [Color & Print])"
+// Example: "Open Mouth Laminated PP Woven Sack 50Kg (45x75cm, 75 GSM - Milky White 2-Color Flexo)"
+export const composeFinishedBagTitle = (data = {}, categoriesList = [], bagShapesList = []) => {
+    const isPresent = (val) => {
+        if (!val && val !== 0) return false;
+        if (typeof val === 'number') return !isNaN(val) && val > 0;
+        const trimmed = String(val).trim();
+        if (!trimmed) return false;
+        const lower = trimmed.toLowerCase();
+        return (
+            lower !== 'not applicable' &&
+            lower !== 'n/a' &&
+            lower !== 'na' &&
+            lower !== 'none' &&
+            lower !== '-' &&
+            lower !== 'null' &&
+            lower !== 'undefined' &&
+            lower !== 'other'
+        );
+    };
+
+    // Resolve bag shape name
+    const bagShapeRaw = data.bagShape || '';
+    const bagShape = isPresent(bagShapeRaw) ? bagShapeRaw.trim() : '';
+
+    // Resolve category name (Bag Type/Category)
+    const catId = typeof data.category === 'object' ? data.category?._id : data.category;
+    const catObj = categoriesList.find((c) => c._id === catId);
+    const categoryName = catObj?.name || (typeof data.category === 'object' ? data.category?.name : '') || '';
+    const bagTypeCat = isPresent(categoryName) ? categoryName.trim() : '';
+
+    // baseName (user-typed short label like "Fertilizer Sack")
+    const baseLabel = isPresent(data.baseName) ? data.baseName.trim() : '';
+
+    // Capacity
+    const cap = (data.bagCapacity !== undefined && data.bagCapacity !== '' && data.bagCapacity !== null)
+        ? Number(data.bagCapacity)
+        : null;
+    const capacityStr = (cap !== null && !isNaN(cap) && cap > 0) ? `${cap}Kg` : '';
+
+    // Build main title: [Shape] [Category/Type] [baseLabel] [Capacity]
+    const mainParts = [];
+    if (bagShape) mainParts.push(bagShape);
+    if (bagTypeCat && !mainParts.some((p) => p.toLowerCase().includes(bagTypeCat.toLowerCase()))) {
+        mainParts.push(bagTypeCat);
+    }
+    if (baseLabel && !mainParts.some((p) => p.toLowerCase().includes(baseLabel.toLowerCase()))) {
+        mainParts.push(baseLabel);
+    }
+    if (capacityStr) mainParts.push(capacityStr);
+
+    const mainTitle = mainParts.join(' ').trim();
+
+    // Parenthetical: (WIDTHxLENGTHunit, GSM GSM - Color)
+    const dimUnit = data.dimensions?.unit || data.dimensionUnit || 'cm';
+    const w = (data.dimensions?.width !== undefined && data.dimensions?.width !== '' && data.dimensions?.width !== null)
+        ? Number(data.dimensions.width)
+        : null;
+    const l = (data.dimensions?.length !== undefined && data.dimensions?.length !== '' && data.dimensions?.length !== null)
+        ? Number(data.dimensions.length)
+        : null;
+    const dimStr = (w !== null && l !== null && !isNaN(w) && !isNaN(l) && (w > 0 || l > 0))
+        ? `${w}x${l}${dimUnit}`
+        : '';
+
+    const gsm = (data.fabricGSM !== undefined && data.fabricGSM !== '' && data.fabricGSM !== null)
+        ? Number(data.fabricGSM)
+        : null;
+    const gsmStr = (gsm !== null && !isNaN(gsm) && gsm > 0) ? `${gsm} GSM` : '';
+
+    const colorRaw = data.colorAndPrint || '';
+    const colorStr = isPresent(colorRaw) ? colorRaw.trim() : '';
+
+    let gsmColorPart = '';
+    if (gsmStr && colorStr) {
+        gsmColorPart = `${gsmStr} - ${colorStr}`;
+    } else if (gsmStr) {
+        gsmColorPart = gsmStr;
+    } else if (colorStr) {
+        gsmColorPart = colorStr;
+    }
+
+    let parenthetical = '';
+    if (dimStr && gsmColorPart) {
+        parenthetical = `${dimStr}, ${gsmColorPart}`;
+    } else if (dimStr) {
+        parenthetical = dimStr;
+    } else if (gsmColorPart) {
+        parenthetical = gsmColorPart;
+    }
+
+    if (mainTitle && parenthetical) {
+        return `${mainTitle} (${parenthetical})`;
+    } else if (mainTitle) {
+        return mainTitle;
+    } else if (parenthetical) {
+        return `(${parenthetical})`;
+    }
+    return '';
+};
+
 
 // Helper to generate suggested code e.g. "CUST-001", "SUP-001", "EMP-001", "MCH-001", "RM-001", "FG-001", "SHIFT-001"
 const generateSuggestedCode = (tabKey, currentTotal = 0) => {
@@ -60,6 +247,21 @@ export default function TabbedResourcePage({
 
     const closeConfirmModal = () => setConfirmModal({ isOpen: false, title: '', message: '', onConfirm: null });
 
+    // Read-only Detail View Modal State (Eye icon on table rows)
+    const [detailModal, setDetailModal] = useState({
+        isOpen: false,
+        record: null,
+        tabKey: ''
+    });
+
+    const handleViewRow = (row) => {
+        setDetailModal({
+            isOpen: true,
+            record: row,
+            tabKey: activeTabKey
+        });
+    };
+
     // Form state values
     const [formData, setFormData] = useState({});
 
@@ -72,6 +274,30 @@ export default function TabbedResourcePage({
     const [rawMaterialsList, setRawMaterialsList] = useState([]);
     const [bagShapesList, setBagShapesList] = useState([]);
     const [bomIngredients, setBomIngredients] = useState([{ rawMaterial: '', quantityPerUnit: '' }]);
+
+    // Raw Material Lookup Attributes State (9 master lists)
+    const [rmAttributes, setRmAttributes] = useState({
+        materialDescription: [],
+        materialQualityFabric: [],
+        materialQualityBags: [],
+        laminationType: [],
+        fabricGrammage: [],
+        materialColour: [],
+        qualityThreadYarn: [],
+        threadColour: [],
+        fabricSize: []
+    });
+
+    // Reusable Raw Material Attribute Modal State (+ Add New / Edit)
+    const [attributeModal, setAttributeModal] = useState({
+        isOpen: false,
+        mode: 'ADD',
+        attributeType: '',
+        attributeLabel: '',
+        itemId: null,
+        inputValue: '',
+        isSaving: false
+    });
 
     // Custom Bag Shape Modal State
     const [bagShapeModal, setBagShapeModal] = useState({
@@ -305,6 +531,13 @@ export default function TabbedResourcePage({
             axiosInstance.get('/raw-materials?isActive=true&limit=200').then((res) => {
                 if (res.data?.success && Array.isArray(res.data.data)) {
                     setRawMaterialsList(res.data.data);
+                }
+            }).catch(() => { });
+
+            // Fetch Raw Material Attributes dynamically
+            axiosInstance.get('/raw-material-attributes').then((res) => {
+                if (res.data?.success && res.data.data) {
+                    setRmAttributes(res.data.data);
                 }
             }).catch(() => { });
         }
@@ -565,6 +798,122 @@ export default function TabbedResourcePage({
         });
     };
 
+    /**
+     * Open Add Attribute Modal
+     */
+    const handleOpenAddAttributeModal = (type, label) => {
+        setAttributeModal({
+            isOpen: true,
+            mode: 'ADD',
+            attributeType: type,
+            attributeLabel: label,
+            itemId: null,
+            inputValue: '',
+            isSaving: false
+        });
+    };
+
+    /**
+     * Open Edit Attribute Modal
+     */
+    const handleOpenEditAttributeModal = (type, label, option) => {
+        if (!option) return;
+        setAttributeModal({
+            isOpen: true,
+            mode: 'EDIT',
+            attributeType: type,
+            attributeLabel: label,
+            itemId: option._id,
+            inputValue: option.name,
+            isSaving: false
+        });
+    };
+
+    /**
+     * Save Attribute Modal Handler (Add or Edit)
+     */
+    const handleSaveAttributeModal = async (e) => {
+        if (e) e.preventDefault();
+        const trimmed = (attributeModal.inputValue || '').trim();
+        if (!trimmed) {
+            toast.error(`Please enter an option name for ${attributeModal.attributeLabel}`);
+            return;
+        }
+
+        try {
+            setAttributeModal((prev) => ({ ...prev, isSaving: true }));
+            if (attributeModal.mode === 'ADD') {
+                toast.loading(`Creating option...`, { id: 'save-attr-modal' });
+                const res = await axiosInstance.post('/raw-material-attributes', {
+                    attributeType: attributeModal.attributeType,
+                    name: trimmed
+                });
+                if (res.data?.success && res.data.data) {
+                    const newDoc = res.data.data;
+                    toast.success(`'${newDoc.name}' created!`, { id: 'save-attr-modal' });
+                    setRmAttributes((prev) => ({
+                        ...prev,
+                        [attributeModal.attributeType]: [...(prev[attributeModal.attributeType] || []), newDoc]
+                    }));
+                    handleInputChange(attributeModal.attributeType, newDoc.name);
+                    setAttributeModal({ isOpen: false, mode: 'ADD', attributeType: '', attributeLabel: '', itemId: null, inputValue: '', isSaving: false });
+                }
+            } else if (attributeModal.mode === 'EDIT' && attributeModal.itemId) {
+                toast.loading(`Updating option...`, { id: 'save-attr-modal' });
+                const res = await axiosInstance.put(`/raw-material-attributes/${attributeModal.itemId}`, {
+                    name: trimmed
+                });
+                if (res.data?.success && res.data.data) {
+                    const updatedDoc = res.data.data;
+                    toast.success(`'${updatedDoc.name}' updated!`, { id: 'save-attr-modal' });
+                    setRmAttributes((prev) => ({
+                        ...prev,
+                        [attributeModal.attributeType]: (prev[attributeModal.attributeType] || []).map((item) =>
+                            item._id === updatedDoc._id ? updatedDoc : item
+                        )
+                    }));
+                    handleInputChange(attributeModal.attributeType, updatedDoc.name);
+                    setAttributeModal({ isOpen: false, mode: 'ADD', attributeType: '', attributeLabel: '', itemId: null, inputValue: '', isSaving: false });
+                }
+            }
+        } catch (err) {
+            console.error('Save attribute error:', err);
+            toast.error(err.response?.data?.message || 'Failed to save option', { id: 'save-attr-modal' });
+            setAttributeModal((prev) => ({ ...prev, isSaving: false }));
+        }
+    };
+
+    /**
+     * Inline Attribute Delete Confirmation
+     */
+    const handleDeleteAttributeInline = (type, label, option) => {
+        if (!option) return;
+        setConfirmModal({
+            isOpen: true,
+            title: `Delete ${label} Option`,
+            message: `Are you sure you want to delete '${option.name}' from ${label}?`,
+            onConfirm: async () => {
+                try {
+                    toast.loading(`Deleting '${option.name}'...`, { id: 'delete-attr-inline' });
+                    const res = await axiosInstance.delete(`/raw-material-attributes/${option._id}`);
+                    if (res.data?.success) {
+                        toast.success(`'${option.name}' deleted!`, { id: 'delete-attr-inline' });
+                        setRmAttributes((prev) => ({
+                            ...prev,
+                            [type]: (prev[type] || []).filter((item) => item._id !== option._id)
+                        }));
+                        if (formData[type] === option.name) {
+                            handleInputChange(type, '');
+                        }
+                    }
+                } catch (err) {
+                    console.error('Delete attribute error:', err);
+                    toast.error(err.response?.data?.message || 'Failed to delete option', { id: 'delete-attr-inline' });
+                }
+            }
+        });
+    };
+
     // Reset form data when active tab changes or drawer closes
     useEffect(() => {
         if (!isDrawerOpen) {
@@ -702,11 +1051,68 @@ export default function TabbedResourcePage({
         }
 
         if (key === 'raw-materials' || key === 'rawmaterials') {
+            const rollNum = (formData.rollNumber || '').trim();
+            if (!rollNum) {
+                toast.error('Roll Number is required');
+                return;
+            }
+            payload.rollNumber = rollNum.slice(0, 25);
+
+            let parsedGW = null;
+            if (formData.grossWeight !== undefined && formData.grossWeight !== '' && formData.grossWeight !== null) {
+                parsedGW = Number(formData.grossWeight);
+                if (isNaN(parsedGW) || parsedGW < 0.01 || parsedGW > 10000) {
+                    toast.error('Gross Weight must be between 0.01 and 10000 Kg');
+                    return;
+                }
+                payload.grossWeight = parsedGW;
+            } else {
+                payload.grossWeight = null;
+            }
+
+            if (formData.netWeight !== undefined && formData.netWeight !== '' && formData.netWeight !== null) {
+                const parsedNW = Number(formData.netWeight);
+                if (isNaN(parsedNW) || parsedNW < 0.01 || parsedNW > 10000) {
+                    toast.error('Net Weight must be between 0.01 and 10000 Kg');
+                    return;
+                }
+                if (parsedGW !== null && parsedNW > parsedGW) {
+                    toast.error('Net Weight cannot exceed Gross Weight');
+                    return;
+                }
+                payload.netWeight = parsedNW;
+            } else {
+                payload.netWeight = null;
+            }
+
+            if (formData.fabricLength !== undefined && formData.fabricLength !== '' && formData.fabricLength !== null) {
+                const parsedFL = Number(formData.fabricLength);
+                if (isNaN(parsedFL) || parsedFL < 1 || parsedFL > 50000) {
+                    toast.error('Fabric Length must be between 1 and 50000 Meters');
+                    return;
+                }
+                payload.fabricLength = parsedFL;
+            } else {
+                payload.fabricLength = null;
+            }
+
             const catVal = typeof formData.category === 'object' ? formData.category?._id : formData.category;
             const uomVal = typeof formData.uom === 'object' ? formData.uom?._id : formData.uom;
             payload.category = catVal || (categoriesList[0]?._id || '');
             payload.uom = uomVal || (uomsList[0]?._id || '');
+            payload.totalQuantityKg = (formData.totalQuantityKg !== undefined && formData.totalQuantityKg !== '' && formData.totalQuantityKg !== null) ? Number(formData.totalQuantityKg) : null;
+            payload.totalQuantityPcs = (formData.totalQuantityPcs !== undefined && formData.totalQuantityPcs !== '' && formData.totalQuantityPcs !== null) ? Number(formData.totalQuantityPcs) : null;
             delete payload.currentStock; // Current stock can only be updated via GRN / Stock Ledger
+
+            // Auto-compose descriptive Raw Material title from attributes
+            const fullComposedTitle = composeRawMaterialTitle(formData);
+            payload.name = fullComposedTitle || (formData.baseName !== undefined ? formData.baseName : formData.name) || 'Raw Material';
+            payload.baseName = formData.baseName !== undefined ? formData.baseName : (formData.name || '');
+
+            // Synchronize color from materialColour for backward compatibility
+            if (formData.materialColour) {
+                payload.color = formData.materialColour;
+            }
         }
 
         if (key === 'finished-goods' || key === 'finishedbags' || key === 'finishedproducts') {
@@ -726,7 +1132,6 @@ export default function TabbedResourcePage({
             const uomVal = typeof formData.uom === 'object' ? formData.uom?._id : formData.uom;
             const locVal = typeof formData.defaultLocation === 'object' ? formData.defaultLocation?._id : formData.defaultLocation;
             payload.code = (formData.code || formData.itemCode || currentCode || '').toUpperCase();
-            payload.name = formData.name || '';
             payload.category = catVal || (categoriesList[0]?._id || '');
             payload.uom = uomVal || (uomsList[0]?._id || '');
             if (locVal) payload.defaultLocation = locVal;
@@ -736,15 +1141,24 @@ export default function TabbedResourcePage({
             if (formData.fabricGSM) payload.fabricGSM = Number(formData.fabricGSM);
             if (formData.bagCapacity) payload.bagCapacity = Number(formData.bagCapacity);
             if (formData.pricePerBag) payload.pricePerBag = Number(formData.pricePerBag);
+            const selectedDimUnit = formData.dimensions?.unit || formData.dimensionUnit || 'cm';
             if (formData.dimensions) {
                 payload.dimensions = {
                     width: Number(formData.dimensions.width || 0),
-                    length: Number(formData.dimensions.length || 0)
+                    length: Number(formData.dimensions.length || 0),
+                    unit: selectedDimUnit
                 };
             }
+            payload.dimensionUnit = selectedDimUnit;
+
+            // Auto-compose descriptive Finished Bag title from classification fields
+            const fullFGTitle = composeFinishedBagTitle(formData, categoriesList, bagShapesList);
+            payload.name = fullFGTitle || (formData.baseName !== undefined ? formData.baseName : formData.name) || 'Finished Good';
+            payload.baseName = formData.baseName !== undefined ? formData.baseName : (formData.name || '');
 
             payload.materialRequirements = validIngredients;
         }
+
 
         if (key === 'boms' || key === 'bom') {
             const fgVal = typeof formData.finishedGood === 'object' ? formData.finishedGood?._id : (formData.finishedGood || finishedGoodsList[0]?._id);
@@ -848,6 +1262,8 @@ export default function TabbedResourcePage({
             standardHours: 8,
             gracePeriodMinutes: 15,
             isActive: true,
+            dimensionUnit: 'cm',
+            dimensions: { width: '', length: '', unit: 'cm' },
             status: activeTabKey === 'customers' ? 'ACTIVE_CUSTOMER' : (activeTabKey === 'machines' ? 'AVAILABLE' : 'Active')
         });
 
@@ -865,6 +1281,7 @@ export default function TabbedResourcePage({
         if (k.includes('qc') || p.includes('qc-inspection')) return false;
         if (k.includes('invoice') || p.includes('invoice')) return false;
         if (k.includes('grn') || p.includes('grn')) return false;
+        if (k.includes('material-receipt') || p.includes('material-receipt')) return false;
         if (k.includes('stock-transaction') || p.includes('stock-transaction') || k.includes('valuation') || k.includes('audit-ledger')) return false;
         if (k.includes('dispatch') || p.includes('dispatch')) return false;
         return true;
@@ -908,8 +1325,19 @@ export default function TabbedResourcePage({
             setBomIngredients([{ rawMaterial: '', quantityPerUnit: '' }]);
         }
 
+        const editDimUnit = row.dimensionUnit || row.dimensions?.unit || 'cm';
         setFormData({
             ...row,
+            // IMPORTANT: never fall back to row.name here — row.name is the full auto-composed
+            // title, not a short label. Doing so would inject the compiled title back into
+            // composeFinishedBagTitle as the baseName segment, causing recursive duplication on edit.
+            baseName: row.baseName || '',
+            materialColour: row.materialColour || row.color || '',
+            dimensionUnit: editDimUnit,
+            dimensions: {
+                ...(row.dimensions || {}),
+                unit: editDimUnit
+            },
             code: codeVal,
             customerCode: codeVal,
             supplierCode: codeVal,
@@ -1679,6 +2107,8 @@ export default function TabbedResourcePage({
 
         // RAW MATERIALS FORM
         if (key === 'raw-materials' || key === 'rawmaterials') {
+            const composedTitle = composeRawMaterialTitle(formData);
+
             return (
                 <div className="space-y-4 font-sans text-xs">
                     <div>
@@ -1694,16 +2124,42 @@ export default function TabbedResourcePage({
                         />
                     </div>
 
+                    {/* Live Auto-Generated Descriptive Title Preview */}
+                    <div className="bg-primary/5 border border-primary/25 rounded-lg p-3 space-y-1.5 shadow-2xs">
+                        <div className="flex items-center justify-between">
+                            <label className="text-[11px] font-extrabold uppercase tracking-wider text-primary flex items-center gap-1.5">
+                                <Sparkles size={13} className="text-primary" />
+                                <span>Auto-Generated Descriptive Title (Live Preview)</span>
+                            </label>
+                            <span className="text-[10px] text-text-muted font-medium">Auto-composed from attributes</span>
+                        </div>
+                        <div className="text-xs font-semibold text-text-main font-mono bg-card-bg border border-border/80 rounded px-2.5 py-1.5 shadow-2xs break-words min-h-[32px] flex items-center">
+                            {composedTitle ? (
+                                <span className="text-primary font-bold">{composedTitle}</span>
+                            ) : (
+                                <span className="text-text-muted font-normal italic">
+                                    Fill in classification fields or type a base label to preview descriptive title...
+                                </span>
+                            )}
+                        </div>
+                    </div>
+
                     <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Raw Material Name / Title *
-                        </label>
+                        <div className="flex items-center justify-between mb-1">
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                Raw Material Name / Base Label *
+                            </label>
+                            <span className="text-[10px] text-text-muted font-medium">Base tag, capacity or product line (e.g. 10Kg)</span>
+                        </div>
                         <input
                             type="text"
-                            required
-                            placeholder="e.g. High Density PP Resin Granules Grade 100"
-                            value={formData.name || ''}
-                            onChange={(e) => handleInputChange('name', e.target.value)}
+                            required={!composedTitle}
+                            placeholder="e.g. 10Kg, High Density Resin Grade, or product line name"
+                            value={formData.baseName !== undefined ? formData.baseName : (formData.name || '')}
+                            onChange={(e) => {
+                                handleInputChange('baseName', e.target.value);
+                                handleInputChange('name', e.target.value);
+                            }}
                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                         />
                     </div>
@@ -1762,176 +2218,457 @@ export default function TabbedResourcePage({
                         </select>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <div className="flex items-center justify-between w-full mb-1 gap-2 min-w-0">
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main truncate whitespace-nowrap min-w-0">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                        <div className="flex flex-col h-full">
+                            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
                                     Unit of Measure (UOM) *
                                 </label>
                                 <button
                                     type="button"
                                     onClick={handleOpenAddUomModal}
-                                    className="text-xs text-primary hover:underline font-bold cursor-pointer shrink-0 whitespace-nowrap"
+                                    className="text-xs text-primary hover:underline font-bold cursor-pointer shrink-0 whitespace-nowrap pt-0.5"
                                 >
                                     + Add New
                                 </button>
                             </div>
-                            <select
-                                name="uom"
-                                required
-                                value={typeof formData.uom === 'object' ? formData.uom?._id : (formData.uom || (uomsList[0]?._id || ''))}
-                                onChange={(e) => handleInputChange('uom', e.target.value)}
-                                className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
-                            >
-                                <option value="">-- Select UOM --</option>
-                                {uomsList.map((u) => (
-                                    <option key={u._id} value={u._id}>
-                                        {u.name} ({u.abbreviation || u.symbol || u.name})
-                                    </option>
-                                ))}
-                            </select>
+                            <div className="mt-auto">
+                                <select
+                                    name="uom"
+                                    required
+                                    value={typeof formData.uom === 'object' ? formData.uom?._id : (formData.uom || (uomsList[0]?._id || ''))}
+                                    onChange={(e) => handleInputChange('uom', e.target.value)}
+                                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                                >
+                                    <option value="">-- Select UOM --</option>
+                                    {uomsList.map((u) => (
+                                        <option key={u._id} value={u._id}>
+                                            {u.name} ({u.abbreviation || u.symbol || u.name})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
                         </div>
 
-                        <div>
-                            <div className="flex items-center justify-between w-full mb-1 gap-2 min-w-0">
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main truncate whitespace-nowrap min-w-0">
+                        <div className="flex flex-col h-full">
+                            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
                                     Default Storage Location
                                 </label>
                             </div>
-                            <select
-                                name="defaultLocation"
-                                value={typeof formData.defaultLocation === 'object' ? formData.defaultLocation?._id : (formData.defaultLocation || '')}
-                                onChange={(e) => handleInputChange('defaultLocation', e.target.value)}
-                                className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
-                            >
-                                <option value="">-- Select Location --</option>
-                                {locationsList.map((loc) => (
-                                    <option key={loc._id} value={loc._id}>
-                                        {loc.name} ({loc.code || loc.type})
-                                    </option>
-                                ))}
-                            </select>
+                            <div className="mt-auto">
+                                <select
+                                    name="defaultLocation"
+                                    value={typeof formData.defaultLocation === 'object' ? formData.defaultLocation?._id : (formData.defaultLocation || '')}
+                                    onChange={(e) => handleInputChange('defaultLocation', e.target.value)}
+                                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                                >
+                                    <option value="">-- Select Location --</option>
+                                    {locationsList.map((loc) => (
+                                        <option key={loc._id} value={loc._id}>
+                                            {loc.name} ({loc.code || loc.type})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Client-specified PP Woven Fabric & Bag Material Parameters */}
+                    <div className="space-y-3.5 pt-3.5 border-t border-border">
+                        <div className="flex items-center justify-between pb-0.5">
+                            <h4 className="text-[11px] font-bold uppercase tracking-wide text-primary flex items-center gap-1.5">
+                                <span>Material Classification & Quality Specs</span>
+                            </h4>
+                            <span className="text-[10px] text-text-muted font-medium">Master specifications</span>
+                        </div>
+
+                        {/* Material Description Full Width */}
+                        <InlineLookupSelect
+                            label="Material Description"
+                            value={formData.materialDescription || ''}
+                            onChange={(val) => handleInputChange('materialDescription', val)}
+                            options={rmAttributes.materialDescription || []}
+                            onOpenAdd={() => handleOpenAddAttributeModal('materialDescription', 'Material Description')}
+                            onOpenEdit={(opt) => handleOpenEditAttributeModal('materialDescription', 'Material Description', opt)}
+                            onDelete={(opt) => handleDeleteAttributeInline('materialDescription', 'Material Description', opt)}
+                        />
+
+                        {/* Material Quality-Fabric & Material Quality-Bags */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                            <InlineLookupSelect
+                                label="Material Quality-Fabric"
+                                value={formData.materialQualityFabric || ''}
+                                onChange={(val) => handleInputChange('materialQualityFabric', val)}
+                                options={rmAttributes.materialQualityFabric || []}
+                                onOpenAdd={() => handleOpenAddAttributeModal('materialQualityFabric', 'Material Quality-Fabric')}
+                                onOpenEdit={(opt) => handleOpenEditAttributeModal('materialQualityFabric', 'Material Quality-Fabric', opt)}
+                                onDelete={(opt) => handleDeleteAttributeInline('materialQualityFabric', 'Material Quality-Fabric', opt)}
+                            />
+                            <InlineLookupSelect
+                                label="Material Quality-Bags"
+                                value={formData.materialQualityBags || ''}
+                                onChange={(val) => handleInputChange('materialQualityBags', val)}
+                                options={rmAttributes.materialQualityBags || []}
+                                onOpenAdd={() => handleOpenAddAttributeModal('materialQualityBags', 'Material Quality-Bags')}
+                                onOpenEdit={(opt) => handleOpenEditAttributeModal('materialQualityBags', 'Material Quality-Bags', opt)}
+                                onDelete={(opt) => handleDeleteAttributeInline('materialQualityBags', 'Material Quality-Bags', opt)}
+                            />
+                        </div>
+
+                        {/* Lamination Type & Fabric Grammage */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                            <InlineLookupSelect
+                                label="Material Quality-Fabric (Lamination Type)"
+                                value={formData.laminationType || ''}
+                                onChange={(val) => handleInputChange('laminationType', val)}
+                                options={rmAttributes.laminationType || []}
+                                onOpenAdd={() => handleOpenAddAttributeModal('laminationType', 'Material Quality-Fabric (Lamination Type)')}
+                                onOpenEdit={(opt) => handleOpenEditAttributeModal('laminationType', 'Material Quality-Fabric (Lamination Type)', opt)}
+                                onDelete={(opt) => handleDeleteAttributeInline('laminationType', 'Material Quality-Fabric (Lamination Type)', opt)}
+                            />
+                            <InlineLookupSelect
+                                label="Fabric Grammage"
+                                value={formData.fabricGrammage || ''}
+                                onChange={(val) => handleInputChange('fabricGrammage', val)}
+                                options={rmAttributes.fabricGrammage || []}
+                                onOpenAdd={() => handleOpenAddAttributeModal('fabricGrammage', 'Fabric Grammage')}
+                                onOpenEdit={(opt) => handleOpenEditAttributeModal('fabricGrammage', 'Fabric Grammage', opt)}
+                                onDelete={(opt) => handleDeleteAttributeInline('fabricGrammage', 'Fabric Grammage', opt)}
+                            />
+                        </div>
+
+                        {/* Material Colour & Thread Colour */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                            <InlineLookupSelect
+                                label="Material Colour"
+                                value={formData.materialColour || ''}
+                                onChange={(val) => handleInputChange('materialColour', val)}
+                                options={rmAttributes.materialColour || []}
+                                onOpenAdd={() => handleOpenAddAttributeModal('materialColour', 'Material Colour')}
+                                onOpenEdit={(opt) => handleOpenEditAttributeModal('materialColour', 'Material Colour', opt)}
+                                onDelete={(opt) => handleDeleteAttributeInline('materialColour', 'Material Colour', opt)}
+                            />
+                            <InlineLookupSelect
+                                label="Thread Colour"
+                                value={formData.threadColour || ''}
+                                onChange={(val) => handleInputChange('threadColour', val)}
+                                options={rmAttributes.threadColour || []}
+                                onOpenAdd={() => handleOpenAddAttributeModal('threadColour', 'Thread Colour')}
+                                onOpenEdit={(opt) => handleOpenEditAttributeModal('threadColour', 'Thread Colour', opt)}
+                                onDelete={(opt) => handleDeleteAttributeInline('threadColour', 'Thread Colour', opt)}
+                            />
+                        </div>
+
+                        {/* Quality-Thread-Yarn & Fabric Size (Fabric Width) */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                            <InlineLookupSelect
+                                label="Quality-Thread-Yarn"
+                                value={formData.qualityThreadYarn || ''}
+                                onChange={(val) => handleInputChange('qualityThreadYarn', val)}
+                                options={rmAttributes.qualityThreadYarn || []}
+                                onOpenAdd={() => handleOpenAddAttributeModal('qualityThreadYarn', 'Quality-Thread-Yarn')}
+                                onOpenEdit={(opt) => handleOpenEditAttributeModal('qualityThreadYarn', 'Quality-Thread-Yarn', opt)}
+                                onDelete={(opt) => handleDeleteAttributeInline('qualityThreadYarn', 'Quality-Thread-Yarn', opt)}
+                            />
+                            <InlineLookupSelect
+                                label="Fabric Size (Fabric Width)"
+                                value={formData.fabricSize || ''}
+                                onChange={(val) => handleInputChange('fabricSize', val)}
+                                options={rmAttributes.fabricSize || []}
+                                onOpenAdd={() => handleOpenAddAttributeModal('fabricSize', 'Fabric Size (Fabric Width)')}
+                                onOpenEdit={(opt) => handleOpenEditAttributeModal('fabricSize', 'Fabric Size (Fabric Width)', opt)}
+                                onDelete={(opt) => handleDeleteAttributeInline('fabricSize', 'Fabric Size (Fabric Width)', opt)}
+                            />
+                        </div>
+
+                        {/* Fabric Average */}
+                        <div>
+                            <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words mb-1">
+                                Fabric Average
+                            </label>
+                            <input
+                                type="text"
+                                placeholder="e.g. 52.5 or standard run average"
+                                value={formData.fabricAverage || ''}
+                                onChange={(e) => handleInputChange('fabricAverage', e.target.value)}
+                                className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                            />
+                        </div>
+                    </div>
+
+                    {/* Packing Slip & Roll Specifications (From Inward Packing Slip) */}
+                    <div className="space-y-3.5 pt-3.5 border-t border-border">
+                        <div className="flex items-center justify-between pb-0.5">
+                            <h4 className="text-[11px] font-bold uppercase tracking-wide text-primary flex items-center gap-1.5">
+                                <span>Packing Slip & Roll Specifications</span>
+                            </h4>
+                            <span className="text-[10px] text-text-muted font-medium">Inward roll & weight verification</span>
+                        </div>
+
+                        {/* Roll No. & Fabric Length */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        Roll No. <span className="text-danger">*</span>
+                                    </label>
+                                    <span className="text-[9px] text-danger font-bold uppercase tracking-wider shrink-0 pt-0.5">Required</span>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="text"
+                                        required
+                                        maxLength={25}
+                                        placeholder="e.g. 1388/27 or 1434/28"
+                                        value={formData.rollNumber || ''}
+                                        onChange={(e) => handleInputChange('rollNumber', e.target.value)}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-semibold uppercase"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        Fabric Length (Meters)
+                                    </label>
+                                    <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">1 – 50,000 m</span>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        min="1"
+                                        max="50000"
+                                        placeholder="e.g. 1250"
+                                        value={formData.fabricLength !== undefined && formData.fabricLength !== null ? formData.fabricLength : ''}
+                                        onChange={(e) => handleInputChange('fabricLength', e.target.value)}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Gross Weight (G.W.) & Net Weight (N.W.) */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        Gross Weight / G.W. (Kg)
+                                    </label>
+                                    <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">Max 10,000 Kg</span>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0.01"
+                                        max="10000"
+                                        placeholder="e.g. 520.50"
+                                        value={formData.grossWeight !== undefined && formData.grossWeight !== null ? formData.grossWeight : ''}
+                                        onChange={(e) => handleInputChange('grossWeight', e.target.value)}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        Net Weight / N.W. (Kg)
+                                    </label>
+                                    <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">≤ Gross Weight</span>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0.01"
+                                        max="10000"
+                                        placeholder="e.g. 518.20"
+                                        value={formData.netWeight !== undefined && formData.netWeight !== null ? formData.netWeight : ''}
+                                        onChange={(e) => handleInputChange('netWeight', e.target.value)}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Reference Lot Quantities (Optional) */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4 bg-amber-50/20 border border-amber-200/50 rounded-lg p-2.5">
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        Total Quantity in Kgs
+                                    </label>
+                                    <span className="text-[9px] text-text-muted mt-0.5">Roll Wt (KG)</span>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="number"
+                                        step="any"
+                                        placeholder="e.g. 500"
+                                        value={formData.totalQuantityKg !== undefined && formData.totalQuantityKg !== null ? formData.totalQuantityKg : ''}
+                                        onChange={(e) => handleInputChange('totalQuantityKg', e.target.value)}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                                    />
+                                </div>
+                            </div>
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        Total Quantity in Pcs
+                                    </label>
+                                    <span className="text-[9px] text-text-muted mt-0.5">Count (PCS)</span>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="number"
+                                        step="1"
+                                        placeholder="e.g. 1000"
+                                        value={formData.totalQuantityPcs !== undefined && formData.totalQuantityPcs !== null ? formData.totalQuantityPcs : ''}
+                                        onChange={(e) => handleInputChange('totalQuantityPcs', e.target.value)}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                                    />
+                                </div>
+                            </div>
                         </div>
                     </div>
 
                     {/* Industrial Specification Fields */}
-                    <div className="space-y-3 pt-2 border-t border-border">
-                        <div className="grid grid-cols-2 gap-3">
-                            <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                    Grade / Specification
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g. Virgin Raffia Grade 100"
-                                    value={formData.materialGrade || ''}
-                                    onChange={(e) => handleInputChange('materialGrade', e.target.value)}
-                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                                />
+                    <div className="space-y-3.5 pt-3.5 border-t border-border">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        Grade / Specification
+                                    </label>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. Virgin Raffia Grade 100"
+                                        value={formData.materialGrade || ''}
+                                        onChange={(e) => handleInputChange('materialGrade', e.target.value)}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                </div>
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                    Color
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g. Natural White"
-                                    value={formData.color || ''}
-                                    onChange={(e) => handleInputChange('color', e.target.value)}
-                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                                />
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3">
-                            <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                    HSN Code (GST)
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g. 39012000"
-                                    value={formData.hsnCode || ''}
-                                    onChange={(e) => handleInputChange('hsnCode', e.target.value)}
-                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-semibold"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                    Min Order Qty (MOQ)
-                                </label>
-                                <input
-                                    type="number"
-                                    placeholder="1000"
-                                    value={formData.moq || ''}
-                                    onChange={(e) => handleInputChange('moq', e.target.value)}
-                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
-                                />
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        HSN Code (GST)
+                                    </label>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. 39012000"
+                                        value={formData.hsnCode || ''}
+                                        onChange={(e) => handleInputChange('hsnCode', e.target.value)}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-semibold"
+                                    />
+                                </div>
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3">
-                            <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                    Standard / Valuation Cost (₹)
-                                </label>
-                                <input
-                                    type="number"
-                                    step="any"
-                                    placeholder="120.00"
-                                    value={formData.pricePerUnit || ''}
-                                    onChange={(e) => handleInputChange('pricePerUnit', e.target.value)}
-                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold text-purple-900"
-                                />
-                                <p className="text-[10px] text-text-muted mt-0.5">Used for Inventory Asset Valuation calculations.</p>
+                        <div>
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        Min Order Qty (MOQ)
+                                    </label>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="number"
+                                        placeholder="1000"
+                                        value={formData.moq || ''}
+                                        onChange={(e) => handleInputChange('moq', e.target.value)}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        Standard / Valuation Cost (₹)
+                                    </label>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="number"
+                                        step="any"
+                                        placeholder="120.00"
+                                        value={formData.pricePerUnit || ''}
+                                        onChange={(e) => handleInputChange('pricePerUnit', e.target.value)}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold text-purple-900"
+                                    />
+                                    <p className="text-[9px] text-text-muted mt-0.5">Asset valuation</p>
+                                </div>
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                    Last GRN Purchase Price (₹)
-                                </label>
-                                <input
-                                    type="number"
-                                    step="any"
-                                    readOnly
-                                    disabled
-                                    value={formData.lastPurchasePrice || formData.pricePerUnit || 0}
-                                    className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-bold text-primary cursor-not-allowed font-mono opacity-90"
-                                />
-                                <p className="text-[10px] text-text-muted mt-0.5">Auto-updated from the most recent GRN invoice rate.</p>
+                            <div className="flex flex-col h-full">
+                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                        Last GRN Purchase Price (₹)
+                                    </label>
+                                </div>
+                                <div className="mt-auto">
+                                    <input
+                                        type="number"
+                                        step="any"
+                                        readOnly
+                                        disabled
+                                        value={formData.lastPurchasePrice || formData.pricePerUnit || 0}
+                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-app-bg text-xs font-bold text-primary cursor-not-allowed font-mono opacity-90"
+                                    />
+                                    <p className="text-[9px] text-text-muted mt-0.5">From last GRN invoice</p>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-muted mb-1 flex items-center justify-between">
-                                <span>Current Stock</span>
-                                <span className="text-[10px] text-amber-700 font-semibold normal-case">Read-only (GRN & Ledger)</span>
-                            </label>
-                            <input
-                                type="number"
-                                readOnly
-                                disabled
-                                value={formData.currentStock !== undefined ? formData.currentStock : 0}
-                                className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-bold text-text-muted cursor-not-allowed font-sans opacity-80"
-                                title="Stock levels cannot be edited manually. Use Goods Receipt (GRN) or Stock Adjustment in Inventory module."
-                            />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                        <div className="flex flex-col h-full">
+                            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-muted leading-snug break-words hyphens-auto flex-1 min-w-0 flex items-center justify-between">
+                                    <span>Current Stock</span>
+                                    <span className="text-[9px] text-amber-700 font-semibold normal-case">Read-only</span>
+                                </label>
+                            </div>
+                            <div className="mt-auto">
+                                <input
+                                    type="number"
+                                    readOnly
+                                    disabled
+                                    value={formData.currentStock !== undefined ? formData.currentStock : 0}
+                                    className="h-10 w-full border border-border rounded-md px-2.5 bg-app-bg text-xs font-bold text-text-muted cursor-not-allowed font-sans opacity-80"
+                                    title="Stock levels cannot be edited manually. Use Goods Receipt (GRN) or Stock Adjustment in Inventory module."
+                                />
+                            </div>
                         </div>
 
-                        <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Reorder Level
-                            </label>
-                            <input
-                                type="number"
-                                placeholder="1000"
-                                value={formData.reorderLevel || ''}
-                                onChange={(e) => handleInputChange('reorderLevel', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                            />
+                        <div className="flex flex-col h-full">
+                            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                                    Reorder Level
+                                </label>
+                            </div>
+                            <div className="mt-auto">
+                                <input
+                                    type="number"
+                                    placeholder="1000"
+                                    value={formData.reorderLevel || ''}
+                                    onChange={(e) => handleInputChange('reorderLevel', e.target.value)}
+                                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
                         </div>
                     </div>
 
@@ -1942,6 +2679,7 @@ export default function TabbedResourcePage({
 
         // FINISHED GOODS FORM
         if (key === 'finished-goods' || key === 'finishedbags' || key === 'finishedproducts') {
+            const composedFGTitle = composeFinishedBagTitle(formData, categoriesList, bagShapesList);
             return (
                 <div className="space-y-4 font-sans text-xs">
                     <div>
@@ -1957,19 +2695,34 @@ export default function TabbedResourcePage({
                         />
                     </div>
 
+                    {/* Live Descriptive Title Preview */}
+                    <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-0.5">
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-primary/70">
+                            Auto-Generated Product Title Preview
+                        </p>
+                        <p className="text-sm font-bold text-text-main leading-snug break-words">
+                            {composedFGTitle || <span className="text-text-muted font-normal italic">Fill in fields below to generate title…</span>}
+                        </p>
+                        <p className="text-[10px] text-text-muted mt-1">
+                            This title is auto-composed from the classification fields and saved as the product name.
+                        </p>
+                    </div>
+
+                    {/* Product Base Label (short internal name) */}
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Product Specification / Title *
+                            Product Base Label
                         </label>
                         <input
                             type="text"
-                            required
-                            placeholder="e.g. 50kg Laminated PP Woven Fertilizer Sack"
-                            value={formData.name || ''}
-                            onChange={(e) => handleInputChange('name', e.target.value)}
+                            placeholder="e.g. Fertilizer Sack, Sugar Bag, FIBC"
+                            value={formData.baseName || ''}
+                            onChange={(e) => handleInputChange('baseName', e.target.value)}
                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                         />
+                        <p className="text-[10px] text-text-muted mt-1">Optional short label (appended to the auto-composed title).</p>
                     </div>
+
 
                     {/* Master Data Bag Category Dropdown */}
                     <div>
@@ -2109,31 +2862,72 @@ export default function TabbedResourcePage({
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Width (cm)
+                    <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                Dimensions
                             </label>
-                            <input
-                                type="number"
-                                placeholder="45"
-                                value={formData.dimensions?.width || ''}
-                                onChange={(e) => handleNestedChange('dimensions', 'width', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                            />
+                            {/* Shared Unit Selector Toggle (cm / inch) */}
+                            <div className="flex items-center gap-1 bg-app-bg border border-border rounded-lg p-0.5">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        handleNestedChange('dimensions', 'unit', 'cm');
+                                        handleInputChange('dimensionUnit', 'cm');
+                                    }}
+                                    className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                                        (formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'cm'
+                                            ? 'bg-primary text-white shadow-2xs'
+                                            : 'text-text-muted hover:text-text-main'
+                                    }`}
+                                >
+                                    cm
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        handleNestedChange('dimensions', 'unit', 'inch');
+                                        handleInputChange('dimensionUnit', 'inch');
+                                    }}
+                                    className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                                        (formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'inch'
+                                            ? 'bg-primary text-white shadow-2xs'
+                                            : 'text-text-muted hover:text-text-main'
+                                    }`}
+                                >
+                                    inch
+                                </button>
+                            </div>
                         </div>
 
-                        <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Length (cm)
-                            </label>
-                            <input
-                                type="number"
-                                placeholder="75"
-                                value={formData.dimensions?.length || ''}
-                                onChange={(e) => handleNestedChange('dimensions', 'length', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                            />
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-[10.5px] font-bold uppercase tracking-wide text-text-muted mb-1">
+                                    Width ({(formData.dimensions?.unit || formData.dimensionUnit || 'cm')})
+                                </label>
+                                <input
+                                    type="number"
+                                    step="any"
+                                    placeholder={(formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'inch' ? '18' : '45'}
+                                    value={formData.dimensions?.width !== undefined && formData.dimensions?.width !== null ? formData.dimensions.width : ''}
+                                    onChange={(e) => handleNestedChange('dimensions', 'width', e.target.value)}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-[10.5px] font-bold uppercase tracking-wide text-text-muted mb-1">
+                                    Length ({(formData.dimensions?.unit || formData.dimensionUnit || 'cm')})
+                                </label>
+                                <input
+                                    type="number"
+                                    step="any"
+                                    placeholder={(formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'inch' ? '30' : '75'}
+                                    value={formData.dimensions?.length !== undefined && formData.dimensions?.length !== null ? formData.dimensions.length : ''}
+                                    onChange={(e) => handleNestedChange('dimensions', 'length', e.target.value)}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
+                                />
+                            </div>
                         </div>
                     </div>
 
@@ -2588,6 +3382,8 @@ export default function TabbedResourcePage({
                     pagination={pagination}
                     onPageChange={setPage}
                     activeTabLabel={activeTab?.label}
+                    onView={handleViewRow}
+                    isViewable={activeTab?.isViewable !== false}
                     onEdit={handleEditRow}
                     onDelete={handleDeleteRow}
                     onBulkDelete={bulkDeleteItems}
@@ -2598,6 +3394,7 @@ export default function TabbedResourcePage({
                         if (activeTab?.isDeletable === false) return false;
                         if (k.includes('invoice') || p.includes('invoice')) return false;
                         if (k.includes('grn') || p.includes('grn')) return false;
+                        if (k.includes('material-receipt') || p.includes('material-receipt')) return false;
                         if (k.includes('stock-transaction') || p.includes('stock-transaction') || k.includes('valuation') || k.includes('audit-ledger')) return false;
                         if (k.includes('qc-inspection') || p.includes('qc-inspection')) return false;
                         if (k.includes('dispatch') || p.includes('dispatch')) return false;
@@ -2616,8 +3413,8 @@ export default function TabbedResourcePage({
                         onClick={() => setIsDrawerOpen(false)}
                     />
 
-                    {/* Slide-out Drawer Panel */}
-                    <div className="fixed top-0 right-0 h-full w-full max-w-md bg-card-bg shadow-2xl z-50 flex flex-col transform transition-transform border-l border-border font-sans">
+                    {/* Slide-out Drawer Panel (Spacious 680-700px on desktop, responsive 100% full-width on mobile) */}
+                    <div className="fixed top-0 right-0 h-full w-full sm:w-[650px] md:w-[680px] lg:w-[700px] max-w-full bg-card-bg shadow-2xl z-50 flex flex-col border-l border-border font-sans transform transition-all duration-200 animate-in slide-in-from-right duration-200">
                         {/* Drawer Header */}
                         <div className="bg-sidebar-bg text-sidebar-text-active p-5 flex justify-between items-center border-b border-sidebar-hover shrink-0">
                             <div>
@@ -3036,6 +3833,64 @@ export default function TabbedResourcePage({
                 </div>
             )}
 
+            {/* Generic Raw Material Attribute Modal */}
+            {attributeModal.isOpen && (
+                <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div
+                        className="fixed inset-0"
+                        onClick={() => setAttributeModal({ isOpen: false, mode: 'ADD', attributeType: '', attributeLabel: '', itemId: null, inputValue: '', isSaving: false })}
+                    />
+                    <div className="relative z-10 bg-card-bg rounded-xl shadow-2xl w-full max-w-md p-6 border border-border space-y-4 font-sans animate-in zoom-in-95 duration-150">
+                        <div className="flex items-center justify-between border-b border-border pb-3">
+                            <h3 className="text-sm font-bold text-text-main uppercase tracking-wider">
+                                {attributeModal.mode === 'ADD' ? `Add New ${attributeModal.attributeLabel}` : `Edit ${attributeModal.attributeLabel}`}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setAttributeModal({ isOpen: false, mode: 'ADD', attributeType: '', attributeLabel: '', itemId: null, inputValue: '', isSaving: false })}
+                                className="text-text-muted hover:text-text-main p-1 rounded-md transition-colors cursor-pointer"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSaveAttributeModal} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                    {attributeModal.attributeLabel} Option Name *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    autoFocus
+                                    placeholder={`e.g. Enter new option`}
+                                    value={attributeModal.inputValue}
+                                    onChange={(e) => setAttributeModal((prev) => ({ ...prev, inputValue: e.target.value }))}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                                <button
+                                    type="button"
+                                    onClick={() => setAttributeModal({ isOpen: false, mode: 'ADD', attributeType: '', attributeLabel: '', itemId: null, inputValue: '', isSaving: false })}
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={attributeModal.isSaving}
+                                    className="px-4 py-2 bg-primary text-white font-semibold rounded-md text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
+                                >
+                                    {attributeModal.isSaving ? 'Saving...' : 'Save Option'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
             {/* Custom UOM Modal */}
             {uomModal.isOpen && (
                 <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150">
@@ -3142,6 +3997,16 @@ export default function TabbedResourcePage({
                     </div>
                 </div>
             )}
+
+            {/* Reusable Master Data Read-Only Detail View Modal (Eye icon) */}
+            <DetailViewModal
+                isOpen={detailModal.isOpen}
+                onClose={() => setDetailModal({ isOpen: false, record: null, tabKey: '' })}
+                record={detailModal.record}
+                tabKey={detailModal.tabKey}
+                tabLabel={activeTabLabel}
+                onEdit={isCurrentTabEditable ? (rec) => handleEditRow(rec) : null}
+            />
         </div>
     );
 }

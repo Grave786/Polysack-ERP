@@ -48,7 +48,9 @@ export default function InventoryPage() {
             header: 'DIMENSIONS (W×L)',
             render: (row) => (
                 <span className="font-mono">
-                    {row.dimensions ? `${row.dimensions.width || 0} × ${row.dimensions.length || 0} cm` : '-'}
+                    {row.dimensions && (row.dimensions.width || row.dimensions.length)
+                        ? `${row.dimensions.width || 0} × ${row.dimensions.length || 0} ${row.dimensions?.unit || row.dimensionUnit || 'cm'}`
+                        : '-'}
                 </span>
             )
         },

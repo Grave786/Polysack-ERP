@@ -246,10 +246,59 @@ const deleteRole = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Toggle active/inactive status of a role
+ * @route   PATCH /api/roles/:id/status
+ * @access  Private (ROLES:UPDATE)
+ */
+const toggleRoleStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userTenant = req.user?.tenant || null;
+
+        const role = await Role.findOne({ _id: id, tenant: userTenant });
+        if (!role) {
+            return res.status(404).json({
+                success: false,
+                message: 'Role not found in your organization.'
+            });
+        }
+
+        // Safety guard: prevent deactivating a role that still has users assigned
+        if (role.isActive) {
+            const User = require('../models/user.model');
+            const assignedUsersCount = await User.countDocuments({ role: id });
+            if (assignedUsersCount > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot deactivate role '${role.name}' — ${assignedUsersCount} user(s) are assigned to it. Reassign them first.`
+                });
+            }
+        }
+
+        role.isActive = !role.isActive;
+        await role.save();
+
+        const action = role.isActive ? 'reactivated' : 'deactivated';
+        return res.status(200).json({
+            success: true,
+            message: `Role '${role.name}' ${action} successfully.`,
+            data: { _id: role._id, isActive: role.isActive }
+        });
+    } catch (error) {
+        console.error('Error in toggleRoleStatus:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to toggle role status.'
+        });
+    }
+};
+
 module.exports = {
     createRole,
     getRoles,
     getAllPermissions,
     updateRole,
-    deleteRole
+    deleteRole,
+    toggleRoleStatus
 };

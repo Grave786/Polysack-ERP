@@ -41,25 +41,28 @@ export default function LoginPage() {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-sidebar-bg p-6 font-sans">
-            <div className="w-full max-w-md bg-sidebar-hover border border-sidebar-hover rounded-2xl p-8 shadow-2xl space-y-6">
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6 font-sans relative selection:bg-[#f59e0b]/30 selection:text-[#b45309]">
+            {/* Ambient soft glow */}
+            <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 bg-amber-200/25 blur-[120px] rounded-full pointer-events-none" />
+
+            <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-8 shadow-xl space-y-6 relative z-10">
                 <div className="text-center">
-                    <div className="w-14 h-14 mx-auto mb-4 bg-primary/15 border border-primary/30 rounded-xl flex items-center justify-center text-primary">
+                    <div className="w-14 h-14 mx-auto mb-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-center text-[#d97706] shadow-xs">
                         <Factory size={28} />
                     </div>
-                    <h2 className="text-2xl font-extrabold text-sidebar-text-active tracking-tight">
+                    <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight">
                         PolySack ERP
                     </h2>
-                    <p className="text-xs text-sidebar-text mt-1">
+                    <p className="text-xs text-slate-500 mt-1">
                         Multi-Tenant Manufacturing Platform
                     </p>
                 </div>
 
                 {suspensionError && (
-                    <div className="p-3 bg-rose-500/15 border border-rose-500/30 rounded-xl flex items-start gap-2.5 text-rose-300 text-xs font-sans animate-in fade-in duration-200">
-                        <ShieldAlert size={18} className="text-rose-400 shrink-0 mt-0.5" />
+                    <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-rose-800 text-xs font-sans animate-in fade-in duration-200">
+                        <ShieldAlert size={18} className="text-rose-600 shrink-0 mt-0.5" />
                         <div className="leading-relaxed">
-                            <span className="font-bold block text-rose-200 uppercase tracking-wider text-[10px]">
+                            <span className="font-bold block text-rose-900 uppercase tracking-wider text-[10px]">
                                 Account Suspended
                             </span>
                             <span>{suspensionError}</span>
@@ -69,36 +72,36 @@ export default function LoginPage() {
 
                 <form className="space-y-4" onSubmit={handleSubmit}>
                     <div className="space-y-1">
-                        <label className="text-[11px] font-bold uppercase tracking-wider text-sidebar-text" htmlFor="email">
+                        <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700" htmlFor="email">
                             Email Address
                         </label>
                         <div className="relative flex items-center">
-                            <Mail className="absolute left-3.5 text-sidebar-text pointer-events-none" size={18} />
+                            <Mail className="absolute left-3.5 text-slate-400 pointer-events-none" size={18} />
                             <input
                                 id="email"
                                 type="email"
                                 required
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
-                                className="w-full py-2.5 pl-10 pr-3 bg-sidebar-bg border border-sidebar-hover rounded-lg text-sidebar-text-active text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-sans"
+                                className="w-full py-2.5 pl-10 pr-3 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 text-sm outline-none focus:border-[#f59e0b] focus:bg-white focus:ring-2 focus:ring-[#f59e0b]/20 transition-all font-sans"
                                 placeholder="admin@polysack.com"
                             />
                         </div>
                     </div>
 
                     <div className="space-y-1">
-                        <label className="text-[11px] font-bold uppercase tracking-wider text-sidebar-text" htmlFor="password">
+                        <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700" htmlFor="password">
                             Password
                         </label>
                         <div className="relative flex items-center">
-                            <Lock className="absolute left-3.5 text-sidebar-text pointer-events-none" size={18} />
+                            <Lock className="absolute left-3.5 text-slate-400 pointer-events-none" size={18} />
                             <input
                                 id="password"
                                 type="password"
                                 required
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
-                                className="w-full py-2.5 pl-10 pr-3 bg-sidebar-bg border border-sidebar-hover rounded-lg text-sidebar-text-active text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-sans"
+                                className="w-full py-2.5 pl-10 pr-3 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 text-sm outline-none focus:border-[#f59e0b] focus:bg-white focus:ring-2 focus:ring-[#f59e0b]/20 transition-all font-sans"
                                 placeholder="••••••••"
                             />
                         </div>
@@ -107,7 +110,7 @@ export default function LoginPage() {
                     <button
                         type="submit"
                         disabled={isSubmitting}
-                        className="w-full py-3 px-4 bg-primary hover:bg-primary-hover text-sidebar-bg font-bold rounded-lg text-sm transition-all duration-150 shadow-md shadow-primary/20 flex items-center justify-center gap-2 disabled:opacity-60 cursor-pointer mt-2"
+                        className="w-full py-3 px-4 bg-[#f59e0b] hover:bg-[#d97706] text-slate-950 font-bold rounded-lg text-sm transition-all duration-150 shadow-md shadow-[#f59e0b]/20 flex items-center justify-center gap-2 disabled:opacity-60 cursor-pointer mt-2"
                     >
                         {isSubmitting ? (
                             <>
@@ -120,7 +123,7 @@ export default function LoginPage() {
                     </button>
                 </form>
 
-                <div className="pt-4 border-t border-sidebar-hover/60 text-center text-xs text-text-muted">
+                <div className="pt-4 border-t border-slate-200 text-center text-xs text-slate-500">
                     Protected System • Authorized Personnel Only
                 </div>
             </div>

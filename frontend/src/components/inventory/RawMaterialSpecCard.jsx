@@ -28,11 +28,18 @@ export default function RawMaterialSpecCard({ rawMaterial, onEdit }) {
 
     return (
         <div className="bg-card-bg border border-border rounded-xl p-4 shadow-2xs hover:shadow-md transition-all duration-200 flex flex-col justify-between space-y-3 font-sans">
-            {/* Top Row: Code & Edit Button */}
+            {/* Top Row: Code, Roll No & Edit Button */}
             <div className="flex items-center justify-between border-b border-border pb-2">
-                <span className="text-[11px] font-mono font-bold text-text-muted uppercase tracking-wider">
-                    {code}
-                </span>
+                <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono font-bold text-text-muted uppercase tracking-wider">
+                        {code}
+                    </span>
+                    {rawMaterial.rollNumber && (
+                        <span className="text-[10px] font-mono font-bold bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.5 rounded">
+                            Roll: {rawMaterial.rollNumber}
+                        </span>
+                    )}
+                </div>
 
                 {onEdit && (
                     <button
@@ -51,6 +58,11 @@ export default function RawMaterialSpecCard({ rawMaterial, onEdit }) {
                 <h3 className="text-sm font-bold text-text-main leading-snug line-clamp-2">
                     {name}
                 </h3>
+                {rawMaterial.materialDescription && (
+                    <span className="mt-1 inline-block text-[10px] font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded">
+                        {rawMaterial.materialDescription}
+                    </span>
+                )}
             </div>
 
             {/* 2x2 Grid of Primary Technical Specs */}

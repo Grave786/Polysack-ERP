@@ -192,7 +192,19 @@ export default function MasterDataPage() {
                     header: 'Item Code',
                     render: (row) => row.code || row.itemCode || '-'
                 },
+                {
+                    header: 'Roll No.',
+                    render: (row) => row.rollNumber ? (
+                        <span className="font-mono font-semibold text-text-main text-xs">
+                            {row.rollNumber}
+                        </span>
+                    ) : '-'
+                },
                 { header: 'Material Name', accessor: 'name', sortable: true },
+                {
+                    header: 'Description',
+                    render: (row) => row.materialDescription || '-'
+                },
                 {
                     header: 'Category',
                     render: (row) => typeof row.category === 'object' ? row.category?.name : (row.category || '-')
@@ -242,7 +254,9 @@ export default function MasterDataPage() {
                 },
                 {
                     header: 'DIMENSIONS',
-                    render: (row) => row.dimensions?.width && row.dimensions?.length ? `${row.dimensions.width}x${row.dimensions.length} cm` : '45x75 cm'
+                    render: (row) => row.dimensions?.width && row.dimensions?.length
+                        ? `${row.dimensions.width}x${row.dimensions.length} ${row.dimensions?.unit || row.dimensionUnit || 'cm'}`
+                        : '-'
                 },
                 {
                     header: 'STOCK (BAGS)',

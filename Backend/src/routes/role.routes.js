@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { createRole, getRoles, getAllPermissions, updateRole, deleteRole } = require('../controllers/role.controller');
+const { createRole, getRoles, getAllPermissions, updateRole, deleteRole, toggleRoleStatus } = require('../controllers/role.controller');
 const { authenticate, checkPermission } = require('../middlewares/rbac.middleware');
 
 /**
@@ -41,6 +41,13 @@ const Role = require('../models/role.model');
 const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
 
 router.delete('/:id', authenticate, checkPermission('ROLES', 'DELETE'), deleteRole);
+
+/**
+ * @route   PATCH /api/roles/:id/status
+ * @desc    Toggle a role's isActive status (deactivate / reactivate)
+ * @access  Private (ROLES:UPDATE)
+ */
+router.patch('/:id/status', authenticate, checkPermission('ROLES', 'UPDATE'), toggleRoleStatus);
 
 /**
  * @route   POST /api/roles/bulk-delete

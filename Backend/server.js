@@ -22,6 +22,7 @@ const bagShapeRoutes = require('./src/routes/bagShape.routes');
 const locationRoutes = require('./src/routes/location.routes');
 const supplierRoutes = require('./src/routes/supplier.routes');
 const rawMaterialRoutes = require('./src/routes/rawMaterial.routes');
+const rawMaterialAttributeRoutes = require('./src/routes/rawMaterialAttribute.routes');
 const finishedGoodRoutes = require('./src/routes/finishedGood.routes');
 const stockTransactionRoutes = require('./src/routes/stockTransaction.routes');
 const machineRoutes = require('./src/routes/machine.routes');
@@ -46,9 +47,24 @@ const analyticsRoutes = require('./src/routes/analytics.routes');
 const superAdminRoutes = require('./src/routes/superAdmin.routes');
 const dashboardRoutes = require('./src/routes/dashboard.routes');
 const notificationRoutes = require('./src/routes/notification.routes');
+const materialReceiptRoutes = require('./src/routes/materialReceipt.routes');
 
 const app = express();
-app.use(cors());
+const allowedOrigins = [
+  "https://www.pppolypaperproducts.in",
+  "https://pppolypaperproducts.in",
+  "http://localhost:5173",
+  "http://localhost:5174"
+];
+
+app.use(
+  cors({
+    origin: allowedOrigins,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
@@ -112,6 +128,22 @@ const initializeSystem = async () => {
       { $or: [{ enabledModules: { $exists: false } }, { enabledModules: { $size: 0 } }, { enabledModules: null }] },
       { $set: { enabledModules: ALL_DEFAULT_MODULES } }
     );
+
+    // Auto-populate default Raw Material Attributes for all existing tenants
+    const RawMaterialAttribute = mongoose.model('RawMaterialAttribute');
+    const { DEFAULT_RAW_MATERIAL_ATTRIBUTES } = require('./src/constants/rawMaterialAttributes.constants');
+    const existingTenants = await Tenant.find({}, '_id');
+    for (const t of existingTenants) {
+      for (const [attrType, options] of Object.entries(DEFAULT_RAW_MATERIAL_ATTRIBUTES)) {
+        for (const optName of options) {
+          await RawMaterialAttribute.updateOne(
+            { tenant: t._id, attributeType: attrType, name: optName },
+            { $setOnInsert: { tenant: t._id, attributeType: attrType, name: optName, isActive: true } },
+            { upsert: true }
+          );
+        }
+      }
+    }
   } catch (err) {
     console.warn('⚠️ Could not verify permission count on boot:', err.message);
   }
@@ -139,6 +171,7 @@ app.use('/api/bag-shapes', bagShapeRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/suppliers', supplierRoutes);
 app.use('/api/raw-materials', rawMaterialRoutes);
+app.use('/api/raw-material-attributes', rawMaterialAttributeRoutes);
 app.use('/api/finished-goods', finishedGoodRoutes);
 app.use('/api/stock-transactions', stockTransactionRoutes);
 app.use('/api/machines', machineRoutes);
@@ -163,6 +196,7 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/material-receipts', materialReceiptRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
