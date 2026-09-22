@@ -223,11 +223,12 @@ export default function Topbar({ onToggleSidebar }) {
                     <Menu size={20} />
                 </button>
 
-                <div className="w-8 h-8 sm:w-8.5 sm:h-8.5 bg-primary rounded-xl flex items-center justify-center font-extrabold text-sm sm:text-base text-sidebar-bg shadow-sm shrink-0">
-                    P
+                <div className="w-8 h-8 sm:w-8.5 sm:h-8.5 rounded-xl flex items-center justify-center font-extrabold text-sm sm:text-base text-sidebar-bg shadow-sm shrink-0">
+                    <img src="logo.png" alt="logo.png" />
                 </div>
                 <div className="text-sm sm:text-base font-bold tracking-tight text-sidebar-text-active whitespace-nowrap">
-                    PolySack <span className="text-primary font-semibold hidden xs:inline">ERP</span>
+
+                    PP Poly & Paper Products <span className="text-primary font-semibold hidden xs:inline">ERP</span>
                 </div>
             </div>
 
@@ -269,9 +270,8 @@ export default function Topbar({ onToggleSidebar }) {
                                                 <div
                                                     key={unit}
                                                     onClick={() => handleSelectLocation(unit)}
-                                                    className={`px-3 py-2 rounded-lg cursor-pointer flex items-center justify-between transition-colors ${
-                                                        isSelected ? 'bg-primary/10 text-primary font-bold' : 'hover:bg-app-bg text-text-main'
-                                                    }`}
+                                                    className={`px-3 py-2 rounded-lg cursor-pointer flex items-center justify-between transition-colors ${isSelected ? 'bg-primary/10 text-primary font-bold' : 'hover:bg-app-bg text-text-main'
+                                                        }`}
                                                 >
                                                     <span className="truncate">{unit}</span>
                                                     {isSelected && <Check size={14} className="text-primary shrink-0" />}
@@ -349,22 +349,20 @@ export default function Topbar({ onToggleSidebar }) {
                                                 <div
                                                     key={notif._id}
                                                     onClick={() => handleNotificationClick(notif)}
-                                                    className={`p-2.5 rounded-lg border transition-all cursor-pointer relative group flex items-start gap-2.5 ${
-                                                        notif.isRead
-                                                            ? 'bg-card-bg hover:bg-app-bg border-border/80 text-text-muted'
-                                                            : isLowStock
+                                                    className={`p-2.5 rounded-lg border transition-all cursor-pointer relative group flex items-start gap-2.5 ${notif.isRead
+                                                        ? 'bg-card-bg hover:bg-app-bg border-border/80 text-text-muted'
+                                                        : isLowStock
                                                             ? 'bg-rose-500/10 hover:bg-rose-500/15 border-rose-500/30 text-text-main shadow-2xs'
                                                             : 'bg-amber-500/10 hover:bg-amber-500/15 border-amber-500/30 text-text-main shadow-2xs'
-                                                    }`}
+                                                        }`}
                                                 >
                                                     {/* Left Icon */}
-                                                    <div className={`p-1.5 rounded-lg shrink-0 mt-0.5 ${
-                                                        isLowStock
-                                                            ? 'bg-rose-100 text-rose-600 border border-rose-200'
-                                                            : isPoApproval
+                                                    <div className={`p-1.5 rounded-lg shrink-0 mt-0.5 ${isLowStock
+                                                        ? 'bg-rose-100 text-rose-600 border border-rose-200'
+                                                        : isPoApproval
                                                             ? 'bg-amber-100 text-amber-700 border border-amber-200'
                                                             : 'bg-primary/10 text-primary border border-primary/20'
-                                                    }`}>
+                                                        }`}>
                                                         {isLowStock ? (
                                                             <AlertTriangle size={15} />
                                                         ) : isPoApproval ? (

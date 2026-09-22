@@ -2328,7 +2328,7 @@ export default function TabbedResourcePage({
                                 onDelete={(opt) => handleDeleteAttributeInline('laminationType', 'Material Quality-Fabric (Lamination Type)', opt)}
                             />
                             <InlineLookupSelect
-                                label="Fabric Grammage"
+                                label="Fabric Grammage (GSM)"
                                 value={formData.fabricGrammage || ''}
                                 onChange={(val) => handleInputChange('fabricGrammage', val)}
                                 options={rmAttributes.fabricGrammage || []}
@@ -2398,143 +2398,241 @@ export default function TabbedResourcePage({
                     </div>
 
                     {/* Packing Slip & Roll Specifications (From Inward Packing Slip) */}
-                    <div className="space-y-3.5 pt-3.5 border-t border-border">
-                        <div className="flex items-center justify-between pb-0.5">
-                            <h4 className="text-[11px] font-bold uppercase tracking-wide text-primary flex items-center gap-1.5">
-                                <span>Packing Slip & Roll Specifications</span>
-                            </h4>
-                            <span className="text-[10px] text-text-muted font-medium">Inward roll & weight verification</span>
-                        </div>
+                    ```jsx
+<div className="space-y-3.5 pt-3.5 border-t border-border">
+    <div className="flex items-center justify-between pb-0.5">
+        <h4 className="text-[11px] font-bold uppercase tracking-wide text-primary flex items-center gap-1.5">
+            <span>Packing Slip & Roll Specifications</span>
+        </h4>
+        <span className="text-[10px] text-text-muted font-medium">
+            Inward roll & weight verification
+        </span>
+    </div>
 
-                        {/* Roll No. & Fabric Length */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
-                            <div className="flex flex-col h-full">
-                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                                        Roll No. <span className="text-danger">*</span>
-                                    </label>
-                                    <span className="text-[9px] text-danger font-bold uppercase tracking-wider shrink-0 pt-0.5">Required</span>
-                                </div>
-                                <div className="mt-auto">
-                                    <input
-                                        type="text"
-                                        required
-                                        maxLength={25}
-                                        placeholder="e.g. 1388/27 or 1434/28"
-                                        value={formData.rollNumber || ''}
-                                        onChange={(e) => handleInputChange('rollNumber', e.target.value)}
-                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-semibold uppercase"
-                                    />
-                                </div>
-                            </div>
+    {/* Roll No. & Fabric Length */}
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+        <div className="flex flex-col h-full">
+            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                    Roll No. <span className="text-danger">*</span>
+                </label>
+                <span className="text-[9px] text-danger font-bold uppercase tracking-wider shrink-0 pt-0.5">
+                    Required
+                </span>
+            </div>
 
-                            <div className="flex flex-col h-full">
-                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                                        Fabric Length (Meters)
-                                    </label>
-                                    <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">1 – 50,000 m</span>
-                                </div>
-                                <div className="mt-auto">
-                                    <input
-                                        type="number"
-                                        step="0.01"
-                                        min="1"
-                                        max="50000"
-                                        placeholder="e.g. 1250"
-                                        value={formData.fabricLength !== undefined && formData.fabricLength !== null ? formData.fabricLength : ''}
-                                        onChange={(e) => handleInputChange('fabricLength', e.target.value)}
-                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                                    />
-                                </div>
-                            </div>
-                        </div>
+            <div className="mt-auto">
+                <input
+                    type="text"
+                    required
+                    maxLength={25}
+                    placeholder="e.g. 1388/27 or 1434/28"
+                    value={formData.rollNumber || ''}
+                    onChange={(e) => handleInputChange('rollNumber', e.target.value)}
+                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-semibold uppercase"
+                />
+            </div>
+        </div>
 
-                        {/* Gross Weight (G.W.) & Net Weight (N.W.) */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
-                            <div className="flex flex-col h-full">
-                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                                        Gross Weight / G.W. (Kg)
-                                    </label>
-                                    <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">Max 10,000 Kg</span>
-                                </div>
-                                <div className="mt-auto">
-                                    <input
-                                        type="number"
-                                        step="0.01"
-                                        min="0.01"
-                                        max="10000"
-                                        placeholder="e.g. 520.50"
-                                        value={formData.grossWeight !== undefined && formData.grossWeight !== null ? formData.grossWeight : ''}
-                                        onChange={(e) => handleInputChange('grossWeight', e.target.value)}
-                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                                    />
-                                </div>
-                            </div>
+        <div className="flex flex-col h-full">
+            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                    Fabric Length (Meters)
+                </label>
+                <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">
+                    1 – 50,000 m
+                </span>
+            </div>
 
-                            <div className="flex flex-col h-full">
-                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                                        Net Weight / N.W. (Kg)
-                                    </label>
-                                    <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">≤ Gross Weight</span>
-                                </div>
-                                <div className="mt-auto">
-                                    <input
-                                        type="number"
-                                        step="0.01"
-                                        min="0.01"
-                                        max="10000"
-                                        placeholder="e.g. 518.20"
-                                        value={formData.netWeight !== undefined && formData.netWeight !== null ? formData.netWeight : ''}
-                                        onChange={(e) => handleInputChange('netWeight', e.target.value)}
-                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                                    />
-                                </div>
-                            </div>
-                        </div>
+            <div className="mt-auto">
+                <input
+                    type="number"
+                    step="0.01"
+                    min="1"
+                    max="50000"
+                    placeholder="e.g. 1250"
+                    value={
+                        formData.fabricLength !== undefined &&
+                        formData.fabricLength !== null
+                            ? formData.fabricLength
+                            : ''
+                    }
+                    onChange={(e) =>
+                        handleInputChange('fabricLength', e.target.value)
+                    }
+                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                />
+            </div>
+        </div>
+    </div>
 
-                        {/* Reference Lot Quantities (Optional) */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4 bg-amber-50/20 border border-amber-200/50 rounded-lg p-2.5">
-                            <div className="flex flex-col h-full">
-                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                                        Total Quantity in Kgs
-                                    </label>
-                                    <span className="text-[9px] text-text-muted mt-0.5">Roll Wt (KG)</span>
-                                </div>
-                                <div className="mt-auto">
-                                    <input
-                                        type="number"
-                                        step="any"
-                                        placeholder="e.g. 500"
-                                        value={formData.totalQuantityKg !== undefined && formData.totalQuantityKg !== null ? formData.totalQuantityKg : ''}
-                                        onChange={(e) => handleInputChange('totalQuantityKg', e.target.value)}
-                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                                    />
-                                </div>
-                            </div>
-                            <div className="flex flex-col h-full">
-                                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                                        Total Quantity in Pcs
-                                    </label>
-                                    <span className="text-[9px] text-text-muted mt-0.5">Count (PCS)</span>
-                                </div>
-                                <div className="mt-auto">
-                                    <input
-                                        type="number"
-                                        step="1"
-                                        placeholder="e.g. 1000"
-                                        value={formData.totalQuantityPcs !== undefined && formData.totalQuantityPcs !== null ? formData.totalQuantityPcs : ''}
-                                        onChange={(e) => handleInputChange('totalQuantityPcs', e.target.value)}
-                                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+    {/* Width & Gross Weight */}
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+        <div className="flex flex-col h-full">
+            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                    Width (Inches)
+                </label>
+                <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">
+                    Fabric Width
+                </span>
+            </div>
+
+            <div className="mt-auto">
+                <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max="200"
+                    placeholder="e.g. 58"
+                    value={
+                        formData.width !== undefined &&
+                        formData.width !== null
+                            ? formData.width
+                            : ''
+                    }
+                    onChange={(e) =>
+                        handleInputChange('width', e.target.value)
+                    }
+                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                />
+            </div>
+        </div>
+
+        <div className="flex flex-col h-full">
+            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                    Gross Weight / G.W. (Kg)
+                </label>
+                <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">
+                    Max 10,000 Kg
+                </span>
+            </div>
+
+            <div className="mt-auto">
+                <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max="10000"
+                    placeholder="e.g. 520.50"
+                    value={
+                        formData.grossWeight !== undefined &&
+                        formData.grossWeight !== null
+                            ? formData.grossWeight
+                            : ''
+                    }
+                    onChange={(e) =>
+                        handleInputChange('grossWeight', e.target.value)
+                    }
+                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                />
+            </div>
+        </div>
+    </div>
+
+    {/* Net Weight & Reference Lot Quantities */}
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+        <div className="flex flex-col h-full">
+            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                    Net Weight / N.W. (Kg)
+                </label>
+                <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">
+                    ≤ Gross Weight
+                </span>
+            </div>
+
+            <div className="mt-auto">
+                <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max="10000"
+                    placeholder="e.g. 518.20"
+                    value={
+                        formData.netWeight !== undefined &&
+                        formData.netWeight !== null
+                            ? formData.netWeight
+                            : ''
+                    }
+                    onChange={(e) =>
+                        handleInputChange('netWeight', e.target.value)
+                    }
+                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                />
+            </div>
+        </div>
+
+        {/* Reference Lot Quantities */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4 bg-amber-50/20 border border-amber-200/50 rounded-lg p-2.5">
+            <div className="flex flex-col h-full">
+                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                        Total Quantity in Kgs
+                    </label>
+                    <span className="text-[9px] text-text-muted mt-0.5">
+                        Roll Wt (KG)
+                    </span>
+                </div>
+
+                <div className="mt-auto">
+                    <input
+                        type="number"
+                        step="any"
+                        placeholder="e.g. 500"
+                        value={
+                            formData.totalQuantityKg !== undefined &&
+                            formData.totalQuantityKg !== null
+                                ? formData.totalQuantityKg
+                                : ''
+                        }
+                        onChange={(e) =>
+                            handleInputChange(
+                                'totalQuantityKg',
+                                e.target.value
+                            )
+                        }
+                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                    />
+                </div>
+            </div>
+
+            <div className="flex flex-col h-full">
+                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
+                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
+                        Total Quantity in Pcs
+                    </label>
+                    <span className="text-[9px] text-text-muted mt-0.5">
+                        Count (PCS)
+                    </span>
+                </div>
+
+                <div className="mt-auto">
+                    <input
+                        type="number"
+                        step="1"
+                        placeholder="e.g. 1000"
+                        value={
+                            formData.totalQuantityPcs !== undefined &&
+                            formData.totalQuantityPcs !== null
+                                ? formData.totalQuantityPcs
+                                : ''
+                        }
+                        onChange={(e) =>
+                            handleInputChange(
+                                'totalQuantityPcs',
+                                e.target.value
+                            )
+                        }
+                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                    />
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 
                     {/* Industrial Specification Fields */}
                     <div className="space-y-3.5 pt-3.5 border-t border-border">
@@ -2875,11 +2973,10 @@ export default function TabbedResourcePage({
                                         handleNestedChange('dimensions', 'unit', 'cm');
                                         handleInputChange('dimensionUnit', 'cm');
                                     }}
-                                    className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
-                                        (formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'cm'
+                                    className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${(formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'cm'
                                             ? 'bg-primary text-white shadow-2xs'
                                             : 'text-text-muted hover:text-text-main'
-                                    }`}
+                                        }`}
                                 >
                                     cm
                                 </button>
@@ -2889,11 +2986,10 @@ export default function TabbedResourcePage({
                                         handleNestedChange('dimensions', 'unit', 'inch');
                                         handleInputChange('dimensionUnit', 'inch');
                                     }}
-                                    className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
-                                        (formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'inch'
+                                    className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${(formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'inch'
                                             ? 'bg-primary text-white shadow-2xs'
                                             : 'text-text-muted hover:text-text-main'
-                                    }`}
+                                        }`}
                                 >
                                     inch
                                 </button>

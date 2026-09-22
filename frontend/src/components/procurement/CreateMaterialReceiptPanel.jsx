@@ -331,7 +331,7 @@ export default function CreateMaterialReceiptPanel({ isOpen, onClose, onSuccess 
                                     options={attrs.materialQualityFabric} onChange={set}
                                     onAddNew={() => handleAttrAddNew('materialQualityFabric', 'Material Quality (Fabric)')} />
 
-                                <AttributeSelect label="Fabric Grammage" field="fabricGrammage" value={form.fabricGrammage}
+                                <AttributeSelect label="Fabric Grammage (GSM)" field="fabricGrammage" value={form.fabricGrammage}
                                     options={attrs.fabricGrammage} onChange={set}
                                     onAddNew={() => handleAttrAddNew('fabricGrammage', 'Fabric Grammage')} />
 

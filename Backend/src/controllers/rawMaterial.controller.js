@@ -367,7 +367,7 @@ const exportRawMaterials = async (req, res) => {
             { label: 'Quality Fabric', key: 'materialQualityFabric' },
             { label: 'Quality Bags', key: 'materialQualityBags' },
             { label: 'Lamination Type', key: 'laminationType' },
-            { label: 'Fabric Grammage', key: 'fabricGrammage' },
+            { label: 'Fabric Grammage (GSM)', key: 'fabricGrammage' },
             { label: 'Material Colour', key: 'materialColour' },
             { label: 'Thread Colour', key: 'threadColour' },
             { label: 'Fabric Size', key: 'fabricSize' },

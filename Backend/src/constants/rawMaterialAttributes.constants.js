@@ -20,7 +20,7 @@ const RAW_MATERIAL_ATTRIBUTE_LABELS = {
     materialQualityFabric: 'Material Quality-Fabric',
     materialQualityBags: 'Material Quality-Bags',
     laminationType: 'Material Quality-Fabric (Lamination Type)',
-    fabricGrammage: 'Fabric Grammage',
+    fabricGrammage: 'Fabric Grammage (GSM)',
     materialColour: 'Material Colour',
     qualityThreadYarn: 'Quality-Thread-Yarn',
     threadColour: 'Thread Colour',

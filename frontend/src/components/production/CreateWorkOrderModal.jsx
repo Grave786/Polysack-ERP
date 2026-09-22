@@ -843,7 +843,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                         {/* Fabric Grammage, Bag Weight (Gms) & Fabric Average */}
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 sm:gap-4">
                             <InlineLookupSelect
-                                label="Fabric Grammage"
+                                label="Fabric Grammage (GSM)"
                                 value={fabricGrammage}
                                 onChange={(val) => setFabricGrammage(val)}
                                 options={rmAttributes.fabricGrammage || []}
