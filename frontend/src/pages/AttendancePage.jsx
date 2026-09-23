@@ -594,7 +594,7 @@ export default function AttendancePage() {
                                 >
                                     {employees.map((e) => (
                                         <option key={e._id} value={e._id}>
-                                            {e.name} ({e.employeeCode || 'EMP'}) — {e.department || 'Production'}
+                                            {e.employeeCode || 'EMP'} - {e.name} — {e.department || 'Production'}
                                         </option>
                                     ))}
                                 </select>
@@ -744,7 +744,7 @@ export default function AttendancePage() {
                                                     onChange={() => toggleRosterEmployee(emp._id)}
                                                     className="rounded border-border text-primary focus:ring-primary accent-primary cursor-pointer"
                                                 />
-                                                <span className="font-semibold">{emp.name}</span>
+                                                <span className="font-semibold">{emp.employeeCode ? `${emp.employeeCode} - ` : ''}{emp.name}</span>
                                                 <span className="text-[10px] text-text-muted font-mono">({emp.department || 'Production'})</span>
                                             </label>
                                         );

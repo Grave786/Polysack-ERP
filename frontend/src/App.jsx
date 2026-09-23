@@ -4,6 +4,7 @@ import { useAuthStore } from './store/authStore';
 import { getFirstPermittedRoute, checkIsSuperAdmin } from './utils/permissionUtils';
 import ProtectedRoute from './components/ProtectedRoute';
 import DashboardLayout from './components/layout/DashboardLayout';
+import { FacilityProvider } from './context/FacilityContext';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import MasterDataPage from './pages/MasterDataPage';
@@ -81,7 +82,8 @@ export default function App() {
     }
 
     return (
-        <Routes>
+        <FacilityProvider>
+            <Routes>
             {/* Public Routes */}
             <Route path="/" element={<RootRoute />} />
             <Route path="/home" element={<LandingPage />} />
@@ -162,5 +164,6 @@ export default function App() {
             {/* Global Fallback */}
             <Route path="*" element={<RootRoute />} />
         </Routes>
+        </FacilityProvider>
     );
 }

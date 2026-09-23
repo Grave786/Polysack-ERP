@@ -20,12 +20,12 @@ const MachineSchema = new mongoose.Schema({
     section: {
         type: String,
         required: [true, 'Production section is required'],
-        uppercase: true,
-        set: (val) => val ? String(val).trim().toUpperCase().replace(/[-\s]+/g, '_') : val,
-        enum: {
-            values: ['EXTRUSION', 'WEAVING', 'LAMINATION', 'PRINTING', 'SEWING', 'BALING', 'QUALITY', 'MAINTENANCE', 'CONVERSION'],
-            message: '{VALUE} is not a valid production section.'
-        }
+        trim: true
+    },
+    plantLocation: {
+        type: String,
+        trim: true,
+        default: ''
     },
     capacityPerHour: {
         type: Number,
@@ -42,8 +42,13 @@ const MachineSchema = new mongoose.Schema({
         default: null
     },
     currentOperator: {
-        type: String,
-        trim: true
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Employee',
+        default: null,
+        set: function (val) {
+            if (!val || val === '' || val === 'null' || val === 'undefined') return null;
+            return val;
+        }
     },
     status: {
         type: String,

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useResourceApi } from '../../hooks/useResourceApi';
 import DataTable from './DataTable';
 import { Construction, Plus, X, Clock, Sparkles, Pencil, Trash2, MapPin } from 'lucide-react';
@@ -268,11 +268,14 @@ export default function TabbedResourcePage({
     // Dropdown list states for employees, raw materials, finished goods, and BOMs
     const [shiftsList, setShiftsList] = useState([]);
     const [locationsList, setLocationsList] = useState([]);
+    const [plantLocations, setPlantLocations] = useState([]);
     const [categoriesList, setCategoriesList] = useState([]);
     const [uomsList, setUomsList] = useState([]);
     const [finishedGoodsList, setFinishedGoodsList] = useState([]);
-    const [rawMaterialsList, setRawMaterialsList] = useState([]);
     const [bagShapesList, setBagShapesList] = useState([]);
+    const [sectionsList, setSectionsList] = useState([]);
+    const [employeesList, setEmployeesList] = useState([]);
+    const [rawMaterialsList, setRawMaterialsList] = useState([]);
     const [bomIngredients, setBomIngredients] = useState([{ rawMaterial: '', quantityPerUnit: '' }]);
 
     // Raw Material Lookup Attributes State (9 master lists)
@@ -305,6 +308,26 @@ export default function TabbedResourcePage({
         mode: 'ADD',
         shapeId: null,
         inputValue: '',
+        isSaving: false
+    });
+
+    // Custom Section Modal State (+ Add New / Edit)
+    const [sectionModal, setSectionModal] = useState({
+        isOpen: false,
+        mode: 'ADD',
+        sectionId: null,
+        inputValue: '',
+        isSaving: false
+    });
+
+    // Custom Plant Location Modal State (+ Add New / Edit)
+    const [plantLocationModal, setPlantLocationModal] = useState({
+        isOpen: false,
+        mode: 'ADD',
+        locationId: null,
+        name: '',
+        code: '',
+        type: 'FACTORY',
         isSaving: false
     });
 
@@ -406,6 +429,21 @@ export default function TabbedResourcePage({
 
     const isTabPlaceholder = activeTab?.isPlaceholder || (!activeTab?.resourcePath && !activeTab?.customRender);
 
+    // 'Show Inactive Customers' toggle — resets when switching away from customers tab
+    const [showInactive, setShowInactive] = useState(false);
+    const isCustomersTab = (activeTabKey || '').toLowerCase() === 'customers';
+
+    // Reset showInactive when switching away from customers tab
+    useEffect(() => {
+        if (!isCustomersTab) {
+            setShowInactive(false);
+        }
+    }, [isCustomersTab]);
+
+    const customerExtraParams = useMemo(() => {
+        return isCustomersTab && showInactive ? { showInactive: 'true' } : undefined;
+    }, [isCustomersTab, showInactive]);
+
     const {
         data,
         pagination,
@@ -420,7 +458,7 @@ export default function TabbedResourcePage({
         updateItem,
         deleteItem,
         bulkDeleteItems
-    } = useResourceApi(isTabPlaceholder ? null : activeTab?.resourcePath);
+    } = useResourceApi(isTabPlaceholder ? null : activeTab?.resourcePath, undefined, customerExtraParams);
 
     // Keep tab count badge updated when pagination total changes for active tab
     useEffect(() => {
@@ -431,6 +469,20 @@ export default function TabbedResourcePage({
             }));
         }
     }, [activeTab?.key, isTabPlaceholder, pagination?.total]);
+
+    // Auto-generate unique Employee Code when opening employee creation drawer
+    useEffect(() => {
+        if (isDrawerOpen && activeTabKey === 'employees' && !editingItem) {
+            if (!formData.employeeCode) {
+                const autoEmpCode = `EMP-${Math.floor(1000 + Math.random() * 9000)}`;
+                setFormData((prev) => ({
+                    ...prev,
+                    employeeCode: autoEmpCode,
+                    code: autoEmpCode
+                }));
+            }
+        }
+    }, [isDrawerOpen, activeTabKey, editingItem, formData.employeeCode]);
 
     // Fetch counts for other tabs on tab change
     useEffect(() => {
@@ -564,11 +616,41 @@ export default function TabbedResourcePage({
                 }
             }).catch(() => { });
         }
+
+        if (key === 'machines' || key === 'machine') {
+            axiosInstance.get('/sections?isActive=true').then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    setSectionsList(res.data.data);
+                    if (res.data.data.length > 0) {
+                        setFormData((prev) => ({
+                            ...prev,
+                            section: prev.section || res.data.data[0].name
+                        }));
+                    }
+                }
+            }).catch(() => { });
+
+            axiosInstance.get('/employees?isActive=true&limit=200').then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    setEmployeesList(res.data.data);
+                }
+            }).catch(() => { });
+
+            axiosInstance.get('/locations?isActive=true&limit=100').then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    setPlantLocations(res.data.data);
+                    setLocationsList(res.data.data);
+                }
+            }).catch(() => {
+                setPlantLocations([]);
+                setLocationsList([]);
+            });
+        }
     };
 
     useEffect(() => {
         const key = activeTabKey?.toLowerCase() || '';
-        if (isDrawerOpen || key === 'boms' || key === 'bom') {
+        if (isDrawerOpen || key === 'boms' || key === 'bom' || key === 'machines' || key === 'machine') {
             fetchDropdownOptions();
         }
     }, [activeTabKey, isDrawerOpen]);
@@ -793,6 +875,198 @@ export default function TabbedResourcePage({
                 } catch (err) {
                     console.error('Delete bag shape error:', err);
                     toast.error(err.response?.data?.message || 'Failed to delete bag shape', { id: 'delete-shape' });
+                }
+            }
+        });
+    };
+
+    /**
+     * Save Section Modal (+ Add New / Edit)
+     */
+    const handleSaveSectionModal = async (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        const nameTrimmed = (sectionModal.inputValue || '').trim();
+        if (!nameTrimmed) {
+            toast.error('Section name is required');
+            return;
+        }
+
+        try {
+            setSectionModal((prev) => ({ ...prev, isSaving: true }));
+            if (sectionModal.mode === 'ADD') {
+                toast.loading('Creating section...', { id: 'save-sec-modal' });
+                const res = await axiosInstance.post('/sections', { name: nameTrimmed });
+                if (res.data?.success && res.data?.data) {
+                    const newSec = res.data.data;
+                    toast.success(`Section '${newSec.name}' created!`, { id: 'save-sec-modal' });
+                    setSectionsList((prev) => [...prev, newSec]);
+                    handleInputChange('section', newSec.name);
+                    setSectionModal({ isOpen: false, mode: 'ADD', sectionId: null, inputValue: '', isSaving: false });
+                }
+            } else if (sectionModal.mode === 'EDIT' && sectionModal.sectionId) {
+                toast.loading('Updating section...', { id: 'save-sec-modal' });
+                const res = await axiosInstance.put(`/sections/${sectionModal.sectionId}`, { name: nameTrimmed });
+                if (res.data?.success && res.data?.data) {
+                    const updatedSec = res.data.data;
+                    toast.success(`Section updated to '${updatedSec.name}'!`, { id: 'save-sec-modal' });
+                    setSectionsList((prev) =>
+                        prev.map((s) => (s._id === updatedSec._id ? updatedSec : s))
+                    );
+                    handleInputChange('section', updatedSec.name);
+                    setSectionModal({ isOpen: false, mode: 'ADD', sectionId: null, inputValue: '', isSaving: false });
+                }
+            }
+        } catch (err) {
+            console.error('Save section error:', err);
+            toast.error(err.response?.data?.message || 'Failed to save section', { id: 'save-sec-modal' });
+            setSectionModal((prev) => ({ ...prev, isSaving: false }));
+        }
+    };
+
+    /**
+     * Inline Section Delete Confirmation
+     */
+    const handleDeleteSectionInline = (opt) => {
+        if (!opt) return;
+        setConfirmModal({
+            isOpen: true,
+            title: 'Delete Production Section',
+            message: `Are you sure you want to delete section '${opt.name}'?`,
+            onConfirm: async () => {
+                try {
+                    toast.loading('Deleting section...', { id: 'delete-sec' });
+                    const res = await axiosInstance.delete(`/sections/${opt._id}`);
+                    if (res.data?.success) {
+                        toast.success(`Section '${opt.name}' deleted!`, { id: 'delete-sec' });
+                        setSectionsList((prev) => prev.filter((s) => s._id !== opt._id));
+                        if (formData.section === opt.name) {
+                            handleInputChange('section', '');
+                        }
+                    }
+                } catch (err) {
+                    console.error('Delete section error:', err);
+                    toast.error(err.response?.data?.message || 'Failed to delete section', { id: 'delete-sec' });
+                }
+            }
+        });
+    };
+
+    /**
+     * Open Add Plant Location Modal
+     */
+    const handleOpenAddPlantLocationModal = () => {
+        const nextNum = (locationsList.length || 0) + 1;
+        const padded = String(nextNum).padStart(3, '0');
+        setPlantLocationModal({
+            isOpen: true,
+            mode: 'ADD',
+            locationId: null,
+            name: '',
+            code: `PLANT-${padded}`,
+            type: 'FACTORY',
+            isSaving: false
+        });
+    };
+
+    /**
+     * Open Edit Plant Location Modal
+     */
+    const handleOpenEditPlantLocationModal = (opt) => {
+        if (!opt) return;
+        setPlantLocationModal({
+            isOpen: true,
+            mode: 'EDIT',
+            locationId: opt._id,
+            name: opt.name || '',
+            code: opt.code || `PLANT-${String(opt._id).slice(-4).toUpperCase()}`,
+            type: opt.type || 'FACTORY',
+            isSaving: false
+        });
+    };
+
+    /**
+     * Save Plant Location Modal (+ Add New / Edit)
+     */
+    const handleSavePlantLocationModal = async (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        const nameTrimmed = (plantLocationModal.name || '').trim();
+        if (!nameTrimmed) {
+            toast.error('Plant Location name is required');
+            return;
+        }
+        const codeTrimmed = (plantLocationModal.code || `PLANT-${Date.now().toString().slice(-4)}`).trim().toUpperCase();
+
+        try {
+            setPlantLocationModal((prev) => ({ ...prev, isSaving: true }));
+            if (plantLocationModal.mode === 'ADD') {
+                toast.loading('Creating plant location...', { id: 'save-loc-modal' });
+                const res = await axiosInstance.post('/locations', {
+                    name: nameTrimmed,
+                    code: codeTrimmed,
+                    type: plantLocationModal.type || 'FACTORY'
+                });
+                if (res.data?.success && res.data?.data) {
+                    const newLoc = res.data.data;
+                    toast.success(`Plant location '${newLoc.name}' created!`, { id: 'save-loc-modal' });
+                    setLocationsList((prev) => [...prev, newLoc]);
+                    setPlantLocations((prev) => [...prev, newLoc]);
+                    handleInputChange('plantLocation', newLoc._id);
+                    handleInputChange('plantLocationName', newLoc.name);
+                    setPlantLocationModal({ isOpen: false, mode: 'ADD', locationId: null, name: '', code: '', type: 'FACTORY', isSaving: false });
+                }
+            } else if (plantLocationModal.mode === 'EDIT' && plantLocationModal.locationId) {
+                toast.loading('Updating plant location...', { id: 'save-loc-modal' });
+                const res = await axiosInstance.put(`/locations/${plantLocationModal.locationId}`, {
+                    name: nameTrimmed,
+                    code: codeTrimmed,
+                    type: plantLocationModal.type || 'FACTORY'
+                });
+                if (res.data?.success && res.data?.data) {
+                    const updatedLoc = res.data.data;
+                    toast.success(`Plant location updated to '${updatedLoc.name}'!`, { id: 'save-loc-modal' });
+                    setLocationsList((prev) =>
+                        prev.map((l) => (l._id === updatedLoc._id ? updatedLoc : l))
+                    );
+                    setPlantLocations((prev) =>
+                        prev.map((l) => (l._id === updatedLoc._id ? updatedLoc : l))
+                    );
+                    handleInputChange('plantLocation', updatedLoc._id);
+                    handleInputChange('plantLocationName', updatedLoc.name);
+                    setPlantLocationModal({ isOpen: false, mode: 'ADD', locationId: null, name: '', code: '', type: 'FACTORY', isSaving: false });
+                }
+            }
+        } catch (err) {
+            console.error('Save plant location error:', err);
+            toast.error(err.response?.data?.message || 'Failed to save plant location', { id: 'save-loc-modal' });
+            setPlantLocationModal((prev) => ({ ...prev, isSaving: false }));
+        }
+    };
+
+    /**
+     * Inline Plant Location Delete Confirmation
+     */
+    const handleDeletePlantLocationInline = (opt) => {
+        if (!opt) return;
+        setConfirmModal({
+            isOpen: true,
+            title: 'Delete Plant Location',
+            message: `Are you sure you want to delete facility '${opt.name}'?`,
+            onConfirm: async () => {
+                try {
+                    toast.loading('Deleting facility...', { id: 'delete-loc' });
+                    const res = await axiosInstance.delete(`/locations/${opt._id}`);
+                    if (res.data?.success) {
+                        toast.success(`Plant location '${opt.name}' deleted!`, { id: 'delete-loc' });
+                        setLocationsList((prev) => prev.filter((l) => l._id !== opt._id));
+                        setPlantLocations((prev) => prev.filter((l) => l._id !== opt._id));
+                        if (formData.plantLocation === opt.name || formData.plantLocation === opt._id) {
+                            handleInputChange('plantLocation', '');
+                            handleInputChange('plantLocationName', '');
+                        }
+                    }
+                } catch (err) {
+                    console.error('Delete plant location error:', err);
+                    toast.error(err.response?.data?.message || 'Failed to delete facility', { id: 'delete-loc' });
                 }
             }
         });
@@ -1030,6 +1304,8 @@ export default function TabbedResourcePage({
         };
 
         if (activeTabKey === 'employees') {
+            payload.employeeCode = (formData.employeeCode || formData.code || '').trim().toUpperCase();
+            payload.code = payload.employeeCode;
             payload.department = formData.department || 'PRODUCTION';
             payload.shiftAssignment = formData.shiftAssignment || (shiftsList[0]?._id || '');
             payload.facility = formData.facility || (locationsList[0]?._id || '');
@@ -1040,8 +1316,14 @@ export default function TabbedResourcePage({
         if (key === 'machines' || key === 'machine') {
             payload.code = (formData.code || formData.machineCode || currentCode || '').toUpperCase();
             payload.name = formData.name || '';
-            payload.section = (formData.section || 'EXTRUSION').toUpperCase();
-            payload.status = (formData.status || 'AVAILABLE').toUpperCase();
+            payload.section = formData.section || (sectionsList[0]?.name || 'Extrusion');
+            const matchedLoc = plantLocations.find((l) => l._id === formData.plantLocation || l.name === formData.plantLocation);
+            payload.plantLocation = matchedLoc ? matchedLoc.name : (formData.plantLocation || '');
+            if (matchedLoc?._id) {
+                payload.defaultLocation = matchedLoc._id;
+            }
+            payload.currentOperator = typeof formData.currentOperator === 'object' ? (formData.currentOperator?._id || null) : (formData.currentOperator || null);
+            payload.status = formData.status || 'Available';
             if (formData.capacityPerHour || formData.capacity) {
                 payload.capacityPerHour = Number(formData.capacityPerHour || formData.capacity);
             }
@@ -1051,57 +1333,10 @@ export default function TabbedResourcePage({
         }
 
         if (key === 'raw-materials' || key === 'rawmaterials') {
-            const rollNum = (formData.rollNumber || '').trim();
-            if (!rollNum) {
-                toast.error('Roll Number is required');
-                return;
-            }
-            payload.rollNumber = rollNum.slice(0, 25);
-
-            let parsedGW = null;
-            if (formData.grossWeight !== undefined && formData.grossWeight !== '' && formData.grossWeight !== null) {
-                parsedGW = Number(formData.grossWeight);
-                if (isNaN(parsedGW) || parsedGW < 0.01 || parsedGW > 10000) {
-                    toast.error('Gross Weight must be between 0.01 and 10000 Kg');
-                    return;
-                }
-                payload.grossWeight = parsedGW;
-            } else {
-                payload.grossWeight = null;
-            }
-
-            if (formData.netWeight !== undefined && formData.netWeight !== '' && formData.netWeight !== null) {
-                const parsedNW = Number(formData.netWeight);
-                if (isNaN(parsedNW) || parsedNW < 0.01 || parsedNW > 10000) {
-                    toast.error('Net Weight must be between 0.01 and 10000 Kg');
-                    return;
-                }
-                if (parsedGW !== null && parsedNW > parsedGW) {
-                    toast.error('Net Weight cannot exceed Gross Weight');
-                    return;
-                }
-                payload.netWeight = parsedNW;
-            } else {
-                payload.netWeight = null;
-            }
-
-            if (formData.fabricLength !== undefined && formData.fabricLength !== '' && formData.fabricLength !== null) {
-                const parsedFL = Number(formData.fabricLength);
-                if (isNaN(parsedFL) || parsedFL < 1 || parsedFL > 50000) {
-                    toast.error('Fabric Length must be between 1 and 50000 Meters');
-                    return;
-                }
-                payload.fabricLength = parsedFL;
-            } else {
-                payload.fabricLength = null;
-            }
-
             const catVal = typeof formData.category === 'object' ? formData.category?._id : formData.category;
             const uomVal = typeof formData.uom === 'object' ? formData.uom?._id : formData.uom;
             payload.category = catVal || (categoriesList[0]?._id || '');
             payload.uom = uomVal || (uomsList[0]?._id || '');
-            payload.totalQuantityKg = (formData.totalQuantityKg !== undefined && formData.totalQuantityKg !== '' && formData.totalQuantityKg !== null) ? Number(formData.totalQuantityKg) : null;
-            payload.totalQuantityPcs = (formData.totalQuantityPcs !== undefined && formData.totalQuantityPcs !== '' && formData.totalQuantityPcs !== null) ? Number(formData.totalQuantityPcs) : null;
             delete payload.currentStock; // Current stock can only be updated via GRN / Stock Ledger
 
             // Auto-compose descriptive Raw Material title from attributes
@@ -1817,15 +2052,23 @@ export default function TabbedResourcePage({
             return (
                 <div className="space-y-4 font-sans text-xs">
                     <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Employee Code (Auto-generated)
-                        </label>
+                        <div className="flex items-center justify-between mb-1">
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                Employee Code *
+                            </label>
+                            <span className="text-[10px] text-text-muted">Auto-generated &middot; Editable</span>
+                        </div>
                         <input
                             type="text"
                             required
-                            readOnly
-                            value={currentCode}
-                            className="w-full border border-border rounded-md p-2.5 bg-sidebar-hover/40 text-xs text-text-main font-mono font-semibold uppercase tracking-wider"
+                            placeholder="e.g. EMP-1001"
+                            value={formData.employeeCode || formData.code || ''}
+                            onChange={(e) => {
+                                const val = e.target.value.toUpperCase();
+                                handleInputChange('employeeCode', val);
+                                handleInputChange('code', val);
+                            }}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main font-mono font-semibold uppercase tracking-wider focus:outline-none focus:border-primary"
                         />
                     </div>
 
@@ -1918,7 +2161,7 @@ export default function TabbedResourcePage({
                                 <option value="">-- Select Shift --</option>
                                 {shiftsList.map((s) => (
                                     <option key={s._id} value={s._id}>
-                                        {s.name} ({s.shiftCode} {s.startTime}–{s.endTime})
+                                        {s.shiftCode || 'SHIFT'} - {s.name} ({s.startTime}–{s.endTime})
                                     </option>
                                 ))}
                                 <option value="__ADD_NEW_SHIFT__" className="font-bold text-primary">
@@ -1957,7 +2200,7 @@ export default function TabbedResourcePage({
                                 <option value="">-- Select Facility --</option>
                                 {locationsList.map((l) => (
                                     <option key={l._id} value={l._id}>
-                                        {l.name}
+                                        {l.code ? `${l.code} - ` : ''}{l.name}
                                     </option>
                                 ))}
                                 <option value="__ADD_NEW_LOCATION__" className="font-bold text-primary">
@@ -2017,28 +2260,98 @@ export default function TabbedResourcePage({
                         />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Section
-                            </label>
-                            <select
-                                value={(formData.section || 'EXTRUSION').toUpperCase()}
-                                onChange={(e) => handleInputChange('section', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
-                            >
-                                <option value="EXTRUSION">Extrusion</option>
-                                <option value="WEAVING">Weaving</option>
-                                <option value="LAMINATION">Lamination</option>
-                                <option value="PRINTING">Printing</option>
-                                <option value="SEWING">Sewing</option>
-                                <option value="BALING">Baling</option>
-                                <option value="QUALITY">Quality</option>
-                                <option value="MAINTENANCE">Maintenance</option>
-                                <option value="CONVERSION">Conversion</option>
-                            </select>
-                        </div>
+                    {/* Row 1: Production Section & Plant Location side-by-side */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                        <InlineLookupSelect
+                            label="Production Section"
+                            value={formData.section || ''}
+                            onChange={(val) => handleInputChange('section', val)}
+                            options={sectionsList}
+                            onOpenAdd={() => setSectionModal({ isOpen: true, mode: 'ADD', sectionId: null, inputValue: '', isSaving: false })}
+                            onOpenEdit={(opt) => setSectionModal({ isOpen: true, mode: 'EDIT', sectionId: opt._id, inputValue: opt.name, isSaving: false })}
+                            onDelete={(opt) => handleDeleteSectionInline(opt)}
+                            placeholder="-- Select Section --"
+                            required
+                        />
 
+                        <div className="flex flex-col h-full w-full">
+                            <div className="flex justify-between items-center mb-1">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                    Plant Location
+                                </label>
+                                <div className="flex items-center space-x-2 text-xs font-semibold">
+                                    <button
+                                        type="button"
+                                        onClick={handleOpenAddPlantLocationModal}
+                                        className="text-orange-500 hover:text-orange-700 font-bold cursor-pointer transition-colors"
+                                    >
+                                        + Add New
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const matched = plantLocations.find(
+                                                (l) => l._id === formData.plantLocation || l.name === formData.plantLocation
+                                            );
+                                            if (matched) {
+                                                handleOpenEditPlantLocationModal(matched);
+                                            } else {
+                                                toast.error('Please select a plant location first to edit');
+                                            }
+                                        }}
+                                        className="text-gray-500 hover:text-gray-700 font-medium cursor-pointer transition-colors"
+                                    >
+                                        ✎ Edit
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const matched = plantLocations.find(
+                                                (l) => l._id === formData.plantLocation || l.name === formData.plantLocation
+                                            );
+                                            if (matched) {
+                                                handleDeletePlantLocationInline(matched);
+                                            } else {
+                                                toast.error('Please select a plant location first to delete');
+                                            }
+                                        }}
+                                        className="text-red-500 hover:text-red-700 font-medium cursor-pointer transition-colors"
+                                    >
+                                        🗑 Delete
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="mt-auto w-full">
+                                <select
+                                    value={
+                                        plantLocations.find((l) => l._id === formData.plantLocation)?._id ||
+                                        plantLocations.find((l) => l.name === formData.plantLocation)?._id ||
+                                        formData.plantLocation ||
+                                        ''
+                                    }
+                                    onChange={(e) => {
+                                        const val = e.target.value;
+                                        handleInputChange('plantLocation', val);
+                                        const matched = plantLocations.find((l) => l._id === val);
+                                        if (matched) {
+                                            handleInputChange('plantLocationName', matched.name);
+                                        }
+                                    }}
+                                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer transition-colors"
+                                >
+                                    <option value="">-- Select Plant Location --</option>
+                                    {plantLocations.map((location) => (
+                                        <option key={location._id} value={location._id}>
+                                            {location.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Row 2: Capacity per Hour & Current Operator side-by-side */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                                 Capacity per Hour (Kg/Hr)
@@ -2054,22 +2367,28 @@ export default function TabbedResourcePage({
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                             />
                         </div>
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-3">
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Current Operator
+                                Current Operator (Employee)
                             </label>
-                            <input
-                                type="text"
-                                placeholder="e.g. Ramesh Kumar"
-                                value={formData.currentOperator || ''}
-                                onChange={(e) => handleInputChange('currentOperator', e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                            />
+                            <select
+                                value={typeof formData.currentOperator === 'object' ? (formData.currentOperator?._id || '') : (formData.currentOperator || '')}
+                                onChange={(e) => handleInputChange('currentOperator', e.target.value || null)}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                            >
+                                <option value="">-- No Operator Assigned --</option>
+                                {employeesList.map((emp) => (
+                                    <option key={emp._id} value={emp._id}>
+                                        {emp.employeeCode || 'EMP'} - {emp.name} {emp.department ? `(${emp.department})` : ''}
+                                    </option>
+                                ))}
+                            </select>
                         </div>
+                    </div>
 
+                    {/* Row 3: Machine Efficiency & Status side-by-side */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                                 Machine Efficiency (%)
@@ -2082,22 +2401,22 @@ export default function TabbedResourcePage({
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                             />
                         </div>
-                    </div>
 
-                    <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Status
-                        </label>
-                        <select
-                            value={formData.status || 'AVAILABLE'}
-                            onChange={(e) => handleInputChange('status', e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
-                        >
-                            <option value="AVAILABLE">Available</option>
-                            <option value="IN_USE">In Use</option>
-                            <option value="UNDER_MAINTENANCE">Under Maintenance</option>
-                            <option value="OUT_OF_SERVICE">Out of Service</option>
-                        </select>
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                Status
+                            </label>
+                            <select
+                                value={formData.status || 'AVAILABLE'}
+                                onChange={(e) => handleInputChange('status', e.target.value)}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                            >
+                                <option value="AVAILABLE">Available</option>
+                                <option value="IN_USE">In Use</option>
+                                <option value="UNDER_MAINTENANCE">Under Maintenance</option>
+                                <option value="OUT_OF_SERVICE">Out of Service</option>
+                            </select>
+                        </div>
                     </div>
 
                     {renderIsActiveToggle()}
@@ -2212,7 +2531,7 @@ export default function TabbedResourcePage({
                             <option value="">-- Select Category --</option>
                             {categoriesList.map((cat) => (
                                 <option key={cat._id} value={cat._id}>
-                                    {cat.name}
+                                    {cat.code ? `${cat.code} - ` : ''}{cat.name}
                                 </option>
                             ))}
                         </select>
@@ -2243,7 +2562,7 @@ export default function TabbedResourcePage({
                                     <option value="">-- Select UOM --</option>
                                     {uomsList.map((u) => (
                                         <option key={u._id} value={u._id}>
-                                            {u.name} ({u.abbreviation || u.symbol || u.name})
+                                            {u.abbreviation || u.symbol || u.code || 'UOM'} - {u.name}
                                         </option>
                                     ))}
                                 </select>
@@ -2266,7 +2585,7 @@ export default function TabbedResourcePage({
                                     <option value="">-- Select Location --</option>
                                     {locationsList.map((loc) => (
                                         <option key={loc._id} value={loc._id}>
-                                            {loc.name} ({loc.code || loc.type})
+                                            {loc.code || loc.type} - {loc.name}
                                         </option>
                                     ))}
                                 </select>
@@ -2396,243 +2715,6 @@ export default function TabbedResourcePage({
                             />
                         </div>
                     </div>
-
-                    {/* Packing Slip & Roll Specifications (From Inward Packing Slip) */}
-                    ```jsx
-<div className="space-y-3.5 pt-3.5 border-t border-border">
-    <div className="flex items-center justify-between pb-0.5">
-        <h4 className="text-[11px] font-bold uppercase tracking-wide text-primary flex items-center gap-1.5">
-            <span>Packing Slip & Roll Specifications</span>
-        </h4>
-        <span className="text-[10px] text-text-muted font-medium">
-            Inward roll & weight verification
-        </span>
-    </div>
-
-    {/* Roll No. & Fabric Length */}
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
-        <div className="flex flex-col h-full">
-            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                    Roll No. <span className="text-danger">*</span>
-                </label>
-                <span className="text-[9px] text-danger font-bold uppercase tracking-wider shrink-0 pt-0.5">
-                    Required
-                </span>
-            </div>
-
-            <div className="mt-auto">
-                <input
-                    type="text"
-                    required
-                    maxLength={25}
-                    placeholder="e.g. 1388/27 or 1434/28"
-                    value={formData.rollNumber || ''}
-                    onChange={(e) => handleInputChange('rollNumber', e.target.value)}
-                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-semibold uppercase"
-                />
-            </div>
-        </div>
-
-        <div className="flex flex-col h-full">
-            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                    Fabric Length (Meters)
-                </label>
-                <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">
-                    1 – 50,000 m
-                </span>
-            </div>
-
-            <div className="mt-auto">
-                <input
-                    type="number"
-                    step="0.01"
-                    min="1"
-                    max="50000"
-                    placeholder="e.g. 1250"
-                    value={
-                        formData.fabricLength !== undefined &&
-                        formData.fabricLength !== null
-                            ? formData.fabricLength
-                            : ''
-                    }
-                    onChange={(e) =>
-                        handleInputChange('fabricLength', e.target.value)
-                    }
-                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                />
-            </div>
-        </div>
-    </div>
-
-    {/* Width & Gross Weight */}
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
-        <div className="flex flex-col h-full">
-            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                    Width (Inches)
-                </label>
-                <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">
-                    Fabric Width
-                </span>
-            </div>
-
-            <div className="mt-auto">
-                <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    max="200"
-                    placeholder="e.g. 58"
-                    value={
-                        formData.width !== undefined &&
-                        formData.width !== null
-                            ? formData.width
-                            : ''
-                    }
-                    onChange={(e) =>
-                        handleInputChange('width', e.target.value)
-                    }
-                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                />
-            </div>
-        </div>
-
-        <div className="flex flex-col h-full">
-            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                    Gross Weight / G.W. (Kg)
-                </label>
-                <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">
-                    Max 10,000 Kg
-                </span>
-            </div>
-
-            <div className="mt-auto">
-                <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    max="10000"
-                    placeholder="e.g. 520.50"
-                    value={
-                        formData.grossWeight !== undefined &&
-                        formData.grossWeight !== null
-                            ? formData.grossWeight
-                            : ''
-                    }
-                    onChange={(e) =>
-                        handleInputChange('grossWeight', e.target.value)
-                    }
-                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                />
-            </div>
-        </div>
-    </div>
-
-    {/* Net Weight & Reference Lot Quantities */}
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
-        <div className="flex flex-col h-full">
-            <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                    Net Weight / N.W. (Kg)
-                </label>
-                <span className="text-[9px] text-text-muted font-medium shrink-0 pt-0.5">
-                    ≤ Gross Weight
-                </span>
-            </div>
-
-            <div className="mt-auto">
-                <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    max="10000"
-                    placeholder="e.g. 518.20"
-                    value={
-                        formData.netWeight !== undefined &&
-                        formData.netWeight !== null
-                            ? formData.netWeight
-                            : ''
-                    }
-                    onChange={(e) =>
-                        handleInputChange('netWeight', e.target.value)
-                    }
-                    className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                />
-            </div>
-        </div>
-
-        {/* Reference Lot Quantities */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4 bg-amber-50/20 border border-amber-200/50 rounded-lg p-2.5">
-            <div className="flex flex-col h-full">
-                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                        Total Quantity in Kgs
-                    </label>
-                    <span className="text-[9px] text-text-muted mt-0.5">
-                        Roll Wt (KG)
-                    </span>
-                </div>
-
-                <div className="mt-auto">
-                    <input
-                        type="number"
-                        step="any"
-                        placeholder="e.g. 500"
-                        value={
-                            formData.totalQuantityKg !== undefined &&
-                            formData.totalQuantityKg !== null
-                                ? formData.totalQuantityKg
-                                : ''
-                        }
-                        onChange={(e) =>
-                            handleInputChange(
-                                'totalQuantityKg',
-                                e.target.value
-                            )
-                        }
-                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                    />
-                </div>
-            </div>
-
-            <div className="flex flex-col h-full">
-                <div className="flex items-start justify-between w-full mb-1 gap-1.5 min-w-0 min-h-[36px] sm:min-h-[40px]">
-                    <label className="block text-[10.5px] sm:text-[11px] font-bold uppercase tracking-wide text-text-main leading-snug break-words hyphens-auto flex-1 min-w-0">
-                        Total Quantity in Pcs
-                    </label>
-                    <span className="text-[9px] text-text-muted mt-0.5">
-                        Count (PCS)
-                    </span>
-                </div>
-
-                <div className="mt-auto">
-                    <input
-                        type="number"
-                        step="1"
-                        placeholder="e.g. 1000"
-                        value={
-                            formData.totalQuantityPcs !== undefined &&
-                            formData.totalQuantityPcs !== null
-                                ? formData.totalQuantityPcs
-                                : ''
-                        }
-                        onChange={(e) =>
-                            handleInputChange(
-                                'totalQuantityPcs',
-                                e.target.value
-                            )
-                        }
-                        className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
-                    />
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
 
                     {/* Industrial Specification Fields */}
                     <div className="space-y-3.5 pt-3.5 border-t border-border">
@@ -2870,7 +2952,7 @@ export default function TabbedResourcePage({
                             <option value="">-- Select Bag Category --</option>
                             {categoriesList.map((cat) => (
                                 <option key={cat._id} value={cat._id}>
-                                    {cat.name}
+                                    {cat.code ? `${cat.code} - ` : ''}{cat.name}
                                 </option>
                             ))}
                         </select>
@@ -2900,7 +2982,7 @@ export default function TabbedResourcePage({
                                 <option value="">-- Select UOM --</option>
                                 {uomsList.map((u) => (
                                     <option key={u._id} value={u._id}>
-                                        {u.name} ({u.abbreviation || u.symbol || u.name})
+                                        {u.abbreviation || u.symbol || u.code || 'UOM'} - {u.name}
                                     </option>
                                 ))}
                             </select>
@@ -2974,8 +3056,8 @@ export default function TabbedResourcePage({
                                         handleInputChange('dimensionUnit', 'cm');
                                     }}
                                     className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${(formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'cm'
-                                            ? 'bg-primary text-white shadow-2xs'
-                                            : 'text-text-muted hover:text-text-main'
+                                        ? 'bg-primary text-white shadow-2xs'
+                                        : 'text-text-muted hover:text-text-main'
                                         }`}
                                 >
                                     cm
@@ -2987,8 +3069,8 @@ export default function TabbedResourcePage({
                                         handleInputChange('dimensionUnit', 'inch');
                                     }}
                                     className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${(formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'inch'
-                                            ? 'bg-primary text-white shadow-2xs'
-                                            : 'text-text-muted hover:text-text-main'
+                                        ? 'bg-primary text-white shadow-2xs'
+                                        : 'text-text-muted hover:text-text-main'
                                         }`}
                                 >
                                     inch
@@ -3151,7 +3233,7 @@ export default function TabbedResourcePage({
                         <div className="space-y-2">
                             {bomIngredients.map((item, idx) => {
                                 const selectedRmId = typeof item.rawMaterial === 'object' ? item.rawMaterial?._id : item.rawMaterial;
-                                const selectedRm = rawMaterialsList.find((rm) => rm._id === selectedRmId);
+                                const selectedRm = (rawMaterialsList || []).find((rm) => rm._id === selectedRmId);
                                 const uomLabel = typeof selectedRm?.uom === 'object' ? (selectedRm.uom?.symbol || selectedRm.uom?.name) : (selectedRm?.uom || 'Kg');
 
                                 return (
@@ -3169,9 +3251,9 @@ export default function TabbedResourcePage({
                                                 className="h-9 w-full border border-border rounded-md px-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer truncate"
                                             >
                                                 <option value="">-- Select Raw Material --</option>
-                                                {rawMaterialsList.map((rm) => (
+                                                {(rawMaterialsList || []).map((rm) => (
                                                     <option key={rm._id} value={rm._id}>
-                                                        {rm.name} ({rm.code || 'RM'}) — Stock: {rm.currentStock || 0} {typeof rm.uom === 'object' ? rm.uom?.symbol : (rm.uom || 'kg')}
+                                                        {rm.code || 'RM'} - {rm.name} (Stock: {rm.currentStock || 0} {typeof rm.uom === 'object' ? rm.uom?.symbol : (rm.uom || 'kg')})
                                                     </option>
                                                 ))}
                                             </select>
@@ -3286,9 +3368,9 @@ export default function TabbedResourcePage({
                                         className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer"
                                     >
                                         <option value="">-- Select Raw Material --</option>
-                                        {rawMaterialsList.map((rm) => (
+                                        {(rawMaterialsList || []).map((rm) => (
                                             <option key={rm._id} value={rm._id}>
-                                                {rm.name || rm.materialName || rm.companyName || rm.code || 'Raw Material'} ({rm.code || 'RM'})
+                                                {rm.code || 'RM'} - {rm.name || rm.materialName || 'Raw Material'}
                                             </option>
                                         ))}
                                     </select>
@@ -3455,50 +3537,79 @@ export default function TabbedResourcePage({
             ) : activeTab?.customRender ? (
                 typeof activeTab.customRender === 'function' ? activeTab.customRender(data, handleEditRow) : activeTab.customRender
             ) : (
-                <DataTable
-                    columns={activeTab?.columns || []}
-                    data={data}
-                    isLoading={isLoading}
-                    emptyMessage={`No ${activeTab?.label || 'records'} found`}
-                    search={search}
-                    onSearchChange={setSearch}
-                    statusFilter={statusFilter}
-                    onStatusFilterChange={setStatusFilter}
-                    availableStatuses={activeTab?.availableStatuses || (() => {
-                        const k = (activeTabKey || '').toLowerCase();
-                        if (k === 'dispatches' || k === 'dispatch') return ['IN_TRANSIT', 'DELIVERED'];
-                        if (k === 'sales-orders' || k === 'salesorders') return ['DRAFT', 'CONFIRMED', 'READY_FOR_DISPATCH', 'DISPATCHED', 'CANCELLED'];
-                        if (k === 'invoices' || k === 'invoice') return ['UNPAID', 'PARTIALLY_PAID', 'PAID'];
-                        if (k === 'purchase-orders' || k === 'purchaseorders') return ['DRAFT', 'ISSUED', 'RECEIVED', 'CANCELLED'];
-                        if (k === 'customers' || k === 'customer') return ['Active', 'Inactive', 'Lead'];
-                        if (k === 'machines' || k === 'machine') return ['Available', 'In Use', 'Under Maintenance', 'Out of Service'];
-                        if (k === 'work-orders' || k === 'workorders' || k === 'stage-monitor') return ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
-                        return ['Active', 'Inactive'];
-                    })()}
-                    pagination={pagination}
-                    onPageChange={setPage}
-                    activeTabLabel={activeTab?.label}
-                    onView={handleViewRow}
-                    isViewable={activeTab?.isViewable !== false}
-                    onEdit={handleEditRow}
-                    onDelete={handleDeleteRow}
-                    onBulkDelete={bulkDeleteItems}
-                    isEditable={isCurrentTabEditable}
-                    isDeletable={(() => {
-                        const k = (activeTabKey || '').toLowerCase();
-                        const p = (activeTab?.resourcePath || '').toLowerCase();
-                        if (activeTab?.isDeletable === false) return false;
-                        if (k.includes('invoice') || p.includes('invoice')) return false;
-                        if (k.includes('grn') || p.includes('grn')) return false;
-                        if (k.includes('material-receipt') || p.includes('material-receipt')) return false;
-                        if (k.includes('stock-transaction') || p.includes('stock-transaction') || k.includes('valuation') || k.includes('audit-ledger')) return false;
-                        if (k.includes('qc-inspection') || p.includes('qc-inspection')) return false;
-                        if (k.includes('dispatch') || p.includes('dispatch')) return false;
-                        return true;
-                    })()}
-                    onExportCsv={handleExportCsv}
-                />
+                <>
+                    {/* Show Inactive toggle — only visible on Customers tab */}
+                    {isCustomersTab && (
+                        <div className="flex items-center gap-2 mb-2">
+                            <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-semibold text-text-muted hover:text-text-main transition-colors">
+                                <div className="relative">
+                                    <input
+                                        type="checkbox"
+                                        className="sr-only peer"
+                                        checked={showInactive}
+                                        onChange={(e) => {
+                                            setShowInactive(e.target.checked);
+                                            setPage(1);
+                                        }}
+                                    />
+                                    <div className="w-9 h-5 bg-gray-200 peer-checked:bg-rose-500 rounded-full transition-colors duration-200" />
+                                    <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 peer-checked:translate-x-4" />
+                                </div>
+                                <span>Show Inactive Customers</span>
+                                {showInactive && (
+                                    <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-200">
+                                        Showing All
+                                    </span>
+                                )}
+                            </label>
+                        </div>
+                    )}
+                    <DataTable
+                        columns={activeTab?.columns || []}
+                        data={data}
+                        isLoading={isLoading}
+                        emptyMessage={`No ${activeTab?.label || 'records'} found`}
+                        search={search}
+                        onSearchChange={setSearch}
+                        statusFilter={statusFilter}
+                        onStatusFilterChange={setStatusFilter}
+                        availableStatuses={activeTab?.availableStatuses || (() => {
+                            const k = (activeTabKey || '').toLowerCase();
+                            if (k === 'dispatches' || k === 'dispatch') return ['IN_TRANSIT', 'DELIVERED'];
+                            if (k === 'sales-orders' || k === 'salesorders') return ['DRAFT', 'CONFIRMED', 'READY_FOR_DISPATCH', 'DISPATCHED', 'CANCELLED'];
+                            if (k === 'invoices' || k === 'invoice') return ['UNPAID', 'PARTIALLY_PAID', 'PAID'];
+                            if (k === 'purchase-orders' || k === 'purchaseorders') return ['DRAFT', 'ISSUED', 'RECEIVED', 'CANCELLED'];
+                            if (k === 'customers' || k === 'customer') return ['Active', 'Inactive', 'Lead'];
+                            if (k === 'machines' || k === 'machine') return ['Available', 'In Use', 'Under Maintenance', 'Out of Service'];
+                            if (k === 'work-orders' || k === 'workorders' || k === 'stage-monitor') return ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
+                            return ['Active', 'Inactive'];
+                        })()}
+                        pagination={pagination}
+                        onPageChange={setPage}
+                        activeTabLabel={activeTab?.label}
+                        onView={handleViewRow}
+                        isViewable={activeTab?.isViewable !== false}
+                        onEdit={handleEditRow}
+                        onDelete={handleDeleteRow}
+                        onBulkDelete={bulkDeleteItems}
+                        isEditable={isCurrentTabEditable}
+                        isDeletable={(() => {
+                            const k = (activeTabKey || '').toLowerCase();
+                            const p = (activeTab?.resourcePath || '').toLowerCase();
+                            if (activeTab?.isDeletable === false) return false;
+                            if (k.includes('invoice') || p.includes('invoice')) return false;
+                            if (k.includes('grn') || p.includes('grn')) return false;
+                            if (k.includes('material-receipt') || p.includes('material-receipt')) return false;
+                            if (k.includes('stock-transaction') || p.includes('stock-transaction') || k.includes('valuation') || k.includes('audit-ledger')) return false;
+                            if (k.includes('qc-inspection') || p.includes('qc-inspection')) return false;
+                            if (k.includes('dispatch') || p.includes('dispatch')) return false;
+                            return true;
+                        })()}
+                        onExportCsv={handleExportCsv}
+                    />
+                </>
             )}
+
 
             {/* SLIDE-OUT DRAWER SHELL (UI) */}
             {isDrawerOpen && (
@@ -3745,7 +3856,7 @@ export default function TabbedResourcePage({
                                 <input
                                     type="text"
                                     required
-                                    placeholder="e.g. Main Extrusion Plant - Unit 1"
+                                    placeholder="e.g. Vapi Unit #1 (GIDC Phase 3)"
                                     value={inlineLocationData.name}
                                     onChange={(e) => setInlineLocationData({ ...inlineLocationData, name: e.target.value })}
                                     className="w-full border border-border rounded-md p-2 bg-card-bg text-text-main"
@@ -3922,6 +4033,154 @@ export default function TabbedResourcePage({
                                     className="px-4 py-2 bg-primary text-white font-semibold rounded-md text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
                                 >
                                     {bagShapeModal.isSaving ? 'Saving...' : 'Save Bag Shape'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Custom Production Section Modal */}
+            {sectionModal.isOpen && (
+                <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div
+                        className="fixed inset-0"
+                        onClick={() => setSectionModal({ isOpen: false, mode: 'ADD', sectionId: null, inputValue: '', isSaving: false })}
+                    />
+                    <div className="relative z-10 bg-card-bg rounded-xl shadow-2xl w-full max-w-md p-6 border border-border space-y-4 font-sans animate-in zoom-in-95 duration-150">
+                        <div className="flex items-center justify-between border-b border-border pb-3">
+                            <h3 className="text-sm font-bold text-text-main uppercase tracking-wider">
+                                {sectionModal.mode === 'ADD' ? 'Add New Section' : 'Edit Section'}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setSectionModal({ isOpen: false, mode: 'ADD', sectionId: null, inputValue: '', isSaving: false })}
+                                className="text-text-muted hover:text-text-main p-1 rounded-md transition-colors cursor-pointer"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSaveSectionModal} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                    Section Name *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    autoFocus
+                                    placeholder="e.g. Extrusion, Weaving, Lamination"
+                                    value={sectionModal.inputValue}
+                                    onChange={(e) => setSectionModal((prev) => ({ ...prev, inputValue: e.target.value }))}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                                <button
+                                    type="button"
+                                    onClick={() => setSectionModal({ isOpen: false, mode: 'ADD', sectionId: null, inputValue: '', isSaving: false })}
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={sectionModal.isSaving}
+                                    className="px-4 py-2 bg-primary text-white font-semibold rounded-md text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
+                                >
+                                    {sectionModal.isSaving ? 'Saving...' : 'Save Section'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Custom Plant Location Modal */}
+            {plantLocationModal.isOpen && (
+                <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div
+                        className="fixed inset-0"
+                        onClick={() => setPlantLocationModal({ isOpen: false, mode: 'ADD', locationId: null, name: '', code: '', type: 'FACTORY', isSaving: false })}
+                    />
+                    <div className="relative z-10 bg-card-bg rounded-xl shadow-2xl w-full max-w-md p-6 border border-border space-y-4 font-sans animate-in zoom-in-95 duration-150">
+                        <div className="flex items-center justify-between border-b border-border pb-3">
+                            <h3 className="text-sm font-bold text-text-main uppercase tracking-wider">
+                                {plantLocationModal.mode === 'ADD' ? 'Add New Plant Location' : 'Edit Plant Location'}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setPlantLocationModal({ isOpen: false, mode: 'ADD', locationId: null, name: '', code: '', type: 'FACTORY', isSaving: false })}
+                                className="text-text-muted hover:text-text-main p-1 rounded-md transition-colors cursor-pointer"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSavePlantLocationModal} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                    Plant / Facility Name *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    autoFocus
+                                    placeholder="e.g. Vapi Unit #1, Surat Extrusion Plant #2"
+                                    value={plantLocationModal.name}
+                                    onChange={(e) => setPlantLocationModal((prev) => ({ ...prev, name: e.target.value }))}
+                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                        Facility Code *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        required
+                                        placeholder="e.g. PLANT-001"
+                                        value={plantLocationModal.code}
+                                        onChange={(e) => setPlantLocationModal((prev) => ({ ...prev, code: e.target.value.toUpperCase() }))}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono uppercase"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                        Facility Type
+                                    </label>
+                                    <select
+                                        value={plantLocationModal.type}
+                                        onChange={(e) => setPlantLocationModal((prev) => ({ ...prev, type: e.target.value }))}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                                    >
+                                        <option value="FACTORY">Factory / Plant</option>
+                                        <option value="PRODUCTION_FLOOR">Production Floor</option>
+                                        <option value="WAREHOUSE">Warehouse</option>
+                                        <option value="GODOWN">Godown</option>
+                                        <option value="DISPATCH_ZONE">Dispatch Zone</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                                <button
+                                    type="button"
+                                    onClick={() => setPlantLocationModal({ isOpen: false, mode: 'ADD', locationId: null, name: '', code: '', type: 'FACTORY', isSaving: false })}
+                                    className="px-4 py-2 border border-border rounded-md text-xs font-semibold text-text-main hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={plantLocationModal.isSaving}
+                                    className="px-4 py-2 bg-primary text-white font-semibold rounded-md text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
+                                >
+                                    {plantLocationModal.isSaving ? 'Saving...' : 'Save Location'}
                                 </button>
                             </div>
                         </form>

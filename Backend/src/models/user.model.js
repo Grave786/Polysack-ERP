@@ -34,6 +34,11 @@ const UserSchema = new mongoose.Schema({
     facility_id: {
         type: String // Preserved for legacy string compatibility during migration
     },
+    phone: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     isActive: {
         type: Boolean,
         default: true

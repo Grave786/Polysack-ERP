@@ -130,38 +130,67 @@ const getCustomers = async (req, res) => {
             });
         }
 
-        const { status, isActive, search, page = 1, limit = 20 } = req.query;
+        const { status, isActive, showInactive, search, page = 1, limit = 10 } = req.query;
 
         const filter = { tenant: tenantId };
 
-        if (status && status !== 'All' && status !== 'ALL') {
-            if (status === 'Active' || status === 'ACTIVE') {
+        if (showInactive === 'true') {
+            // Admin table with 'Show Inactive' toggle ON — return all records, no status filter
+        } else {
+            // --- Active / Inactive filter ---
+            // If caller explicitly passes isActive=false or status=Inactive/INACTIVE,
+            // show inactive records. Otherwise, always exclude soft-deleted and inactive.
+            const wantsInactive =
+                isActive === 'false' ||
+                status === 'Inactive' ||
+                status === 'INACTIVE' ||
+                status === 'inactive';
+
+            const wantsAll = status === 'All' || status === 'ALL';
+
+            if (!wantsAll && !wantsInactive) {
+                // Default: only return records that are both isActive:true AND not INACTIVE status
                 filter.isActive = true;
-            } else if (status === 'Inactive' || status === 'INACTIVE') {
-                filter.isActive = false;
-            } else if (status === 'Lead' || status === 'LEAD') {
+                filter.status = { $ne: 'INACTIVE' };
+            } else if (wantsInactive) {
+                // Caller wants inactive records specifically
                 filter.$or = [
-                    { status: 'LEAD' },
-                    { status: 'INACTIVE_LEAD' },
-                    { status: { $regex: 'lead', $options: 'i' } }
+                    { isActive: false },
+                    { status: 'INACTIVE' }
                 ];
-            } else {
-                filter.status = status;
+            }
+            // wantsAll → no extra filter, return everything
+
+            // Status-specific sub-filters (applied on top when not wantsAll/wantsInactive)
+            if (!wantsAll && !wantsInactive && status && status !== 'All' && status !== 'ALL') {
+                if (status === 'Active' || status === 'ACTIVE') {
+                    // Already handled above (isActive:true, status≠INACTIVE)
+                } else if (status === 'ACTIVE_CUSTOMER') {
+                    filter.status = 'ACTIVE_CUSTOMER';
+                } else if (status === 'Lead' || status === 'LEAD') {
+                    filter.status = 'LEAD';
+                    delete filter.isActive; // leads can still be active
+                } else {
+                    filter.status = status;
+                }
             }
         }
 
         if (search) {
-            filter.$or = [
-                { companyName: { $regex: search, $options: 'i' } },
-                { code: { $regex: search, $options: 'i' } },
-                { gstin: { $regex: search, $options: 'i' } },
-                { city: { $regex: search, $options: 'i' } },
-                { contactPerson: { $regex: search, $options: 'i' } }
-            ];
+            filter.$and = filter.$and || [];
+            filter.$and.push({
+                $or: [
+                    { companyName: { $regex: search, $options: 'i' } },
+                    { code: { $regex: search, $options: 'i' } },
+                    { gstin: { $regex: search, $options: 'i' } },
+                    { city: { $regex: search, $options: 'i' } },
+                    { contactPerson: { $regex: search, $options: 'i' } }
+                ]
+            });
         }
 
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
-        const limitNum = Math.max(1, parseInt(limit, 10) || 20);
+        const limitNum = Math.max(1, parseInt(limit, 10) || 10);
         const skip = (pageNum - 1) * limitNum;
 
         const [customers, total] = await Promise.all([
@@ -172,11 +201,15 @@ const getCustomers = async (req, res) => {
         return res.status(200).json({
             success: true,
             count: customers.length,
+            totalCount: total,
             pagination: {
                 total,
+                totalCount: total,
                 page: pageNum,
+                currentPage: pageNum,
                 limit: limitNum,
-                pages: Math.ceil(total / limitNum) || 1
+                pages: Math.ceil(total / limitNum) || 1,
+                totalPages: Math.ceil(total / limitNum) || 1
             },
             data: customers
         });

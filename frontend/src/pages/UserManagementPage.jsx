@@ -609,7 +609,7 @@ export default function UserManagementPage() {
                                     <option value="MAIN_UNIT">MAIN_UNIT (Default Plant)</option>
                                     {locationsList.map((loc) => (
                                         <option key={loc._id} value={loc.code || loc.name}>
-                                            {loc.name} ({loc.code || loc.type})
+                                            {loc.code || loc.type} - {loc.name}
                                         </option>
                                     ))}
                                 </select>

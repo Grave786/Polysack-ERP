@@ -555,7 +555,7 @@ export default function DataTable({
                 )}
 
                 {/* Pagination Footer */}
-                {pagination && pagination.total > 0 && (
+                {pagination && (pagination.total > 0 || pagination.totalCount > 0) && (
                     <Pagination pagination={pagination} onPageChange={onPageChange} />
                 )}
             </div>

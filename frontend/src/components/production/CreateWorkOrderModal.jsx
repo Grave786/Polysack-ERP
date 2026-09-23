@@ -5,6 +5,7 @@ import WorkOrderShortageModal from './WorkOrderShortageModal';
 import InlineLookupSelect from '../shared/InlineLookupSelect';
 import { getTodayLocalDateString } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
+import PackingSlipRollsSection from '../shared/PackingSlipRollsSection';
 import {
     Layers,
     Info,
@@ -77,6 +78,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [orderConfirmed, setOrderConfirmed] = useState(false);
     const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
     const [purchaseOrderFiles, setPurchaseOrderFiles] = useState([]);
+    const [rolls, setRolls] = useState([]);
 
     // Raw Material Attributes (shared masters: Quality Fabric, Lamination, Colours, Grammage)
     const [rmAttributes, setRmAttributes] = useState({});
@@ -126,6 +128,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
         setOrderConfirmed(false);
         setExpectedDeliveryDate('');
         setPurchaseOrderFiles([]);
+        setRolls([]);
     };
 
     // Fetch dropdown options & tenant production settings when modal opens
@@ -189,8 +192,11 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
 
     if (!isOpen) return null;
 
-    const selectedMachineObj = machines.find((m) => m._id === assignedMachine);
-    const primaryOperator = selectedMachineObj?.currentOperator || (assignedMachine ? 'No Operator Assigned' : '');
+    const selectedMachineObj = machines.find((m) => m._id === assignedMachine) || null;
+    const rawOperator = selectedMachineObj?.currentOperator;
+    const primaryOperator = typeof rawOperator === 'object' && rawOperator !== null
+        ? `${rawOperator.employeeCode ? `${rawOperator.employeeCode} - ` : ''}${rawOperator.name || ''}`
+        : (rawOperator || (assignedMachine ? 'No Operator Assigned' : ''));
     // Collect which required fields are still missing (used for inline feedback)
     const missingFields = [];
     if (!customer) missingFields.push('Customer / Client');
@@ -489,7 +495,8 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                     totalOrderQuantityUnit,
                     orderConfirmed: Boolean(orderConfirmed),
                     expectedDeliveryDate: orderConfirmed && expectedDeliveryDate ? expectedDeliveryDate : null,
-                    purchaseOrderFiles
+                    purchaseOrderFiles,
+                    rolls: rolls && rolls.length > 0 ? rolls : []
                 }
             };
 
@@ -577,7 +584,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                             </option>
                             {customers.map((c) => (
                                 <option key={c._id} value={c._id}>
-                                    {c.companyName || c.name} ({c.customerCode || c.code || 'CUST'})
+                                    {c.customerCode || c.code || 'CUST'} - {c.companyName || c.name}
                                 </option>
                             ))}
                         </select>
@@ -1052,6 +1059,16 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                                 </p>
                             </div>
                         )}
+
+                        {/* Packing Slip & Roll Specifications (Repeatable Multi-Rolls) */}
+                        <div className="pt-2">
+                            <PackingSlipRollsSection
+                                rolls={rolls}
+                                onChange={setRolls}
+                                title="Job Order Roll Specifications"
+                                description="Specify fabric rolls associated with this job card / order if applicable."
+                            />
+                        </div>
 
                         {/* Purchase Order from Customer (Attachment) */}
                         <div className="space-y-2">

@@ -235,7 +235,7 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                                         key={`${item.grnId}_${item.rawMaterial._id}`}
                                         value={`${item.grnId}_${item.rawMaterial._id}`}
                                     >
-                                        {item.grnNumber} — {item.rawMaterial.name} ({item.remainingQuantity} {item.rawMaterial.uom || 'KG'} remaining of {item.receivedQuantity})
+                                        {item.grnNumber} — {item.rawMaterial.code ? `${item.rawMaterial.code} - ` : ''}{item.rawMaterial.name} ({item.remainingQuantity} {item.rawMaterial.uom || 'KG'} remaining of {item.receivedQuantity})
                                     </option>
                                 ))}
                                 <option value="DIRECT">-- Direct Inward / No GRN --</option>
@@ -256,7 +256,7 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                                     <option value="">-- Select Raw Material --</option>
                                     {rawMaterials.map((rm) => (
                                         <option key={rm._id} value={rm._id}>
-                                            {rm.name} ({rm.code || rm.uom?.name || 'KG'})
+                                            {rm.code ? `${rm.code} - ` : ''}{rm.name} ({rm.uom?.name || rm.uom?.symbol || 'KG'})
                                         </option>
                                     ))}
                                 </select>
@@ -314,7 +314,7 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                                 <option value="">-- Select Pending Work Order --</option>
                                 {pendingOutbound.map((wo) => (
                                     <option key={wo.workOrderId} value={wo.workOrderId}>
-                                        {wo.workOrderNumber} — {wo.finishedGood.name} ({wo.remainingQuantity} remaining of {wo.totalProduced})
+                                        {wo.workOrderNumber} — {wo.finishedGood?.code ? `${wo.finishedGood.code} - ` : ''}{wo.finishedGood?.name} ({wo.remainingQuantity} remaining of {wo.totalProduced})
                                     </option>
                                 ))}
                             </select>

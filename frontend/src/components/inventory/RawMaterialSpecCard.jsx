@@ -34,11 +34,6 @@ export default function RawMaterialSpecCard({ rawMaterial, onEdit }) {
                     <span className="text-[11px] font-mono font-bold text-text-muted uppercase tracking-wider">
                         {code}
                     </span>
-                    {rawMaterial.rollNumber && (
-                        <span className="text-[10px] font-mono font-bold bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.5 rounded">
-                            Roll: {rawMaterial.rollNumber}
-                        </span>
-                    )}
                 </div>
 
                 {onEdit && (

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Truck, RefreshCw, CheckCircle2 } from 'lucide-react';
 import SlideOverPanel from '../shared/SlideOverPanel';
+import PackingSlipRollsSection, { createEmptyRoll } from '../shared/PackingSlipRollsSection';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
@@ -13,6 +14,12 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
 
     // Items array mapping PO items
     const [grnItems, setGrnItems] = useState([]);
+    // Multiple rolls array to manage incoming rolls
+    const [inwardRolls, setInwardRolls] = useState([
+        { rollNo: '', length: '', width: '', grossWeight: '', netWeight: '', qtyKgs: '', qtyPcs: '' }
+    ]);
+    const rolls = inwardRolls;
+    const setRolls = setInwardRolls;
 
     const [activePoDetails, setActivePoDetails] = useState(null);
 
@@ -22,6 +29,9 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
         if (isOpen && poId) {
             setIsLoadingLocs(true);
             setNotes('');
+            setInwardRolls([
+                { rollNo: '', length: '', width: '', grossWeight: '', netWeight: '', qtyKgs: '', qtyPcs: '' }
+            ]);
 
             // Fetch receiving locations & fresh PO details in parallel
             Promise.all([
@@ -68,6 +78,9 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
         } else {
             setActivePoDetails(null);
             setGrnItems([]);
+            setInwardRolls([
+                { rollNo: '', length: '', width: '', grossWeight: '', netWeight: '', qtyKgs: '', qtyPcs: '' }
+            ]);
         }
     }, [isOpen, po?._id]);
 
@@ -130,6 +143,60 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
             return;
         }
 
+        // Validate Packing Slip & Roll Specifications - Mandatory
+        if (!inwardRolls || inwardRolls.length === 0) {
+            toast.error('At least one Roll Specification is required. Please fill in the packing slip roll details.');
+            return;
+        }
+
+        const validRolls = [];
+        for (let rIdx = 0; rIdx < inwardRolls.length; rIdx++) {
+            const r = inwardRolls[rIdx];
+            const rollNumberVal = (r.rollNumber || r.rollNo || '').trim();
+            if (!rollNumberVal) {
+                toast.error(`Roll Number is required for Roll #${rIdx + 1}.`);
+                return;
+            }
+
+            const gw = Number(r.grossWeight);
+            const nw = Number(r.netWeight);
+            if (!isNaN(gw) && !isNaN(nw) && gw > 0 && nw > gw) {
+                toast.error(`Roll #${rIdx + 1}: Net Weight (${nw} kg) cannot exceed Gross Weight (${gw} kg).`);
+                return;
+            }
+
+            const lenVal = (r.fabricLength !== undefined && r.fabricLength !== '' && r.fabricLength !== null)
+                ? Number(r.fabricLength)
+                : ((r.length !== undefined && r.length !== '' && r.length !== null) ? Number(r.length) : null);
+
+            const kgVal = (r.totalQuantityKg !== undefined && r.totalQuantityKg !== '' && r.totalQuantityKg !== null)
+                ? Number(r.totalQuantityKg)
+                : ((r.qtyKgs !== undefined && r.qtyKgs !== '' && r.qtyKgs !== null) ? Number(r.qtyKgs) : null);
+
+            const pcsVal = (r.totalQuantityPcs !== undefined && r.totalQuantityPcs !== '' && r.totalQuantityPcs !== null)
+                ? Number(r.totalQuantityPcs)
+                : ((r.qtyPcs !== undefined && r.qtyPcs !== '' && r.qtyPcs !== null) ? Number(r.qtyPcs) : null);
+
+            validRolls.push({
+                rollNumber: rollNumberVal,
+                rollNo: rollNumberVal,
+                fabricLength: lenVal,
+                length: lenVal,
+                width: r.width !== '' && r.width !== null && r.width !== undefined ? Number(r.width) : null,
+                grossWeight: r.grossWeight !== '' && r.grossWeight !== null && r.grossWeight !== undefined ? Number(r.grossWeight) : null,
+                netWeight: r.netWeight !== '' && r.netWeight !== null && r.netWeight !== undefined ? Number(r.netWeight) : null,
+                totalQuantityKg: kgVal,
+                qtyKgs: kgVal,
+                totalQuantityPcs: pcsVal,
+                qtyPcs: pcsVal
+            });
+        }
+
+        if (validRolls.length === 0) {
+            toast.error('Please enter at least one roll with a valid Roll Number.');
+            return;
+        }
+
         try {
             setIsSubmitting(true);
 
@@ -137,7 +204,8 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                 purchaseOrder: targetPoId,
                 receivingLocation,
                 notes: notes.trim() || undefined,
-                items: validItems
+                items: validItems,
+                rolls: validRolls
             };
 
             const res = await axiosInstance.post('/grns', payload);
@@ -200,7 +268,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                             <option value="">-- Select Receiving Location --</option>
                             {locations.map((loc) => (
                                 <option key={loc._id} value={loc._id}>
-                                    {loc.name} ({loc.type || 'Warehouse'})
+                                    {loc.code ? `${loc.code} - ` : ''}{loc.name} ({loc.type || 'Warehouse'})
                                 </option>
                             ))}
                         </select>
@@ -264,6 +332,15 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                         ))}
                     </div>
                 </div>
+
+                {/* Packing Slip & Roll Specifications (Multi-Roll Repeatable Section) */}
+                <PackingSlipRollsSection
+                    rolls={rolls}
+                    onChange={setRolls}
+                    title="Packing Slip & Roll Specifications"
+                    subtitle="Record multiple rolls inwarded with this purchase"
+                    required={true}
+                />
 
                 {/* Inward Notes */}
                 <div>

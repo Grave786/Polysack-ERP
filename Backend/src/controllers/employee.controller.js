@@ -44,7 +44,19 @@ const createEmployee = async (req, res) => {
         }
 
         delete req.body.tenant;
-        delete req.body.employeeCode;
+
+        let employeeCode = (req.body.employeeCode || req.body.code || '').trim().toUpperCase();
+        if (employeeCode) {
+            const existingEmp = await Employee.findOne({ tenant: tenantId, employeeCode });
+            if (existingEmp) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Employee Code '${employeeCode}' already exists in your organization.`
+                });
+            }
+        } else {
+            employeeCode = await generateEmployeeCode(tenantId);
+        }
 
         const {
             name,
@@ -94,7 +106,7 @@ const createEmployee = async (req, res) => {
             }
         }
 
-        const employeeCode = await generateEmployeeCode(tenantId);
+        // Employee code was validated/resolved above
 
         const employee = new Employee({
             tenant: tenantId,
@@ -351,7 +363,6 @@ const updateEmployee = async (req, res) => {
         }
 
         delete req.body.tenant;
-        delete req.body.employeeCode;
 
         const employee = await Employee.findOne({ _id: req.params.id, tenant: tenantId });
         if (!employee) {
@@ -359,6 +370,18 @@ const updateEmployee = async (req, res) => {
                 success: false,
                 message: 'Employee not found.'
             });
+        }
+
+        const newEmpCode = (req.body.employeeCode || req.body.code || '').trim().toUpperCase();
+        if (newEmpCode && newEmpCode !== employee.employeeCode) {
+            const existing = await Employee.findOne({ tenant: tenantId, employeeCode: newEmpCode, _id: { $ne: employee._id } });
+            if (existing) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Employee Code '${newEmpCode}' already exists in your organization.`
+                });
+            }
+            employee.employeeCode = newEmpCode;
         }
 
         const {

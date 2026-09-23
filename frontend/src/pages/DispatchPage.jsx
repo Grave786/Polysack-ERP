@@ -518,7 +518,7 @@ export default function DispatchPage() {
                                 >
                                     {locations.map((loc) => (
                                         <option key={loc._id} value={loc._id}>
-                                            {loc.name} ({loc.code})
+                                            {loc.code ? `${loc.code} - ` : ''}{loc.name}
                                         </option>
                                     ))}
                                 </select>

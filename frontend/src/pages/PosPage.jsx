@@ -520,7 +520,7 @@ export default function PosPage() {
                                     ) : (
                                         customers.map((c) => (
                                             <option key={c._id} value={c._id}>
-                                                {c.companyName || c.contactPersonName} ({c.gstin || 'No GSTIN'})
+                                                {c.code || c.customerCode || 'CUST'} - {c.companyName || c.contactPersonName}{c.gstin ? ` (${c.gstin})` : ''}
                                             </option>
                                         ))
                                     )}

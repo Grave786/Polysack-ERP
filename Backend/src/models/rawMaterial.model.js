@@ -113,40 +113,6 @@ const RawMaterialSchema = new mongoose.Schema({
         trim: true,
         default: ''
     },
-    // Packing Slip & Roll Specifications
-    rollNumber: {
-        type: String,
-        trim: true,
-        maxlength: [25, 'Roll Number cannot exceed 25 characters']
-    },
-    grossWeight: {
-        type: Number,
-        default: null,
-        min: [0.01, 'Gross Weight must be at least 0.01 Kg'],
-        max: [10000, 'Gross Weight cannot exceed 10000 Kg']
-    },
-    netWeight: {
-        type: Number,
-        default: null,
-        min: [0.01, 'Net Weight must be at least 0.01 Kg'],
-        max: [10000, 'Net Weight cannot exceed 10000 Kg']
-    },
-    fabricLength: {
-        type: Number,
-        default: null,
-        min: [1, 'Fabric Length must be at least 1 Meter'],
-        max: [50000, 'Fabric Length cannot exceed 50000 Meters']
-    },
-    totalQuantityKg: {
-        type: Number,
-        default: null,
-        min: [0, 'Total quantity in Kgs cannot be negative']
-    },
-    totalQuantityPcs: {
-        type: Number,
-        default: null,
-        min: [0, 'Total quantity in Pcs cannot be negative']
-    },
     hsnCode: {
         type: String,
         trim: true,

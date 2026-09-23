@@ -47,12 +47,6 @@ const createRawMaterial = async (req, res) => {
             threadColour,
             fabricAverage,
             fabricSize,
-            rollNumber,
-            grossWeight,
-            netWeight,
-            fabricLength,
-            totalQuantityKg,
-            totalQuantityPcs,
             reorderLevel,
             pricePerUnit,
             isActive
@@ -64,52 +58,6 @@ const createRawMaterial = async (req, res) => {
                 success: false,
                 message: 'Please provide all required fields: code, name, category, and uom.'
             });
-        }
-
-        if (!rollNumber || !String(rollNumber).trim()) {
-            return res.status(400).json({
-                success: false,
-                message: 'Roll Number is required'
-            });
-        }
-
-        let parsedGrossWeight = null;
-        if (grossWeight !== undefined && grossWeight !== '' && grossWeight !== null) {
-            parsedGrossWeight = Number(grossWeight);
-            if (isNaN(parsedGrossWeight) || parsedGrossWeight < 0.01 || parsedGrossWeight > 10000) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Gross Weight must be between 0.01 and 10000 Kg'
-                });
-            }
-        }
-
-        let parsedNetWeight = null;
-        if (netWeight !== undefined && netWeight !== '' && netWeight !== null) {
-            parsedNetWeight = Number(netWeight);
-            if (isNaN(parsedNetWeight) || parsedNetWeight < 0.01 || parsedNetWeight > 10000) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Net Weight must be between 0.01 and 10000 Kg'
-                });
-            }
-            if (parsedGrossWeight !== null && parsedNetWeight > parsedGrossWeight) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Net Weight cannot exceed Gross Weight'
-                });
-            }
-        }
-
-        let parsedFabricLength = null;
-        if (fabricLength !== undefined && fabricLength !== '' && fabricLength !== null) {
-            parsedFabricLength = Number(fabricLength);
-            if (isNaN(parsedFabricLength) || parsedFabricLength < 1 || parsedFabricLength > 50000) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Fabric Length must be between 1 and 50000 Meters'
-                });
-            }
         }
 
         const formattedCode = String(code).trim().toUpperCase();
@@ -195,12 +143,6 @@ const createRawMaterial = async (req, res) => {
             threadColour: threadColour ? String(threadColour).trim() : '',
             fabricAverage: fabricAverage ? String(fabricAverage).trim() : '',
             fabricSize: fabricSize ? String(fabricSize).trim() : '',
-            rollNumber: String(rollNumber).trim().slice(0, 25),
-            grossWeight: parsedGrossWeight,
-            netWeight: parsedNetWeight,
-            fabricLength: parsedFabricLength,
-            totalQuantityKg: totalQuantityKg !== undefined && totalQuantityKg !== '' && totalQuantityKg !== null ? Number(totalQuantityKg) : null,
-            totalQuantityPcs: totalQuantityPcs !== undefined && totalQuantityPcs !== '' && totalQuantityPcs !== null ? Number(totalQuantityPcs) : null,
             reorderLevel: reorderLevel !== undefined ? Number(reorderLevel) : 0,
             pricePerUnit: pricePerUnit !== undefined ? Number(pricePerUnit) : 0,
             isActive: isActive !== undefined ? isActive : true,
@@ -358,12 +300,8 @@ const exportRawMaterials = async (req, res) => {
 
         const fields = [
             { label: 'Item Code', key: 'code' },
-            { label: 'Roll Number', key: 'rollNumber' },
             { label: 'Material Name', key: 'name' },
             { label: 'Description', key: 'materialDescription' },
-            { label: 'Gross Weight (Kg)', key: 'grossWeight' },
-            { label: 'Net Weight (Kg)', key: 'netWeight' },
-            { label: 'Fabric Length (m)', key: 'fabricLength' },
             { label: 'Quality Fabric', key: 'materialQualityFabric' },
             { label: 'Quality Bags', key: 'materialQualityBags' },
             { label: 'Lamination Type', key: 'laminationType' },
@@ -372,8 +310,6 @@ const exportRawMaterials = async (req, res) => {
             { label: 'Thread Colour', key: 'threadColour' },
             { label: 'Fabric Size', key: 'fabricSize' },
             { label: 'Fabric Average', key: 'fabricAverage' },
-            { label: 'Total Qty (Kg)', key: 'totalQuantityKg' },
-            { label: 'Total Qty (Pcs)', key: 'totalQuantityPcs' },
             { label: 'Category', key: (r) => (typeof r.category === 'object' ? r.category?.name : r.category) || '' },
             { label: 'UOM', key: (r) => (typeof r.uom === 'object' ? r.uom?.symbol || r.uom?.name : r.uom) || 'kg' },
             { label: 'Reorder Level', key: (r) => r.reorderLevel || 0 },
@@ -484,12 +420,6 @@ const updateRawMaterial = async (req, res) => {
             threadColour,
             fabricAverage,
             fabricSize,
-            rollNumber,
-            grossWeight,
-            netWeight,
-            fabricLength,
-            totalQuantityKg,
-            totalQuantityPcs,
             reorderLevel,
             pricePerUnit,
             isActive
@@ -603,68 +533,6 @@ const updateRawMaterial = async (req, res) => {
         if (threadColour !== undefined) rawMaterial.threadColour = String(threadColour).trim();
         if (fabricAverage !== undefined) rawMaterial.fabricAverage = String(fabricAverage).trim();
         if (fabricSize !== undefined) rawMaterial.fabricSize = String(fabricSize).trim();
-
-        if (rollNumber !== undefined) {
-            if (!rollNumber || !String(rollNumber).trim()) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Roll Number is required'
-                });
-            }
-            rawMaterial.rollNumber = String(rollNumber).trim().slice(0, 25);
-        }
-
-        if (grossWeight !== undefined || netWeight !== undefined) {
-            let nextGW = grossWeight !== undefined ? ((grossWeight === '' || grossWeight === null) ? null : Number(grossWeight)) : rawMaterial.grossWeight;
-            let nextNW = netWeight !== undefined ? ((netWeight === '' || netWeight === null) ? null : Number(netWeight)) : rawMaterial.netWeight;
-
-            if (nextGW !== null && nextGW !== undefined) {
-                if (isNaN(nextGW) || nextGW < 0.01 || nextGW > 10000) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Gross Weight must be between 0.01 and 10000 Kg'
-                    });
-                }
-            }
-            if (nextNW !== null && nextNW !== undefined) {
-                if (isNaN(nextNW) || nextNW < 0.01 || nextNW > 10000) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Net Weight must be between 0.01 and 10000 Kg'
-                    });
-                }
-            }
-            if (nextGW !== null && nextNW !== null && nextGW !== undefined && nextNW !== undefined && nextNW > nextGW) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Net Weight cannot exceed Gross Weight'
-                });
-            }
-            if (grossWeight !== undefined) rawMaterial.grossWeight = nextGW;
-            if (netWeight !== undefined) rawMaterial.netWeight = nextNW;
-        }
-
-        if (fabricLength !== undefined) {
-            if (fabricLength === '' || fabricLength === null) {
-                rawMaterial.fabricLength = null;
-            } else {
-                const fl = Number(fabricLength);
-                if (isNaN(fl) || fl < 1 || fl > 50000) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Fabric Length must be between 1 and 50000 Meters'
-                    });
-                }
-                rawMaterial.fabricLength = fl;
-            }
-        }
-
-        if (totalQuantityKg !== undefined) {
-            rawMaterial.totalQuantityKg = (totalQuantityKg === '' || totalQuantityKg === null) ? null : Number(totalQuantityKg);
-        }
-        if (totalQuantityPcs !== undefined) {
-            rawMaterial.totalQuantityPcs = (totalQuantityPcs === '' || totalQuantityPcs === null) ? null : Number(totalQuantityPcs);
-        }
 
         if (reorderLevel !== undefined) rawMaterial.reorderLevel = Number(reorderLevel);
         if (pricePerUnit !== undefined) rawMaterial.pricePerUnit = Number(pricePerUnit);

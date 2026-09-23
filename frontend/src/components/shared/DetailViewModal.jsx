@@ -439,6 +439,7 @@ const MASTER_SCHEMAS = {
                 { label: 'Machine Code', key: (r) => r.code || r.machineCode, type: 'code' },
                 { label: 'Machine Name', key: 'name', span: 2 },
                 { label: 'Plant Section', key: 'section' },
+                { label: 'Plant Location', key: (r) => r.plantLocation || '-' },
                 { label: 'Operational Status', key: 'status', type: 'status' },
                 { label: 'Record Active State', key: 'isActive', type: 'boolean' }
             ]
@@ -448,7 +449,7 @@ const MASTER_SCHEMAS = {
             fields: [
                 { label: 'Capacity Per Hour', key: (r) => r.capacityPerHour ? `${r.capacityPerHour} Kg/hr` : (r.capacity || '-') },
                 { label: 'Machine Efficiency', key: (r) => r.efficiency !== undefined && r.efficiency !== null ? `${r.efficiency}%` : '-' },
-                { label: 'Current Operator', key: 'currentOperator' },
+                { label: 'Current Operator', key: (r) => (typeof r.currentOperator === 'object' && r.currentOperator !== null ? (r.currentOperator.name ? `${r.currentOperator.employeeCode ? `${r.currentOperator.employeeCode} - ` : ''}${r.currentOperator.name}` : '-') : (r.currentOperator || '-')) },
                 { label: 'Maintenance Notes', key: 'maintenanceNotes', span: 2 }
             ]
         },
@@ -487,17 +488,6 @@ const MASTER_SCHEMAS = {
                 { label: 'Quality-Thread-Yarn', key: 'qualityThreadYarn' },
                 { label: 'Fabric Size (Fabric Width)', key: 'fabricSize' },
                 { label: 'Fabric Average', key: 'fabricAverage', span: 2 }
-            ]
-        },
-        {
-            title: 'Packing Slip & Roll Specifications',
-            fields: [
-                { label: 'Roll Number', key: 'rollNumber', type: 'code' },
-                { label: 'Fabric Length', key: (r) => r.fabricLength !== null && r.fabricLength !== undefined ? `${r.fabricLength} Meters` : '-' },
-                { label: 'Gross Weight (G.W.)', key: (r) => r.grossWeight !== null && r.grossWeight !== undefined ? `${r.grossWeight} Kg` : '-' },
-                { label: 'Net Weight (N.W.)', key: (r) => r.netWeight !== null && r.netWeight !== undefined ? `${r.netWeight} Kg` : '-' },
-                { label: 'Total Quantity in Kgs', key: (r) => r.totalQuantityKg !== null && r.totalQuantityKg !== undefined ? `${r.totalQuantityKg} Kg` : '-' },
-                { label: 'Total Quantity in Pcs', key: (r) => r.totalQuantityPcs !== null && r.totalQuantityPcs !== undefined ? `${r.totalQuantityPcs} Pcs` : '-' }
             ]
         },
         {
@@ -623,7 +613,7 @@ const MASTER_SCHEMAS = {
                 { label: 'Completed Bags', key: (r) => `${(r.completedQuantity || 0).toLocaleString('en-IN')} Bags` },
                 { label: 'Overall Progress', key: (r) => `${r.progressPercentage || 0}%` },
                 { label: 'Assigned Machine', key: (r) => r.assignedMachine?.name || r.assignedMachine?.code || 'None' },
-                { label: 'Machine Operator', key: (r) => r.assignedMachine?.currentOperator || '-' }
+                { label: 'Machine Operator', key: (r) => (typeof r.assignedMachine?.currentOperator === 'object' && r.assignedMachine?.currentOperator !== null ? (r.assignedMachine.currentOperator.name ? `${r.assignedMachine.currentOperator.employeeCode ? `${r.assignedMachine.currentOperator.employeeCode} - ` : ''}${r.assignedMachine.currentOperator.name}` : '-') : (r.assignedMachine?.currentOperator || '-')) }
             ]
         },
         {
@@ -665,6 +655,45 @@ const MASTER_SCHEMAS = {
                     type: 'date'
                 }
             ]
+        },
+        {
+            title: 'Packing Slip & Roll Specifications',
+            renderCustom: (record) => {
+                const rolls = record.jobOrderDetails?.rolls || [];
+                if (!rolls.length) return null;
+                return (
+                    <div className="overflow-x-auto border border-border rounded-lg">
+                        <table className="w-full text-xs text-left">
+                            <thead className="bg-app-bg text-text-muted uppercase text-[10px] tracking-wider border-b border-border">
+                                <tr>
+                                    <th className="px-3 py-2">#</th>
+                                    <th className="px-3 py-2">Roll No.</th>
+                                    <th className="px-3 py-2">Fabric Length (M)</th>
+                                    <th className="px-3 py-2">Width (In)</th>
+                                    <th className="px-3 py-2">G.W. (Kg)</th>
+                                    <th className="px-3 py-2">N.W. (Kg)</th>
+                                    <th className="px-3 py-2">Total Qty (Kg)</th>
+                                    <th className="px-3 py-2">Total Qty (Pcs)</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border font-mono">
+                                {rolls.map((roll, idx) => (
+                                    <tr key={idx} className="hover:bg-app-bg/50">
+                                        <td className="px-3 py-2 text-text-muted">{idx + 1}</td>
+                                        <td className="px-3 py-2 font-bold text-text-main">{roll.rollNumber || '-'}</td>
+                                        <td className="px-3 py-2">{roll.fabricLength != null ? `${roll.fabricLength} m` : '-'}</td>
+                                        <td className="px-3 py-2">{roll.width != null ? `${roll.width}"` : '-'}</td>
+                                        <td className="px-3 py-2">{roll.grossWeight != null ? `${roll.grossWeight} kg` : '-'}</td>
+                                        <td className="px-3 py-2">{roll.netWeight != null ? `${roll.netWeight} kg` : '-'}</td>
+                                        <td className="px-3 py-2">{roll.totalQuantityKg != null ? `${roll.totalQuantityKg} kg` : '-'}</td>
+                                        <td className="px-3 py-2">{roll.totalQuantityPcs != null ? `${roll.totalQuantityPcs} pcs` : '-'}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            }
         },
         {
             title: 'Purchase Order Attachments (Client PO)',

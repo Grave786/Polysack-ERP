@@ -234,6 +234,15 @@ const createWorkOrder = async (req, res) => {
         // Step B: Build optional Job Order / Job Card details
         const rawJobDetails = incomingJobDetails || {};
         const jobOrderDetails = {
+            rolls: Array.isArray(rawJobDetails.rolls) ? rawJobDetails.rolls.filter(r => r && r.rollNumber && String(r.rollNumber).trim()).map(r => ({
+                rollNumber: String(r.rollNumber).trim().slice(0, 50),
+                fabricLength: r.fabricLength !== undefined && r.fabricLength !== '' && r.fabricLength !== null ? Number(r.fabricLength) : null,
+                width: r.width !== undefined && r.width !== '' && r.width !== null ? Number(r.width) : null,
+                grossWeight: r.grossWeight !== undefined && r.grossWeight !== '' && r.grossWeight !== null ? Number(r.grossWeight) : null,
+                netWeight: r.netWeight !== undefined && r.netWeight !== '' && r.netWeight !== null ? Number(r.netWeight) : null,
+                totalQuantityKg: r.totalQuantityKg !== undefined && r.totalQuantityKg !== '' && r.totalQuantityKg !== null ? Number(r.totalQuantityKg) : null,
+                totalQuantityPcs: r.totalQuantityPcs !== undefined && r.totalQuantityPcs !== '' && r.totalQuantityPcs !== null ? Number(r.totalQuantityPcs) : null
+            })) : [],
             orderDate: rawJobDetails.orderDate ? new Date(rawJobDetails.orderDate) : new Date(),
             productCategory: rawJobDetails.productCategory || 'Print',
             jobDescriptionPrintColours: rawJobDetails.jobDescriptionPrintColours || '',

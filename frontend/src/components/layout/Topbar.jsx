@@ -34,23 +34,12 @@ export default function Topbar({ onToggleSidebar }) {
     const navigate = useNavigate();
     const user = useAuthStore((state) => state.user);
     const logout = useAuthStore((state) => state.logout);
-    const currentFacility = useAuthStore((state) => state.currentFacility);
-    const setCurrentFacility = useAuthStore((state) => state.setCurrentFacility);
-
-    // Dropdown States
-    const [showFacilityDropdown, setShowFacilityDropdown] = useState(false);
-    const [showNotificationDropdown, setShowNotificationDropdown] = useState(false);
-    const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
-
-    const [locations, setLocations] = useState([]);
-    const [isLocationsLoading, setIsLocationsLoading] = useState(false);
 
     // System Notifications State (Low Stock & PO Approvals)
     const [notifications, setNotifications] = useState([]);
     const [unreadCount, setUnreadCount] = useState(0);
     const [isApproving, setIsApproving] = useState(null);
 
-    const facilityRef = useRef(null);
     const notificationRef = useRef(null);
     const profileDropdownRef = useRef(null);
 
@@ -58,7 +47,7 @@ export default function Topbar({ onToggleSidebar }) {
     const roleDisplayName = getRoleDisplayName(user);
     const userEmail = user?.email || 'user@polysack.com';
 
-    // Detect Super Admin to hide tenant-only elements like facility selector and tenant notifications
+    // Detect Super Admin to hide tenant-only elements like tenant notifications
     const isSuperAdmin = checkIsSuperAdmin(user);
 
     // Module permission visibility checks
@@ -149,9 +138,6 @@ export default function Topbar({ onToggleSidebar }) {
     // Close popovers on outside click
     useEffect(() => {
         const handleClickOutside = (e) => {
-            if (facilityRef.current && !facilityRef.current.contains(e.target)) {
-                setShowFacilityDropdown(false);
-            }
             if (notificationRef.current && !notificationRef.current.contains(e.target)) {
                 setShowNotificationDropdown(false);
             }
@@ -163,33 +149,9 @@ export default function Topbar({ onToggleSidebar }) {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    const handleToggleFacilityDropdown = async () => {
-        const nextState = !showFacilityDropdown;
-        setShowFacilityDropdown(nextState);
-
-        if (nextState && locations.length === 0) {
-            setIsLocationsLoading(true);
-            try {
-                const res = await axiosInstance.get('/locations', { params: { isActive: true } });
-                if (res.data?.success && Array.isArray(res.data.data)) {
-                    setLocations(res.data.data);
-                } else {
-                    setLocations([]);
-                }
-            } catch (err) {
-                console.warn('Could not fetch locations for switcher:', err.message);
-                setLocations([]);
-            } finally {
-                setIsLocationsLoading(false);
-            }
-        }
-    };
-
-    const handleSelectLocation = (loc) => {
-        const facilityName = typeof loc === 'object' ? loc.name : loc;
-        setCurrentFacility(facilityName);
-        setShowFacilityDropdown(false);
-    };
+    // Dropdown States
+    const [showNotificationDropdown, setShowNotificationDropdown] = useState(false);
+    const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
 
     const handleApprovePo = async (poId, poNum) => {
         try {
@@ -207,7 +169,6 @@ export default function Topbar({ onToggleSidebar }) {
         }
     };
 
-    const displayFacilityName = currentFacility || user?.facilityName || 'Vapi Unit #1 (GIDC Phase 3)';
     const notificationCount = unreadCount;
 
     return (
@@ -239,52 +200,6 @@ export default function Topbar({ onToggleSidebar }) {
 
             {/* Right Group */}
             <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-                {/* Facility Selector (Only rendered for regular Tenant users, hidden for Super Admin) */}
-                {!isSuperAdmin && (
-                    <div className="relative" ref={facilityRef}>
-                        <button
-                            type="button"
-                            className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full bg-sidebar-hover/80 border border-sidebar-hover text-xs font-semibold text-sidebar-text-active hover:border-primary/40 transition-all cursor-pointer shadow-2xs select-none"
-                            onClick={handleToggleFacilityDropdown}
-                        >
-                            <Building2 size={13} className="text-primary shrink-0" />
-                            <span className="truncate max-w-[130px]">{displayFacilityName}</span>
-                            <ChevronDown size={12} className="text-sidebar-text ml-0.5 shrink-0" />
-                        </button>
-
-                        {showFacilityDropdown && (
-                            <div className="absolute right-0 mt-2 w-64 bg-card-bg border border-border shadow-2xl rounded-xl z-50 p-3 font-sans text-xs text-text-main">
-                                <div className="text-[10px] font-bold text-text-muted mb-2 uppercase tracking-wider px-1">
-                                    SELECT OPERATIONAL FACILITY
-                                </div>
-                                {isLocationsLoading ? (
-                                    <div className="flex items-center justify-center py-6 text-text-muted gap-2">
-                                        <Loader2 className="animate-spin text-primary" size={16} />
-                                        <span>Loading units...</span>
-                                    </div>
-                                ) : (
-                                    <div className="space-y-1">
-                                        {['Vapi Unit #1 (GIDC Phase 3)', 'Surat Extrusion Plant #2', 'Ahmedabad Lamination Facility'].map((unit) => {
-                                            const isSelected = displayFacilityName === unit;
-                                            return (
-                                                <div
-                                                    key={unit}
-                                                    onClick={() => handleSelectLocation(unit)}
-                                                    className={`px-3 py-2 rounded-lg cursor-pointer flex items-center justify-between transition-colors ${isSelected ? 'bg-primary/10 text-primary font-bold' : 'hover:bg-app-bg text-text-main'
-                                                        }`}
-                                                >
-                                                    <span className="truncate">{unit}</span>
-                                                    {isSelected && <Check size={14} className="text-primary shrink-0" />}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
-                )}
-
                 {/* Role Badge */}
                 <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/15 border border-primary/40 text-primary text-xs font-bold shadow-2xs select-none">
                     <ShieldCheck size={13} />

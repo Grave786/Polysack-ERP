@@ -166,7 +166,7 @@ export default function CreateMaterialReceiptPanel({ isOpen, onClose, onSuccess 
         if (!isOpen) return;
         setForm(EMPTY_FORM);
 
-        axiosInstance.get('/customers?limit=200').then((res) => {
+        axiosInstance.get('/customers?isActive=true&limit=200').then((res) => {
             if (res.data?.success && Array.isArray(res.data.data)) {
                 setCustomers(res.data.data);
             }
@@ -312,7 +312,7 @@ export default function CreateMaterialReceiptPanel({ isOpen, onClose, onSuccess 
                                     <option value="">-- Select Customer --</option>
                                     {customers.map((c) => (
                                         <option key={c._id} value={c._id}>
-                                            {c.companyName || c.name} {c.customerCode ? `(${c.customerCode})` : ''}
+                                            {c.customerCode || c.code || 'CUST'} - {c.companyName || c.name}
                                         </option>
                                     ))}
                                 </select>

@@ -212,7 +212,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                             <option value="">-- Select Supplier --</option>
                             {suppliers.map((s) => (
                                 <option key={s._id} value={s._id}>
-                                    {s.companyName || s.name} ({s.contactPersonName || 'Supplier'})
+                                    {s.code || s.supplierCode || 'SUPP'} - {s.companyName || s.name}
                                 </option>
                             ))}
                         </select>
@@ -259,7 +259,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                             <option value="">-- Select Location --</option>
                             {locations.map((loc) => (
                                 <option key={loc._id} value={loc._id}>
-                                    {loc.name}
+                                    {loc.code ? `${loc.code} - ` : ''}{loc.name}
                                 </option>
                             ))}
                         </select>

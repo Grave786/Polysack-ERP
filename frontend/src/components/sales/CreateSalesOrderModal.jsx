@@ -338,7 +338,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                             </option>
                             {customers.map((c) => (
                                 <option key={c._id} value={c._id}>
-                                    {c.companyName || c.name} {c.code ? `(${c.code})` : ''} {c.gstin ? `— GSTIN: ${c.gstin}` : ''}
+                                    {c.code || c.customerCode || 'CUST'} - {c.companyName || c.name}{c.gstin ? ` — GSTIN: ${c.gstin}` : ''}
                                 </option>
                             ))}
                         </select>

@@ -139,10 +139,24 @@ export default function MasterDataPage() {
                 { header: 'Machine Name', accessor: 'name', sortable: true },
                 { header: 'Section', accessor: 'section' },
                 {
+                    header: 'Plant Location',
+                    render: (row) => row.plantLocation || '-'
+                },
+                {
                     header: 'Capacity / Hr',
                     render: (row) => row.capacityPerHour ? `${row.capacityPerHour} kg/hr` : (row.capacity || '-')
                 },
-                { header: 'Operator', accessor: 'currentOperator' },
+                {
+                    header: 'Operator',
+                    render: (row) => {
+                        if (!row.currentOperator) return '-';
+                        if (typeof row.currentOperator === 'object') {
+                            const code = row.currentOperator.employeeCode ? `${row.currentOperator.employeeCode} - ` : '';
+                            return `${code}${row.currentOperator.name || '-'}`;
+                        }
+                        return row.currentOperator;
+                    }
+                },
                 {
                     header: 'Efficiency (%)',
                     render: (row) => row.efficiency !== undefined ? `${row.efficiency}%` : '-'
@@ -191,14 +205,6 @@ export default function MasterDataPage() {
                 {
                     header: 'Item Code',
                     render: (row) => row.code || row.itemCode || '-'
-                },
-                {
-                    header: 'Roll No.',
-                    render: (row) => row.rollNumber ? (
-                        <span className="font-mono font-semibold text-text-main text-xs">
-                            {row.rollNumber}
-                        </span>
-                    ) : '-'
                 },
                 { header: 'Material Name', accessor: 'name', sortable: true },
                 {

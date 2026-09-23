@@ -75,6 +75,7 @@ const createGRN = async (req, res) => {
             purchaseOrder,
             receivedDate,
             items,
+            rolls,
             receivingLocation,
             notes
         } = req.body;
@@ -183,6 +184,33 @@ const createGRN = async (req, res) => {
             });
         }
 
+        const cleanedRolls = Array.isArray(rolls) ? rolls.filter(r => r && (r.rollNumber || r.rollNo) && String(r.rollNumber || r.rollNo).trim()).map(r => ({
+            rollNumber: String(r.rollNumber || r.rollNo).trim().slice(0, 50),
+            fabricLength: (r.fabricLength !== undefined && r.fabricLength !== '' && r.fabricLength !== null)
+                ? Number(r.fabricLength)
+                : ((r.length !== undefined && r.length !== '' && r.length !== null) ? Number(r.length) : null),
+            width: r.width !== undefined && r.width !== '' && r.width !== null ? Number(r.width) : null,
+            grossWeight: r.grossWeight !== undefined && r.grossWeight !== '' && r.grossWeight !== null ? Number(r.grossWeight) : null,
+            netWeight: r.netWeight !== undefined && r.netWeight !== '' && r.netWeight !== null ? Number(r.netWeight) : null,
+            totalQuantityKg: (r.totalQuantityKg !== undefined && r.totalQuantityKg !== '' && r.totalQuantityKg !== null)
+                ? Number(r.totalQuantityKg)
+                : ((r.qtyKgs !== undefined && r.qtyKgs !== '' && r.qtyKgs !== null) ? Number(r.qtyKgs) : null),
+            totalQuantityPcs: (r.totalQuantityPcs !== undefined && r.totalQuantityPcs !== '' && r.totalQuantityPcs !== null)
+                ? Number(r.totalQuantityPcs)
+                : ((r.qtyPcs !== undefined && r.qtyPcs !== '' && r.qtyPcs !== null) ? Number(r.qtyPcs) : null)
+        })) : [];
+
+        if (!cleanedRolls || cleanedRolls.length === 0) {
+            if (useTransaction && session) {
+                if (session.inTransaction()) await session.abortTransaction();
+                session.endSession();
+            }
+            return res.status(400).json({
+                success: false,
+                message: 'At least one roll entry with a valid Roll Number is required for GRN creation.'
+            });
+        }
+
         const grnNumber = await generateGrnNumber(tenantId);
 
         const grnDocs = await GRN.create([{
@@ -192,6 +220,7 @@ const createGRN = async (req, res) => {
             supplier: poDoc.supplier,
             receivedDate: receivedDate || new Date(),
             items: cleanedItems,
+            rolls: cleanedRolls,
             receivingLocation,
             notes,
             receivedBy: req.user._id || req.user.id

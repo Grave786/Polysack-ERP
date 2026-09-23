@@ -49,7 +49,7 @@ export default function CustomerCrmPage() {
         if (isInteractionDrawerOpen || isComplaintDrawerOpen) {
             setIsLoadingDropdowns(true);
             Promise.all([
-                axiosInstance.get('/customers?limit=100'),
+                axiosInstance.get('/customers?isActive=true&status=ACTIVE_CUSTOMER&limit=100'),
                 axiosInstance.get('/users?limit=100')
             ])
                 .then(([custRes, userRes]) => {
@@ -414,7 +414,7 @@ export default function CustomerCrmPage() {
                                 >
                                     {customers.map((c) => (
                                         <option key={c._id} value={c._id}>
-                                            {c.companyName} ({c.code || 'CUST'})
+                                            {c.code || c.customerCode || 'CUST'} - {c.companyName || c.name}
                                         </option>
                                     ))}
                                 </select>
@@ -565,7 +565,7 @@ export default function CustomerCrmPage() {
                                 >
                                     {customers.map((c) => (
                                         <option key={c._id} value={c._id}>
-                                            {c.companyName} ({c.code || 'CUST'})
+                                            {c.code || c.customerCode || 'CUST'} - {c.companyName || c.name}
                                         </option>
                                     ))}
                                 </select>

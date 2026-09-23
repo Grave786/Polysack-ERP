@@ -1,4 +1,6 @@
+const mongoose = require('mongoose');
 const Machine = require('../models/machine.model');
+const Employee = require('../models/employee.model');
 const UOM = require('../models/uom.model');
 const Location = require('../models/location.model');
 const { generateCsv, sendCsvResponse } = require('../utils/csvExport');
@@ -25,6 +27,7 @@ const createMachine = async (req, res) => {
             code,
             name,
             section,
+            plantLocation,
             capacityPerHour,
             capacityUnit,
             defaultLocation,
@@ -93,18 +96,48 @@ const createMachine = async (req, res) => {
             });
         }
 
-        const formattedSection = String(section || 'EXTRUSION').trim().toUpperCase();
-        const formattedStatus = String(status || 'AVAILABLE').trim().toUpperCase();
+        const formattedSection = String(section || 'Extrusion').trim();
+        const formattedStatus = String(status || 'Available').trim();
+
+        // Resolve currentOperator from Employee ObjectId or Employee Code / Name
+        let resolvedOperatorId = null;
+        if (currentOperator) {
+            if (mongoose.Types.ObjectId.isValid(currentOperator) && String(new mongoose.Types.ObjectId(currentOperator)) === String(currentOperator)) {
+                const emp = await Employee.findOne({ _id: currentOperator, tenant: tenantId });
+                if (emp) resolvedOperatorId = emp._id;
+            } else if (typeof currentOperator === 'string' && currentOperator.trim()) {
+                const emp = await Employee.findOne({
+                    tenant: tenantId,
+                    $or: [
+                        { employeeCode: currentOperator.trim().toUpperCase() },
+                        { name: currentOperator.trim() }
+                    ]
+                });
+                if (emp) resolvedOperatorId = emp._id;
+            }
+        }
+
+        let resolvedPlantLocation = plantLocation ? String(plantLocation).trim() : '';
+        let resolvedDefaultLocation = defaultLocation || null;
+
+        if (plantLocation && mongoose.Types.ObjectId.isValid(plantLocation)) {
+            const locDoc = await Location.findOne({ _id: plantLocation, tenant: tenantId });
+            if (locDoc) {
+                resolvedPlantLocation = locDoc.name;
+                resolvedDefaultLocation = locDoc._id;
+            }
+        }
 
         // 4. Create Machine
         const machine = new Machine({
             code: formattedCode,
             name: formattedName,
             section: formattedSection,
+            plantLocation: resolvedPlantLocation,
             capacityPerHour: capacityPerHour !== undefined ? Number(capacityPerHour) : undefined,
             capacityUnit: capacityUnit || null,
-            defaultLocation: defaultLocation || null,
-            currentOperator,
+            defaultLocation: resolvedDefaultLocation,
+            currentOperator: resolvedOperatorId,
             status: formattedStatus,
             efficiency: efficiency !== undefined ? Number(efficiency) : 0,
             isActive: isActive !== undefined ? isActive : true,
@@ -115,7 +148,8 @@ const createMachine = async (req, res) => {
 
         await machine.populate([
             { path: 'capacityUnit', select: 'name symbol type' },
-            { path: 'defaultLocation', select: 'name code type' }
+            { path: 'defaultLocation', select: 'name code type' },
+            { path: 'currentOperator', select: 'name employeeCode department' }
         ]);
 
         return res.status(201).json({
@@ -176,10 +210,20 @@ const getMachines = async (req, res) => {
         }
 
         if (search) {
+            const matchingEmployees = await Employee.find({
+                tenant: tenantId,
+                $or: [
+                    { employeeCode: { $regex: search, $options: 'i' } },
+                    { name: { $regex: search, $options: 'i' } }
+                ]
+            }).select('_id');
+            const empIds = matchingEmployees.map((e) => e._id);
+
             filter.$or = [
                 { name: { $regex: search, $options: 'i' } },
                 { code: { $regex: search, $options: 'i' } },
-                { currentOperator: { $regex: search, $options: 'i' } }
+                { section: { $regex: search, $options: 'i' } },
+                ...(empIds.length > 0 ? [{ currentOperator: { $in: empIds } }] : [])
             ];
         }
 
@@ -191,6 +235,7 @@ const getMachines = async (req, res) => {
             Machine.find(filter)
                 .populate('capacityUnit', 'name symbol type')
                 .populate('defaultLocation', 'name code type')
+                .populate('currentOperator', 'name employeeCode department')
                 .sort({ name: 1 })
                 .skip(skip)
                 .limit(limitNum),
@@ -243,21 +288,38 @@ const exportMachines = async (req, res) => {
             else filter.status = status;
         } else if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
         if (search) {
+            const matchingEmployees = await Employee.find({
+                tenant: tenantId,
+                $or: [
+                    { employeeCode: { $regex: search, $options: 'i' } },
+                    { name: { $regex: search, $options: 'i' } }
+                ]
+            }).select('_id');
+            const empIds = matchingEmployees.map((e) => e._id);
+
             filter.$or = [
                 { name: { $regex: search, $options: 'i' } },
                 { code: { $regex: search, $options: 'i' } },
-                { currentOperator: { $regex: search, $options: 'i' } }
+                { section: { $regex: search, $options: 'i' } },
+                ...(empIds.length > 0 ? [{ currentOperator: { $in: empIds } }] : [])
             ];
         }
 
-        const machines = await Machine.find(filter).sort({ name: 1 });
+        const machines = await Machine.find(filter)
+            .populate('currentOperator', 'name employeeCode')
+            .sort({ name: 1 });
 
         const fields = [
             { label: 'Machine Code', key: 'code' },
             { label: 'Machine Name', key: 'name' },
             { label: 'Section', key: (m) => m.section || '' },
             { label: 'Capacity Per Hour', key: (m) => m.capacityPerHour || '' },
-            { label: 'Operator', key: (m) => m.currentOperator || '' },
+            {
+                label: 'Operator',
+                key: (m) => (typeof m.currentOperator === 'object' && m.currentOperator
+                    ? `${m.currentOperator.employeeCode ? `${m.currentOperator.employeeCode} - ` : ''}${m.currentOperator.name}`
+                    : (m.currentOperator || ''))
+            },
             { label: 'Efficiency (%)', key: (m) => m.efficiency || 0 },
             { label: 'Status', key: (m) => m.status || 'AVAILABLE' },
             { label: 'Is Active', key: (m) => m.isActive !== false ? 'Active' : 'Inactive' }
@@ -291,7 +353,8 @@ const getMachineById = async (req, res) => {
 
         const machine = await Machine.findOne({ _id: req.params.id, tenant: tenantId })
             .populate('capacityUnit', 'name symbol type')
-            .populate('defaultLocation', 'name code type');
+            .populate('defaultLocation', 'name code type')
+            .populate('currentOperator', 'name employeeCode department');
 
         if (!machine) {
             return res.status(404).json({
@@ -349,6 +412,7 @@ const updateMachine = async (req, res) => {
             code,
             name,
             section,
+            plantLocation,
             capacityPerHour,
             capacityUnit,
             defaultLocation,
@@ -433,9 +497,40 @@ const updateMachine = async (req, res) => {
             }
         }
 
-        if (section) machine.section = section;
+        if (section) machine.section = String(section).trim();
+        if (plantLocation !== undefined) {
+            if (plantLocation && mongoose.Types.ObjectId.isValid(plantLocation)) {
+                const locDoc = await Location.findOne({ _id: plantLocation, tenant: tenantId });
+                if (locDoc) {
+                    machine.plantLocation = locDoc.name;
+                    machine.defaultLocation = locDoc._id;
+                } else {
+                    machine.plantLocation = String(plantLocation).trim();
+                }
+            } else {
+                machine.plantLocation = String(plantLocation).trim();
+            }
+        }
         if (capacityPerHour !== undefined) machine.capacityPerHour = Number(capacityPerHour);
-        if (currentOperator !== undefined) machine.currentOperator = currentOperator;
+        if (currentOperator !== undefined) {
+            let resolvedOperatorId = null;
+            if (currentOperator) {
+                if (mongoose.Types.ObjectId.isValid(currentOperator) && String(new mongoose.Types.ObjectId(currentOperator)) === String(currentOperator)) {
+                    const emp = await Employee.findOne({ _id: currentOperator, tenant: tenantId });
+                    if (emp) resolvedOperatorId = emp._id;
+                } else if (typeof currentOperator === 'string' && currentOperator.trim()) {
+                    const emp = await Employee.findOne({
+                        tenant: tenantId,
+                        $or: [
+                            { employeeCode: currentOperator.trim().toUpperCase() },
+                            { name: currentOperator.trim() }
+                        ]
+                    });
+                    if (emp) resolvedOperatorId = emp._id;
+                }
+            }
+            machine.currentOperator = resolvedOperatorId;
+        }
         if (status) machine.status = status;
         if (isActive !== undefined) machine.isActive = isActive;
 
@@ -443,7 +538,8 @@ const updateMachine = async (req, res) => {
 
         await machine.populate([
             { path: 'capacityUnit', select: 'name symbol type' },
-            { path: 'defaultLocation', select: 'name code type' }
+            { path: 'defaultLocation', select: 'name code type' },
+            { path: 'currentOperator', select: 'name employeeCode department' }
         ]);
 
         return res.status(200).json({

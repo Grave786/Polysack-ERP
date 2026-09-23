@@ -167,8 +167,14 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
     const isFinishedOrCancelled = workOrder.status === 'COMPLETED' || workOrder.status === 'CANCELLED' || !activeStage;
 
     const clientName = workOrder.customer?.companyName || workOrder.customer?.name || 'Unassigned';
-    const machineName = workOrder.assignedMachine?.code || workOrder.assignedMachine?.name || 'Unassigned';
-    const operatorName = workOrder.assignedMachine?.currentOperator || 'Unassigned';
+    const rawMachine = workOrder.assignedMachine;
+    const machineName = typeof rawMachine === 'object' && rawMachine !== null
+        ? `${rawMachine.code ? `${rawMachine.code} - ` : ''}${rawMachine.name || 'Unassigned'}`
+        : (rawMachine || 'Unassigned');
+    const rawOp = typeof rawMachine === 'object' && rawMachine !== null ? rawMachine.currentOperator : null;
+    const operatorName = typeof rawOp === 'object' && rawOp !== null
+        ? `${rawOp.employeeCode ? `${rawOp.employeeCode} - ` : ''}${rawOp.name || ''}`
+        : (rawOp || 'Unassigned');
 
     return (
         <div className="space-y-5 font-sans">

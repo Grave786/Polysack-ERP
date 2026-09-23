@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 
-export function useResourceApi(resourcePath, initialParams = {}) {
+export function useResourceApi(resourcePath, initialParams = {}, extraParams = {}) {
     const [data, setData] = useState([]);
     const [pagination, setPagination] = useState({
         total: 0,
@@ -12,10 +12,19 @@ export function useResourceApi(resourcePath, initialParams = {}) {
     });
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
-    const [search, setSearch] = useState(initialParams.search || '');
-    const [statusFilter, setStatusFilter] = useState(initialParams.status || 'All Statuses');
-    const [page, setPage] = useState(initialParams.page || 1);
-    const [limit, setLimit] = useState(initialParams.limit || 10);
+    const [search, setSearch] = useState(initialParams?.search || '');
+    const [statusFilter, setStatusFilter] = useState(initialParams?.status || 'All Statuses');
+    const [page, setPage] = useState(initialParams?.page || 1);
+    const [limit, setLimit] = useState(initialParams?.limit || 10);
+
+    // Keep ref to latest extraParams so fetchData always accesses the latest values without re-triggering on identity changes
+    const extraParamsRef = useRef(extraParams);
+    extraParamsRef.current = extraParams;
+
+    // Serialize extraParams to avoid infinite re-render loops when callers pass inline object literals
+    const extraParamsKey = extraParams && typeof extraParams === 'object'
+        ? JSON.stringify(extraParams)
+        : String(extraParams || '');
 
     const fetchData = useCallback(async () => {
         if (!resourcePath) return;
@@ -32,6 +41,11 @@ export function useResourceApi(resourcePath, initialParams = {}) {
                 params.status = statusFilter;
             }
 
+            // Merge any extra caller-supplied params (e.g., showInactive=true)
+            if (extraParamsRef.current && typeof extraParamsRef.current === 'object') {
+                Object.assign(params, extraParamsRef.current);
+            }
+
             const response = await axiosInstance.get(resourcePath, { params });
             const result = response.data;
 
@@ -39,16 +53,26 @@ export function useResourceApi(resourcePath, initialParams = {}) {
                 const listData = Array.isArray(result.data) ? [...result.data] : [];
                 setData(listData);
 
-                if (result.pagination) {
-                    setPagination({ ...result.pagination });
-                } else {
-                    setPagination({
-                        total: listData.length,
-                        page: page,
-                        limit: limit,
-                        totalPages: Math.ceil(listData.length / limit) || 1
-                    });
-                }
+                const totalRecords = result.totalCount !== undefined
+                    ? result.totalCount
+                    : (result.pagination?.totalCount !== undefined
+                        ? result.pagination.totalCount
+                        : (result.pagination?.total !== undefined ? result.pagination.total : listData.length));
+                
+                const pageLimit = result.pagination?.limit || limit || 10;
+                const calculatedTotalPages = result.pagination?.totalPages || result.pagination?.pages || Math.ceil(totalRecords / pageLimit) || 1;
+                const currentPage = result.pagination?.page || page || 1;
+
+                setPagination({
+                    ...(result.pagination || {}),
+                    total: totalRecords,
+                    totalCount: totalRecords,
+                    page: currentPage,
+                    currentPage: currentPage,
+                    limit: pageLimit,
+                    totalPages: calculatedTotalPages,
+                    pages: calculatedTotalPages
+                });
             } else {
                 setError(result.message || 'Failed to fetch data');
             }
@@ -57,7 +81,13 @@ export function useResourceApi(resourcePath, initialParams = {}) {
         } finally {
             setIsLoading(false);
         }
-    }, [resourcePath, search, page, limit, statusFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [resourcePath, search, page, limit, statusFilter, extraParamsKey]);
+
+    // Reset to page 1 whenever active resource path changes (e.g. switching tabs)
+    useEffect(() => {
+        setPage(1);
+    }, [resourcePath]);
 
     useEffect(() => {
         fetchData();

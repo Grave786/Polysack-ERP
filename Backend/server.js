@@ -18,6 +18,8 @@ const roleRoutes = require('./src/routes/role.routes');
 const userRoutes = require('./src/routes/user.routes');
 const uomRoutes = require('./src/routes/uom.routes');
 const categoryRoutes = require('./src/routes/category.routes');
+const sectionRoutes = require('./src/routes/section.routes');
+const { DEFAULT_SECTIONS } = require('./src/controllers/section.controller');
 const bagShapeRoutes = require('./src/routes/bagShape.routes');
 const locationRoutes = require('./src/routes/location.routes');
 const supplierRoutes = require('./src/routes/supplier.routes');
@@ -144,6 +146,18 @@ const initializeSystem = async () => {
         }
       }
     }
+
+    // Auto-populate default Sections for all existing tenants
+    const Section = require('./src/models/section.model');
+    for (const t of existingTenants) {
+      for (const secName of DEFAULT_SECTIONS) {
+        await Section.updateOne(
+          { tenant: t._id, name: secName },
+          { $setOnInsert: { tenant: t._id, name: secName, isActive: true } },
+          { upsert: true }
+        );
+      }
+    }
   } catch (err) {
     console.warn('⚠️ Could not verify permission count on boot:', err.message);
   }
@@ -167,6 +181,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/uom', uomRoutes);
 app.use('/api/uoms', uomRoutes);
 app.use('/api/categories', categoryRoutes);
+app.use('/api/sections', sectionRoutes);
 app.use('/api/bag-shapes', bagShapeRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/suppliers', supplierRoutes);
