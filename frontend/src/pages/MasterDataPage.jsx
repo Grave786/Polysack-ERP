@@ -147,14 +147,31 @@ export default function MasterDataPage() {
                     render: (row) => row.capacityPerHour ? `${row.capacityPerHour} kg/hr` : (row.capacity || '-')
                 },
                 {
-                    header: 'Operator',
+                    header: 'Operators',
                     render: (row) => {
-                        if (!row.currentOperator) return '-';
-                        if (typeof row.currentOperator === 'object') {
-                            const code = row.currentOperator.employeeCode ? `${row.currentOperator.employeeCode} - ` : '';
-                            return `${code}${row.currentOperator.name || '-'}`;
-                        }
-                        return row.currentOperator;
+                        const ops = (Array.isArray(row.currentOperators) && row.currentOperators.length > 0)
+                            ? row.currentOperators
+                            : (row.currentOperator ? [row.currentOperator] : []);
+                        if (!ops.length) return '-';
+                        return (
+                            <div className="flex flex-wrap gap-1 max-w-xs">
+                                {ops.map((op, idx) => {
+                                    if (typeof op === 'object' && op !== null) {
+                                        const code = op.employeeCode ? `${op.employeeCode} - ` : '';
+                                        return (
+                                            <span
+                                                key={op._id || idx}
+                                                className="inline-block bg-app-bg text-text-main border border-border px-1.5 py-0.5 rounded text-[11px] font-medium"
+                                                title={op.department ? `${code}${op.name} (${op.department})` : `${code}${op.name}`}
+                                            >
+                                                {code}{op.name || '-'}
+                                            </span>
+                                        );
+                                    }
+                                    return <span key={idx} className="text-xs">{String(op)}</span>;
+                                })}
+                            </div>
+                        );
                     }
                 },
                 {

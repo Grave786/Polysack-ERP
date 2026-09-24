@@ -59,16 +59,33 @@ const JobOrderFileSchema = new mongoose.Schema({
 }, { _id: false });
 
 const RollSpecificationSchema = new mongoose.Schema({
+    rollId: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null
+    },
     rollNumber: {
         type: String,
         required: [true, 'Roll Number is required'],
         trim: true,
         maxlength: [50, 'Roll Number cannot exceed 50 characters']
     },
+    materialName: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    remainingMeters: {
+        type: Number,
+        default: null
+    },
+    usedMeters: {
+        type: Number,
+        default: null
+    },
     fabricLength: {
         type: Number,
         default: null,
-        min: [1, 'Fabric Length must be at least 1 Meter'],
+        min: [0, 'Fabric Length cannot be negative'],
         max: [50000, 'Fabric Length cannot exceed 50000 Meters']
     },
     width: {
@@ -114,6 +131,22 @@ const JobOrderDetailsSchema = new mongoose.Schema({
         enum: ['Print', 'Plain', ''],
         default: 'Print'
     },
+    printSpec: {
+        printSides: {
+            type: String,
+            enum: ['FRONT_ONLY', 'BACK_ONLY', 'BOTH', 'NONE', ''],
+            default: 'NONE'
+        },
+        frontColours: { type: Number, default: 0, min: 0 },
+        backColours: { type: Number, default: 0, min: 0 }
+    },
+    printSides: {
+        type: String,
+        enum: ['FRONT_ONLY', 'BACK_ONLY', 'BOTH', 'NONE', ''],
+        default: ''
+    },
+    frontColours: { type: Number, default: 0, min: 0 },
+    backColours: { type: Number, default: 0, min: 0 },
     jobDescriptionPrintColours: {
         type: String,
         trim: true,
@@ -199,6 +232,16 @@ const JobOrderDetailsSchema = new mongoose.Schema({
     purchaseOrderFiles: {
         type: [JobOrderFileSchema],
         default: []
+    },
+    description: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    remarks: {
+        type: String,
+        trim: true,
+        default: ''
     }
 }, { _id: false });
 
@@ -213,6 +256,16 @@ const WorkOrderSchema = new mongoose.Schema({
         required: [true, 'Work Order Number is required'],
         trim: true,
         uppercase: true
+    },
+    description: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    remarks: {
+        type: String,
+        trim: true,
+        default: ''
     },
     customer: {
         type: mongoose.Schema.Types.ObjectId,

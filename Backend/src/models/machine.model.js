@@ -41,6 +41,10 @@ const MachineSchema = new mongoose.Schema({
         ref: 'Location',
         default: null
     },
+    currentOperators: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Employee'
+    }],
     currentOperator: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Employee',

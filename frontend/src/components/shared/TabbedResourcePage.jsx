@@ -89,6 +89,29 @@ export const composeRawMaterialTitle = (data = {}) => {
     return '';
 };
 
+// Helper to format consistent print specification string across Finished Bags, Enquiries, and Work Orders
+export const formatPrintSpecString = (printSides, frontColours, backColours, processName = 'Flexo') => {
+    const sides = (printSides || 'NONE').toUpperCase();
+    const f = Math.max(0, Number(frontColours) || 0);
+    const b = Math.max(0, Number(backColours) || 0);
+    if (sides === 'NONE' || sides === 'NONE-PLAIN' || (f === 0 && b === 0)) {
+        return 'Plain / Unprinted';
+    }
+    if (sides === 'FRONT_ONLY') {
+        return `Front: ${f}-Color ${processName}`;
+    }
+    if (sides === 'BACK_ONLY') {
+        return `Back: ${b}-Color ${processName}`;
+    }
+    if (sides === 'BOTH') {
+        if (f === b) {
+            return `${f}-Color ${processName}, Front & Back`;
+        }
+        return `Front: ${f}-Color, Back: ${b}-Color ${processName}`;
+    }
+    return `${f || b || 0}-Color ${processName}`;
+};
+
 // Helper to auto-compose descriptive Finished Bag title from classification fields
 // Pattern: "[Bag Shape] [Bag Type/Category] [Capacity]Kg ([Width]x[Length][unit], [GSM] GSM - [Color & Print])"
 // Example: "Open Mouth Laminated PP Woven Sack 50Kg (45x75cm, 75 GSM - Milky White 2-Color Flexo)"
@@ -160,8 +183,18 @@ export const composeFinishedBagTitle = (data = {}, categoriesList = [], bagShape
         : null;
     const gsmStr = (gsm !== null && !isNaN(gsm) && gsm > 0) ? `${gsm} GSM` : '';
 
-    const colorRaw = data.colorAndPrint || '';
-    const colorStr = isPresent(colorRaw) ? colorRaw.trim() : '';
+    let colorStr = '';
+    if (data.printSides || data.printSpec) {
+        const sides = data.printSides || data.printSpec?.printSides || 'NONE';
+        const f = data.frontColours !== undefined ? data.frontColours : (data.printSpec?.frontColours || 0);
+        const b = data.backColours !== undefined ? data.backColours : (data.printSpec?.backColours || 0);
+        const specStr = formatPrintSpecString(sides, f, b);
+        const base = isPresent(data.materialColour) ? data.materialColour.trim() : (isPresent(data.color) ? data.color.trim() : '');
+        colorStr = base ? `${base} (${specStr})` : specStr;
+    } else {
+        const colorRaw = data.colorAndPrint || '';
+        colorStr = isPresent(colorRaw) ? colorRaw.trim() : '';
+    }
 
     let gsmColorPart = '';
     if (gsmStr && colorStr) {
@@ -208,6 +241,122 @@ const generateSuggestedCode = (tabKey, currentTotal = 0) => {
     const paddedNum = String(nextNum).padStart(3, '0');
     return `${prefix}-${paddedNum}`;
 };
+
+/**
+ * Multi-select component for assigning multiple operators to a machine.
+ * Searchable and selectable by Employee Code first ([Code] - [Name] ([Department])).
+ */
+function EmployeeMultiSelect({ employees = [], selectedIds = [], onChange }) {
+    const [search, setSearch] = useState('');
+
+    const safeSelected = Array.isArray(selectedIds)
+        ? selectedIds.map((id) => (typeof id === 'object' ? id?._id : id)).filter(Boolean)
+        : [];
+
+    const filtered = employees.filter((emp) => {
+        if (!search.trim()) return true;
+        const q = search.toLowerCase();
+        const code = (emp.employeeCode || '').toLowerCase();
+        const name = (emp.name || '').toLowerCase();
+        const dept = (emp.department || '').toLowerCase();
+        return code.includes(q) || name.includes(q) || dept.includes(q);
+    });
+
+    const toggle = (id) => {
+        let next;
+        if (safeSelected.includes(id)) {
+            next = safeSelected.filter((item) => item !== id);
+        } else {
+            next = [...safeSelected, id];
+        }
+        onChange(next);
+    };
+
+    const remove = (id, e) => {
+        e.stopPropagation();
+        onChange(safeSelected.filter((item) => item !== id));
+    };
+
+    const selectedEmpObjects = safeSelected.map((id) => employees.find((e) => e._id === id)).filter(Boolean);
+
+    return (
+        <div className="space-y-1.5 font-sans">
+            {/* Selected chips display */}
+            {selectedEmpObjects.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 p-2 bg-app-bg border border-border rounded-md">
+                    {selectedEmpObjects.map((emp) => (
+                        <span
+                            key={emp._id}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 text-xs font-semibold"
+                        >
+                            <span>{emp.employeeCode ? `${emp.employeeCode} - ` : ''}{emp.name}</span>
+                            <button
+                                type="button"
+                                onClick={(e) => remove(emp._id, e)}
+                                className="hover:text-rose-600 cursor-pointer p-0.5 leading-none"
+                                title="Remove Operator"
+                            >
+                                ×
+                            </button>
+                        </span>
+                    ))}
+                </div>
+            )}
+
+            {/* Search + Checkbox list */}
+            <div className="border border-border rounded-md bg-card-bg overflow-hidden shadow-xs">
+                <div className="p-2 border-b border-border bg-app-bg/50 flex items-center gap-2">
+                    <input
+                        type="text"
+                        placeholder="Search by Employee Code, Name or Dept..."
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        className="w-full text-xs bg-card-bg border border-border rounded p-1.5 text-text-main focus:outline-none focus:border-primary font-sans"
+                    />
+                    {safeSelected.length > 0 && (
+                        <button
+                            type="button"
+                            onClick={() => onChange([])}
+                            className="text-[10px] text-text-muted hover:text-rose-600 whitespace-nowrap cursor-pointer font-bold"
+                        >
+                            Clear All
+                        </button>
+                    )}
+                </div>
+
+                <div className="max-h-44 overflow-y-auto divide-y divide-border/40 p-1">
+                    {filtered.length === 0 ? (
+                        <p className="text-xs text-text-muted italic p-2 text-center">No matching employees found.</p>
+                    ) : (
+                        filtered.map((emp) => {
+                            const isChecked = safeSelected.includes(emp._id);
+                            const label = `${emp.employeeCode || 'EMP'} - ${emp.name}${emp.department ? ` (${emp.department})` : ''}`;
+                            return (
+                                <label
+                                    key={emp._id}
+                                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded cursor-pointer text-xs transition-colors ${
+                                        isChecked ? 'bg-primary/10 text-primary font-bold' : 'hover:bg-app-bg text-text-main'
+                                    }`}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => toggle(emp._id)}
+                                        className="rounded border-border text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
+                                    />
+                                    <span className="truncate">{label}</span>
+                                </label>
+                            );
+                        })
+                    )}
+                </div>
+            </div>
+            <p className="text-[10px] text-text-muted">
+                {safeSelected.length} operator{safeSelected.length === 1 ? '' : 's'} assigned to this machine.
+            </p>
+        </div>
+    );
+}
 
 export default function TabbedResourcePage({
     title,
@@ -1322,7 +1471,11 @@ export default function TabbedResourcePage({
             if (matchedLoc?._id) {
                 payload.defaultLocation = matchedLoc._id;
             }
-            payload.currentOperator = typeof formData.currentOperator === 'object' ? (formData.currentOperator?._id || null) : (formData.currentOperator || null);
+            const rawOps = Array.isArray(formData.currentOperators)
+                ? formData.currentOperators.map((o) => (typeof o === 'object' ? o?._id : o)).filter(Boolean)
+                : (formData.currentOperator ? [typeof formData.currentOperator === 'object' ? formData.currentOperator._id : formData.currentOperator] : []);
+            payload.currentOperators = rawOps;
+            payload.currentOperator = rawOps[0] || null;
             payload.status = formData.status || 'Available';
             if (formData.capacityPerHour || formData.capacity) {
                 payload.capacityPerHour = Number(formData.capacityPerHour || formData.capacity);
@@ -1387,7 +1540,17 @@ export default function TabbedResourcePage({
             payload.dimensionUnit = selectedDimUnit;
 
             // Auto-compose descriptive Finished Bag title from classification fields
-            const fullFGTitle = composeFinishedBagTitle(formData, categoriesList, bagShapesList);
+            payload.printSides = formData.printSides || formData.printSpec?.printSides || 'NONE';
+            payload.frontColours = Number(formData.frontColours !== undefined ? formData.frontColours : (formData.printSpec?.frontColours || 0)) || 0;
+            payload.backColours = Number(formData.backColours !== undefined ? formData.backColours : (formData.printSpec?.backColours || 0)) || 0;
+            payload.printSpec = {
+                printSides: payload.printSides,
+                frontColours: payload.frontColours,
+                backColours: payload.backColours
+            };
+            payload.colorAndPrint = formData.colorAndPrint || '';
+
+            const fullFGTitle = composeFinishedBagTitle({ ...formData, ...payload }, categoriesList, bagShapesList);
             payload.name = fullFGTitle || (formData.baseName !== undefined ? formData.baseName : formData.name) || 'Finished Good';
             payload.baseName = formData.baseName !== undefined ? formData.baseName : (formData.name || '');
 
@@ -1568,11 +1731,19 @@ export default function TabbedResourcePage({
             // composeFinishedBagTitle as the baseName segment, causing recursive duplication on edit.
             baseName: row.baseName || '',
             materialColour: row.materialColour || row.color || '',
+            storageBayLocation: row.storageBayLocation || row.warehouseLocation || '',
+            warehouseLocation: row.warehouseLocation || row.storageBayLocation || '',
             dimensionUnit: editDimUnit,
             dimensions: {
                 ...(row.dimensions || {}),
                 unit: editDimUnit
             },
+            currentOperators: (Array.isArray(row.currentOperators) && row.currentOperators.length > 0)
+                ? row.currentOperators.map((o) => (typeof o === 'object' ? o._id : o))
+                : (row.currentOperator ? [typeof row.currentOperator === 'object' ? row.currentOperator._id : row.currentOperator] : []),
+            printSides: row.printSides || row.printSpec?.printSides || 'NONE',
+            frontColours: row.frontColours !== undefined ? row.frontColours : (row.printSpec?.frontColours || 0),
+            backColours: row.backColours !== undefined ? row.backColours : (row.printSpec?.backColours || 0),
             code: codeVal,
             customerCode: codeVal,
             supplierCode: codeVal,
@@ -2368,22 +2539,18 @@ export default function TabbedResourcePage({
                             />
                         </div>
 
-                        <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Current Operator (Employee)
+                        <div className="sm:col-span-2">
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                Assigned Machine Operators (Search & Select by Code)
                             </label>
-                            <select
-                                value={typeof formData.currentOperator === 'object' ? (formData.currentOperator?._id || '') : (formData.currentOperator || '')}
-                                onChange={(e) => handleInputChange('currentOperator', e.target.value || null)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
-                            >
-                                <option value="">-- No Operator Assigned --</option>
-                                {employeesList.map((emp) => (
-                                    <option key={emp._id} value={emp._id}>
-                                        {emp.employeeCode || 'EMP'} - {emp.name} {emp.department ? `(${emp.department})` : ''}
-                                    </option>
-                                ))}
-                            </select>
+                            <EmployeeMultiSelect
+                                employees={employeesList}
+                                selectedIds={formData.currentOperators || (formData.currentOperator ? [formData.currentOperator] : [])}
+                                onChange={(ids) => {
+                                    handleInputChange('currentOperators', ids);
+                                    handleInputChange('currentOperator', ids[0] || null);
+                                }}
+                            />
                         </div>
                     </div>
 
@@ -3150,28 +3317,137 @@ export default function TabbedResourcePage({
                         />
                     </div>
 
-                    <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Color & Print Specification
-                        </label>
-                        <input
-                            type="text"
-                            placeholder="e.g. Milky White (2-Color Flexo Printing)"
-                            value={formData.colorAndPrint || ''}
-                            onChange={(e) => handleInputChange('colorAndPrint', e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                        />
+                    {/* Color & Print Specification (Front/Back) */}
+                    <div className="p-3.5 bg-app-bg border border-border rounded-xl space-y-3 font-sans">
+                        <div className="flex items-center justify-between">
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                Color & Print Specification
+                            </label>
+                            <span className="text-[10px] text-primary font-bold uppercase tracking-wider">
+                                {formData.colorAndPrint || 'Plain / Unprinted'}
+                            </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-[11px] font-bold uppercase tracking-wide text-text-muted mb-1">
+                                    Base Fabric Colour
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. Milky White, Yellow, Natural"
+                                    value={formData.materialColour || ''}
+                                    onChange={(e) => {
+                                        const newBase = e.target.value;
+                                        handleInputChange('materialColour', newBase);
+                                        const sides = formData.printSides || 'NONE';
+                                        const f = formData.frontColours || 0;
+                                        const b = formData.backColours || 0;
+                                        const specStr = formatPrintSpecString(sides, f, b);
+                                        handleInputChange('colorAndPrint', newBase ? `${newBase} (${specStr})` : specStr);
+                                    }}
+                                    className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-[11px] font-bold uppercase tracking-wide text-text-muted mb-1">
+                                    Print Sides *
+                                </label>
+                                <select
+                                    value={formData.printSides || 'NONE'}
+                                    onChange={(e) => {
+                                        const sides = e.target.value;
+                                        handleInputChange('printSides', sides);
+                                        const f = (sides === 'FRONT_ONLY' || sides === 'BOTH') ? (formData.frontColours || 1) : 0;
+                                        const b = (sides === 'BACK_ONLY' || sides === 'BOTH') ? (formData.backColours || 1) : 0;
+                                        handleInputChange('frontColours', f);
+                                        handleInputChange('backColours', b);
+                                        handleInputChange('printSpec', { printSides: sides, frontColours: f, backColours: b });
+                                        const base = formData.materialColour || 'Milky White';
+                                        const specStr = formatPrintSpecString(sides, f, b);
+                                        handleInputChange('colorAndPrint', base ? `${base} (${specStr})` : specStr);
+                                    }}
+                                    className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer font-semibold"
+                                >
+                                    <option value="NONE">None (Plain / Unprinted)</option>
+                                    <option value="FRONT_ONLY">Front Only</option>
+                                    <option value="BACK_ONLY">Back Only</option>
+                                    <option value="BOTH">Both Sides (Front & Back)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        {/* Conditional Colour Inputs per side */}
+                        {(formData.printSides === 'FRONT_ONLY' || formData.printSides === 'BACK_ONLY' || formData.printSides === 'BOTH') && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                                {(formData.printSides === 'FRONT_ONLY' || formData.printSides === 'BOTH') && (
+                                    <div>
+                                        <label className="block text-[11px] font-bold uppercase tracking-wide text-text-muted mb-1">
+                                            Front Colours (Qty)
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="8"
+                                            placeholder="1"
+                                            value={formData.frontColours || ''}
+                                            onChange={(e) => {
+                                                const f = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                                handleInputChange('frontColours', f);
+                                                const b = formData.backColours || 0;
+                                                const sides = formData.printSides;
+                                                handleInputChange('printSpec', { printSides: sides, frontColours: f, backColours: b });
+                                                const base = formData.materialColour || 'Milky White';
+                                                const specStr = formatPrintSpecString(sides, f, b);
+                                                handleInputChange('colorAndPrint', base ? `${base} (${specStr})` : specStr);
+                                            }}
+                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold"
+                                        />
+                                    </div>
+                                )}
+
+                                {(formData.printSides === 'BACK_ONLY' || formData.printSides === 'BOTH') && (
+                                    <div>
+                                        <label className="block text-[11px] font-bold uppercase tracking-wide text-text-muted mb-1">
+                                            Back Colours (Qty)
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="8"
+                                            placeholder="1"
+                                            value={formData.backColours || ''}
+                                            onChange={(e) => {
+                                                const b = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                                handleInputChange('backColours', b);
+                                                const f = formData.frontColours || 0;
+                                                const sides = formData.printSides;
+                                                handleInputChange('printSpec', { printSides: sides, frontColours: f, backColours: b });
+                                                const base = formData.materialColour || 'Milky White';
+                                                const specStr = formatPrintSpecString(sides, f, b);
+                                                handleInputChange('colorAndPrint', base ? `${base} (${specStr})` : specStr);
+                                            }}
+                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Warehouse Storage Location / Bay
+                            Storage Bay / Location
                         </label>
                         <input
                             type="text"
                             placeholder="e.g. Finished Goods Warehouse - Bay 1"
-                            value={formData.warehouseLocation || ''}
-                            onChange={(e) => handleInputChange('warehouseLocation', e.target.value)}
+                            value={formData.storageBayLocation || ''}
+                            onChange={(e) => {
+                                handleInputChange('storageBayLocation', e.target.value);
+                                handleInputChange('warehouseLocation', e.target.value);
+                            }}
                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                         />
                     </div>

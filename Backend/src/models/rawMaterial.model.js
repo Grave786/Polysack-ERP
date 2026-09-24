@@ -143,6 +143,11 @@ const RawMaterialSchema = new mongoose.Schema({
         default: 0,
         min: [0, 'Last purchase price cannot be negative']
     },
+    storageBayLocation: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     isActive: {
         type: Boolean,
         default: true

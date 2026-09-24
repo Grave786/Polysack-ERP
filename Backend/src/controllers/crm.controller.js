@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const CustomerInteraction = require('../models/customerInteraction.model');
 const Complaint = require('../models/complaint.model');
+const OrderEnquiry = require('../models/orderEnquiry.model');
 const Customer = require('../models/customer.model');
 const User = require('../models/user.model');
 const SalesOrder = require('../models/salesOrder.model');
@@ -891,6 +892,241 @@ const deleteComplaint = async (req, res) => {
     }
 };
 
+// ==========================================
+// 3. ORDER ENQUIRIES CONTROLLERS
+// ==========================================
+
+/**
+ * @desc    Create a new Order Enquiry
+ * @route   POST /api/crm/enquiries
+ * @access  Private (SALES:CREATE)
+ */
+const createOrderEnquiry = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing or invalid.' });
+        }
+        delete req.body.tenant;
+
+        const { customer, orderConfirmed, expectedDeliveryDate, poAttachments } = req.body;
+
+        if (!customer) {
+            return res.status(400).json({ success: false, message: 'Customer reference is required.' });
+        }
+
+        const customerDoc = await Customer.findOne({ _id: customer, tenant: tenantId, isActive: true });
+        if (!customerDoc) {
+            return res.status(400).json({ success: false, message: 'Customer not found or is inactive.' });
+        }
+
+        // Validate expected delivery date only when order is confirmed
+        if (orderConfirmed && expectedDeliveryDate) {
+            const deliveryDate = new Date(expectedDeliveryDate);
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            if (deliveryDate < today) {
+                return res.status(400).json({ success: false, message: 'Expected delivery date must be today or later.' });
+            }
+        }
+
+        // Enforce max 5 attachments
+        if (Array.isArray(poAttachments) && poAttachments.length > 5) {
+            return res.status(400).json({ success: false, message: 'A maximum of 5 PO attachments are allowed.' });
+        }
+
+        const enquiry = new OrderEnquiry({
+            tenant: tenantId,
+            ...req.body,
+            enquiryDate: req.body.enquiryDate ? new Date(req.body.enquiryDate) : new Date(),
+            expectedDeliveryDate: (orderConfirmed && expectedDeliveryDate) ? new Date(expectedDeliveryDate) : null
+        });
+
+        await enquiry.save();
+        await enquiry.populate('customer', 'companyName code contactPerson phone email');
+
+        return res.status(201).json({ success: true, message: 'Order enquiry logged successfully.', data: enquiry });
+    } catch (error) {
+        console.error('Error in createOrderEnquiry:', error);
+        if (error.name === 'CastError') {
+            return res.status(400).json({ success: false, message: `Invalid ID format for field '${error.path}'.` });
+        }
+        return res.status(400).json({ success: false, message: error.message || 'Failed to create order enquiry.' });
+    }
+};
+
+/**
+ * @desc    Get Order Enquiries with pagination and filtering
+ * @route   GET /api/crm/enquiries
+ * @access  Private (SALES:READ)
+ */
+const getOrderEnquiries = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing or invalid.' });
+        }
+
+        const { customer, orderConfirmed, productCategory, search, page = 1, limit = 20 } = req.query;
+        const filter = { tenant: tenantId, isActive: true };
+
+        if (customer) filter.customer = customer;
+        if (productCategory) filter.productCategory = productCategory;
+        if (orderConfirmed !== undefined) filter.orderConfirmed = orderConfirmed === 'true';
+
+        if (search) {
+            filter.$or = [
+                { contactPerson: { $regex: search, $options: 'i' } },
+                { materialQualityFabric: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } },
+                { remarks: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.max(1, parseInt(limit, 10) || 20);
+        const skip = (pageNum - 1) * limitNum;
+
+        const [enquiries, total] = await Promise.all([
+            OrderEnquiry.find(filter)
+                .populate('customer', 'companyName code contactPerson phone email')
+                .sort({ enquiryDate: -1 })
+                .skip(skip)
+                .limit(limitNum),
+            OrderEnquiry.countDocuments(filter)
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            count: enquiries.length,
+            pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) || 1 },
+            data: enquiries
+        });
+    } catch (error) {
+        console.error('Error in getOrderEnquiries:', error);
+        return res.status(500).json({ success: false, message: 'Failed to fetch order enquiries.', error: error.message });
+    }
+};
+
+/**
+ * @desc    Get a single Order Enquiry by ID
+ * @route   GET /api/crm/enquiries/:id
+ * @access  Private (SALES:READ)
+ */
+const getOrderEnquiryById = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing or invalid.' });
+        }
+
+        const enquiry = await OrderEnquiry.findOne({ _id: req.params.id, tenant: tenantId })
+            .populate('customer', 'companyName code contactPerson phone email');
+
+        if (!enquiry) {
+            return res.status(404).json({ success: false, message: 'Order enquiry not found.' });
+        }
+
+        return res.status(200).json({ success: true, data: enquiry });
+    } catch (error) {
+        console.error('Error in getOrderEnquiryById:', error);
+        return res.status(500).json({ success: false, message: 'Failed to fetch order enquiry.' });
+    }
+};
+
+/**
+ * @desc    Update an Order Enquiry
+ * @route   PUT /api/crm/enquiries/:id
+ * @access  Private (SALES:UPDATE)
+ */
+const updateOrderEnquiry = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing or invalid.' });
+        }
+        delete req.body.tenant;
+
+        const enquiry = await OrderEnquiry.findOne({ _id: req.params.id, tenant: tenantId });
+        if (!enquiry) {
+            return res.status(404).json({ success: false, message: 'Order enquiry not found.' });
+        }
+
+        // Validate delivery date if confirmed
+        const isConfirmed = req.body.orderConfirmed !== undefined ? req.body.orderConfirmed : enquiry.orderConfirmed;
+        const deliveryDateRaw = req.body.expectedDeliveryDate !== undefined ? req.body.expectedDeliveryDate : enquiry.expectedDeliveryDate;
+        if (isConfirmed && deliveryDateRaw) {
+            const deliveryDate = new Date(deliveryDateRaw);
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            if (deliveryDate < today) {
+                return res.status(400).json({ success: false, message: 'Expected delivery date must be today or later.' });
+            }
+        }
+
+        // Enforce max 5 attachments
+        if (Array.isArray(req.body.poAttachments) && req.body.poAttachments.length > 5) {
+            return res.status(400).json({ success: false, message: 'A maximum of 5 PO attachments are allowed.' });
+        }
+
+        const allowedFields = [
+            'customer', 'enquiryDate', 'contactPerson', 'contactNumber', 'contactDesignation',
+            'productCategory', 'printSpec', 'printSides', 'frontColours', 'backColours',
+            'jobDescriptionPrintColours', 'jobDescriptionPrintSide',
+            'jobDescriptionPrintSideOther', 'materialQualityFabric', 'fabricLaminationType',
+            'materialColour', 'printingColour', 'fabricGrammage', 'bagWeightGms',
+            'fabricAverage', 'fabricWidthInch', 'fabricLengthInch', 'totalOrderQuantity',
+            'orderConfirmed', 'expectedDeliveryDate', 'poAttachments', 'description', 'remarks'
+        ];
+        for (const field of allowedFields) {
+            if (req.body[field] !== undefined) {
+                enquiry[field] = field === 'enquiryDate' || field === 'expectedDeliveryDate'
+                    ? (req.body[field] ? new Date(req.body[field]) : null)
+                    : req.body[field];
+            }
+        }
+        if (!isConfirmed) enquiry.expectedDeliveryDate = null;
+
+        await enquiry.save();
+        await enquiry.populate('customer', 'companyName code contactPerson phone email');
+
+        return res.status(200).json({ success: true, message: 'Order enquiry updated successfully.', data: enquiry });
+    } catch (error) {
+        console.error('Error in updateOrderEnquiry:', error);
+        if (error.name === 'CastError') {
+            return res.status(400).json({ success: false, message: `Invalid ID format for field '${error.path}'.` });
+        }
+        return res.status(400).json({ success: false, message: error.message || 'Failed to update order enquiry.' });
+    }
+};
+
+/**
+ * @desc    Soft-delete an Order Enquiry
+ * @route   DELETE /api/crm/enquiries/:id
+ * @access  Private (SALES:DELETE)
+ */
+const deleteOrderEnquiry = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing or invalid.' });
+        }
+
+        const enquiry = await OrderEnquiry.findOne({ _id: req.params.id, tenant: tenantId });
+        if (!enquiry) {
+            return res.status(404).json({ success: false, message: 'Order enquiry not found.' });
+        }
+
+        enquiry.isActive = false;
+        await enquiry.save();
+
+        return res.status(200).json({ success: true, message: 'Order enquiry deleted successfully.' });
+    } catch (error) {
+        console.error('Error in deleteOrderEnquiry:', error);
+        return res.status(500).json({ success: false, message: 'Failed to delete order enquiry.', error: error.message });
+    }
+};
+
 module.exports = {
     // Interactions
     createInteraction,
@@ -906,5 +1142,12 @@ module.exports = {
     exportComplaintsCsv,
     getComplaintById,
     updateComplaint,
-    deleteComplaint
+    deleteComplaint,
+
+    // Order Enquiries
+    createOrderEnquiry,
+    getOrderEnquiries,
+    getOrderEnquiryById,
+    updateOrderEnquiry,
+    deleteOrderEnquiry
 };

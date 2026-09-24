@@ -5,7 +5,8 @@ const {
     advanceStage,
     cancelWorkOrder,
     getWorkOrders,
-    getWorkOrderById
+    getWorkOrderById,
+    getAvailableRolls
 } = require('../controllers/workOrder.controller');
 const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
 
@@ -25,6 +26,13 @@ router.post('/', authenticate, checkPermission('PRODUCTION', 'CREATE'), createWo
  * @access  Private (PRODUCTION:READ)
  */
 router.get('/', authenticate, checkPermission('PRODUCTION', 'READ'), getWorkOrders);
+
+/**
+ * @route   GET /api/work-orders/available-rolls
+ * @desc    Get rolls with remaining meters stock for roll selection
+ * @access  Private (PRODUCTION:READ)
+ */
+router.get('/available-rolls', authenticate, checkPermission('PRODUCTION', 'READ'), getAvailableRolls);
 
 /**
  * @route   GET /api/work-orders/:id

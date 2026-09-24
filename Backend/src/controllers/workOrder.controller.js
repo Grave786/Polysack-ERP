@@ -233,10 +233,18 @@ const createWorkOrder = async (req, res) => {
 
         // Step B: Build optional Job Order / Job Card details
         const rawJobDetails = incomingJobDetails || {};
+        const incomingDescription = req.body.description || rawJobDetails.description || req.body.remarks || rawJobDetails.remarks || '';
+        const incomingRemarks = req.body.remarks || rawJobDetails.remarks || req.body.description || rawJobDetails.description || '';
+
         const jobOrderDetails = {
-            rolls: Array.isArray(rawJobDetails.rolls) ? rawJobDetails.rolls.filter(r => r && r.rollNumber && String(r.rollNumber).trim()).map(r => ({
-                rollNumber: String(r.rollNumber).trim().slice(0, 50),
-                fabricLength: r.fabricLength !== undefined && r.fabricLength !== '' && r.fabricLength !== null ? Number(r.fabricLength) : null,
+            rolls: Array.isArray(rawJobDetails.rolls) ? rawJobDetails.rolls.filter(r => r && (r.rollNumber || r.rollNo) && String(r.rollNumber || r.rollNo).trim()).map(r => ({
+                _id: r._id && mongoose.isValidObjectId(r._id) ? r._id : undefined,
+                rollId: (r.rollId && mongoose.isValidObjectId(r.rollId)) ? r.rollId : (r._id && mongoose.isValidObjectId(r._id) ? r._id : null),
+                rollNumber: String(r.rollNumber || r.rollNo).trim().slice(0, 50),
+                materialName: r.materialName || '',
+                remainingMeters: r.remainingMeters !== undefined && r.remainingMeters !== null && r.remainingMeters !== '' ? Number(r.remainingMeters) : null,
+                usedMeters: r.usedMeters !== undefined && r.usedMeters !== null && r.usedMeters !== '' ? Number(r.usedMeters) : null,
+                fabricLength: r.fabricLength !== undefined && r.fabricLength !== '' && r.fabricLength !== null ? Number(r.fabricLength) : (r.length !== undefined && r.length !== '' && r.length !== null ? Number(r.length) : null),
                 width: r.width !== undefined && r.width !== '' && r.width !== null ? Number(r.width) : null,
                 grossWeight: r.grossWeight !== undefined && r.grossWeight !== '' && r.grossWeight !== null ? Number(r.grossWeight) : null,
                 netWeight: r.netWeight !== undefined && r.netWeight !== '' && r.netWeight !== null ? Number(r.netWeight) : null,
@@ -245,6 +253,14 @@ const createWorkOrder = async (req, res) => {
             })) : [],
             orderDate: rawJobDetails.orderDate ? new Date(rawJobDetails.orderDate) : new Date(),
             productCategory: rawJobDetails.productCategory || 'Print',
+            printSpec: rawJobDetails.printSpec || {
+                printSides: rawJobDetails.printSides || (rawJobDetails.productCategory === 'Plain' ? 'NONE' : 'BOTH'),
+                frontColours: Number(rawJobDetails.frontColours) || 0,
+                backColours: Number(rawJobDetails.backColours) || 0
+            },
+            printSides: rawJobDetails.printSides || rawJobDetails.printSpec?.printSides || '',
+            frontColours: rawJobDetails.frontColours !== undefined ? Number(rawJobDetails.frontColours) : (rawJobDetails.printSpec?.frontColours || 0),
+            backColours: rawJobDetails.backColours !== undefined ? Number(rawJobDetails.backColours) : (rawJobDetails.printSpec?.backColours || 0),
             jobDescriptionPrintColours: rawJobDetails.jobDescriptionPrintColours || '',
             jobDescriptionPrintSide: rawJobDetails.jobDescriptionPrintSide || '',
             materialQualityFabric: rawJobDetails.materialQualityFabric || '',
@@ -280,13 +296,17 @@ const createWorkOrder = async (req, res) => {
                     fileType: f.fileType || '',
                     data: f.data || ''
                 }))
-                : []
+                : [],
+            description: incomingDescription,
+            remarks: incomingRemarks
         };
 
         // Step C: Create WorkOrder document
         const woDocs = await WorkOrder.create([{
             tenant: tenantId,
             workOrderNumber,
+            description: incomingDescription,
+            remarks: incomingRemarks,
             customer,
             finishedGood,
             bom: activeBom._id,
@@ -606,7 +626,12 @@ const getWorkOrders = async (req, res) => {
         if (priority) filter.priority = priority;
 
         if (search) {
-            filter.workOrderNumber = { $regex: search, $options: 'i' };
+            filter.$or = [
+                { workOrderNumber: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } },
+                { remarks: { $regex: search, $options: 'i' } },
+                { 'jobOrderDetails.description': { $regex: search, $options: 'i' } }
+            ];
         }
 
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -617,7 +642,14 @@ const getWorkOrders = async (req, res) => {
             WorkOrder.find(filter)
                 .populate('customer', 'companyName code')
                 .populate('finishedGood', 'name code')
-                .populate('assignedMachine', 'name code currentOperator')
+                .populate({
+                    path: 'assignedMachine',
+                    select: 'name code currentOperators currentOperator',
+                    populate: [
+                        { path: 'currentOperators', select: 'name employeeCode department' },
+                        { path: 'currentOperator', select: 'name employeeCode department' }
+                    ]
+                })
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum),
@@ -646,6 +678,109 @@ const getWorkOrders = async (req, res) => {
 };
 
 /**
+ * @desc    Get raw material rolls with available remaining stock
+ * @route   GET /api/work-orders/available-rolls
+ * @access  Private (PRODUCTION:READ permission)
+ */
+const getAvailableRolls = async (req, res) => {
+    try {
+        const rawTenantId = req.user?.tenant;
+        const tenantId = rawTenantId ? (typeof rawTenantId === 'object' ? String(rawTenantId._id || rawTenantId.id || rawTenantId) : String(rawTenantId)) : null;
+
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid.'
+            });
+        }
+
+        const GRN = require('../models/grn.model');
+        const grns = await GRN.find({
+            tenant: tenantId,
+            'rolls.0': { $exists: true }
+        })
+            .select('grnNumber receivedDate items rolls')
+            .populate('items.rawMaterial', 'name code category uom')
+            .lean();
+
+        // Fetch active Work Orders that have rolls allocated to tally used meters
+        const activeWorkOrders = await WorkOrder.find({
+            tenant: tenantId,
+            status: { $ne: 'CANCELLED' },
+            'jobOrderDetails.rolls.0': { $exists: true }
+        })
+            .select('workOrderNumber jobOrderDetails.rolls')
+            .lean();
+
+        const consumptionMap = {};
+        for (const wo of activeWorkOrders) {
+            const woRolls = wo.jobOrderDetails?.rolls || [];
+            for (const r of woRolls) {
+                const consumed = Number(r.fabricLength != null ? r.fabricLength : (r.length != null ? r.length : 0)) || 0;
+                if (r.rollId) {
+                    const idKey = String(r.rollId);
+                    consumptionMap[idKey] = (consumptionMap[idKey] || 0) + consumed;
+                }
+                if (r.rollNumber || r.rollNo) {
+                    const numKey = String(r.rollNumber || r.rollNo).trim().toUpperCase();
+                    consumptionMap[numKey] = (consumptionMap[numKey] || 0) + consumed;
+                }
+            }
+        }
+
+        const availableRolls = [];
+        for (const grn of grns) {
+            const rawMat = grn.items?.[0]?.rawMaterial;
+            const materialName = rawMat?.name || 'Woven Fabric Roll';
+            const rolls = grn.rolls || [];
+
+            for (const r of rolls) {
+                const rollIdStr = String(r._id);
+                const rollNumStr = String(r.rollNumber || '').trim().toUpperCase();
+                const totalMeters = Number(r.fabricLength || 0);
+
+                const usedMeters = consumptionMap[rollIdStr] || consumptionMap[rollNumStr] || 0;
+                const remainingMeters = Math.max(0, totalMeters - usedMeters);
+
+                // Only return rolls that have available stock (remainingMeters > 0)
+                if (remainingMeters > 0) {
+                    availableRolls.push({
+                        _id: r._id,
+                        rollId: r._id,
+                        rollNo: r.rollNumber,
+                        rollNumber: r.rollNumber,
+                        materialName,
+                        materialCode: rawMat?.code || '',
+                        grnNumber: grn.grnNumber,
+                        totalMeters,
+                        usedMeters,
+                        remainingMeters,
+                        width: r.width != null ? r.width : null,
+                        grossWeight: r.grossWeight != null ? r.grossWeight : null,
+                        netWeight: r.netWeight != null ? r.netWeight : null,
+                        totalQuantityKg: r.totalQuantityKg != null ? r.totalQuantityKg : null,
+                        totalQuantityPcs: r.totalQuantityPcs != null ? r.totalQuantityPcs : null
+                    });
+                }
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            count: availableRolls.length,
+            data: availableRolls
+        });
+    } catch (error) {
+        console.error('Error in getAvailableRolls:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve available rolls.',
+            error: error.message
+        });
+    }
+};
+
+/**
  * @desc    Get Work Order by ID with full stage details
  * @route   GET /api/work-orders/:id
  * @access  Private (PRODUCTION:READ permission)
@@ -664,7 +799,14 @@ const getWorkOrderById = async (req, res) => {
             .populate('customer', 'companyName code contactPerson phone')
             .populate('finishedGood', 'name code uom currentStock')
             .populate('bom')
-            .populate('assignedMachine', 'name code section status')
+            .populate({
+                path: 'assignedMachine',
+                select: 'name code section status currentOperators currentOperator',
+                populate: [
+                    { path: 'currentOperators', select: 'name employeeCode department' },
+                    { path: 'currentOperator', select: 'name employeeCode department' }
+                ]
+            })
             .populate('stages.machine', 'name code section');
 
         if (!workOrder) {
@@ -693,5 +835,6 @@ module.exports = {
     advanceStage,
     cancelWorkOrder,
     getWorkOrders,
-    getWorkOrderById
+    getWorkOrderById,
+    getAvailableRolls
 };

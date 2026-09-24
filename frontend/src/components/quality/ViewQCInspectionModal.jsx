@@ -27,40 +27,40 @@ export default function ViewQCInspectionModal({ isOpen, inspection, onClose }) {
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
             <div className="fixed inset-0" onClick={onClose} />
             <div className="relative z-10 bg-card-bg border border-border rounded-xl shadow-2xl w-full max-w-2xl p-6 space-y-4 font-sans text-xs max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-150">
-                {/* Header with QC Certificate Badge */}
-                <div className="flex justify-between items-start pb-3 border-b border-border">
-                    <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                            <span className="font-mono font-extrabold text-base text-primary">
+                {/* Header with QC Certificate Badge — dark ERP theme */}
+                <div className="flex justify-between items-start -mx-6 -mt-6 px-6 py-4 mb-4 bg-sidebar-bg rounded-t-xl border-b border-sidebar-hover">
+                    <div className="space-y-1.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono font-extrabold text-base text-white">
                                 {inspection.qcCertificateNumber || 'QC-CERTIFICATE'}
                             </span>
                             <span
                                 className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${
                                     isPassed
-                                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                                         : isFailed
-                                        ? 'bg-rose-100 text-rose-800 border-rose-300'
-                                        : 'bg-amber-100 text-amber-800 border-amber-300'
+                                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                        : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                                 }`}
                             >
                                 • {status}
                             </span>
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
                                 isInbound
-                                    ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                                    : 'bg-purple-100 text-purple-800 border border-purple-200'
+                                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                    : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
                             }`}>
                                 {isInbound ? 'Inbound QC (GRN / Raw Material)' : 'Outbound QC (Finished Bags / Production)'}
                             </span>
                         </div>
-                        <p className="text-[11px] text-text-muted">
-                            Immutable Quality Control Audit Record & Lab Test Certificate
+                        <p className="text-[11px] text-sidebar-text">
+                            Immutable Quality Control Audit Record &amp; Lab Test Certificate
                         </p>
                     </div>
                     <button
                         type="button"
                         onClick={onClose}
-                        className="text-text-muted hover:text-text-main text-sm font-bold p-1 rounded-md transition-colors cursor-pointer"
+                        className="text-sidebar-text hover:text-white text-sm font-bold p-1 rounded-md transition-colors cursor-pointer shrink-0"
                     >
                         <X size={18} />
                     </button>

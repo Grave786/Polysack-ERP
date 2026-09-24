@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Plus, Download, Truck, FileText, Check, ClipboardList } from 'lucide-react';
+import { Plus, Download, Truck, FileText, Check, ClipboardList, Eye } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreatePurchaseOrderPanel from '../components/procurement/CreatePurchaseOrderPanel';
 import CreateGRNPanel from '../components/procurement/CreateGRNPanel';
 import CreateMaterialReceiptPanel from '../components/procurement/CreateMaterialReceiptPanel';
 import PrintPOModal from '../components/procurement/PrintPOModal';
+import DetailViewModal from '../components/shared/DetailViewModal';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 
@@ -15,6 +16,10 @@ export default function ProcurementPage() {
     const [isMatReceiptOpen, setIsMatReceiptOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [activeTab, setActiveTab] = useState('purchase-orders');
+
+    // Detail View Modal State
+    const [viewRecord, setViewRecord] = useState(null);
+    const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
     // Print PO Modal State
     const [isPrintPoOpen, setIsPrintPoOpen] = useState(false);
@@ -156,6 +161,18 @@ export default function ProcurementPage() {
 
                 return (
                     <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setViewRecord(row);
+                                setIsDetailModalOpen(true);
+                            }}
+                            className="text-gray-500 hover:text-blue-600 mr-3 cursor-pointer"
+                            title="View Details"
+                        >
+                            <Eye size={14} />
+                        </button>
+
                         {isPendingApproval && (
                             <button
                                 type="button"
@@ -205,6 +222,8 @@ export default function ProcurementPage() {
                         >
                             <Download size={15} />
                         </button>
+
+
                     </div>
                 );
             }
@@ -365,6 +384,18 @@ export default function ProcurementPage() {
                 isOpen={isPrintPoOpen}
                 onClose={() => setIsPrintPoOpen(false)}
                 po={selectedPoForPrint}
+            />
+
+            {/* Read-Only Detail View Modal */}
+            <DetailViewModal
+                isOpen={isDetailModalOpen}
+                onClose={() => {
+                    setIsDetailModalOpen(false);
+                    setViewRecord(null);
+                }}
+                record={viewRecord}
+                tabKey={activeTab}
+                tabLabel={activeTab === 'purchase-orders' ? 'Purchase Order' : 'Material Receipt'}
             />
         </>
     );

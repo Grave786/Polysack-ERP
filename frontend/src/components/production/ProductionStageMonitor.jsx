@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { CheckCircle2, Play, ArrowRight, AlertCircle, RefreshCw, Ban } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { CheckCircle2, Play, ArrowRight, AlertCircle, RefreshCw, Ban, Search, ChevronDown, Check, X } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
@@ -20,6 +20,42 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
     const [isLoading, setIsLoading] = useState(true);
     const [goodOutputQty, setGoodOutputQty] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Searchable combobox & status filter states for Select Job
+    const [jobStatusFilter, setJobStatusFilter] = useState('ALL');
+    const [jobSearchQuery, setJobSearchQuery] = useState('');
+    const [isJobDropdownOpen, setIsJobDropdownOpen] = useState(false);
+    const jobDropdownRef = useRef(null);
+
+    // Close dropdown on outside click
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (jobDropdownRef.current && !jobDropdownRef.current.contains(event.target)) {
+                setIsJobDropdownOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    // Filtered work orders by status and search query
+    const filteredWorkOrders = useMemo(() => {
+        return allWorkOrders.filter((w) => {
+            if (jobStatusFilter !== 'ALL' && w.status !== jobStatusFilter) {
+                return false;
+            }
+            if (jobSearchQuery.trim()) {
+                const q = jobSearchQuery.toLowerCase();
+                const woNum = (w.workOrderNumber || '').toLowerCase();
+                const custName = (w.customer?.companyName || w.customer?.name || '').toLowerCase();
+                const prodName = (w.finishedGood?.name || '').toLowerCase();
+                if (!woNum.includes(q) && !custName.includes(q) && !prodName.includes(q)) {
+                    return false;
+                }
+            }
+            return true;
+        });
+    }, [allWorkOrders, jobStatusFilter, jobSearchQuery]);
 
     // Fetch list of Work Orders
     const fetchWorkOrdersList = async () => {
@@ -171,10 +207,16 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
     const machineName = typeof rawMachine === 'object' && rawMachine !== null
         ? `${rawMachine.code ? `${rawMachine.code} - ` : ''}${rawMachine.name || 'Unassigned'}`
         : (rawMachine || 'Unassigned');
-    const rawOp = typeof rawMachine === 'object' && rawMachine !== null ? rawMachine.currentOperator : null;
-    const operatorName = typeof rawOp === 'object' && rawOp !== null
-        ? `${rawOp.employeeCode ? `${rawOp.employeeCode} - ` : ''}${rawOp.name || ''}`
-        : (rawOp || 'Unassigned');
+    const rawOps = typeof rawMachine === 'object' && rawMachine !== null
+        ? ((Array.isArray(rawMachine.currentOperators) && rawMachine.currentOperators.length > 0)
+            ? rawMachine.currentOperators
+            : (rawMachine.currentOperator ? [rawMachine.currentOperator] : []))
+        : [];
+    const operatorName = rawOps.length > 0
+        ? rawOps.map((op) => (typeof op === 'object' && op !== null
+            ? `${op.employeeCode ? `${op.employeeCode} - ` : ''}${op.name || ''}`
+            : String(op))).join(', ')
+        : 'Unassigned';
 
     return (
         <div className="space-y-5 font-sans">
@@ -228,21 +270,128 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                     {/* Right side: Stacked Select Job (TOP) & Target vs Completed Stat Block (BOTTOM) */}
                     <div className="flex flex-col items-start md:items-end gap-2 shrink-0">
                         {allWorkOrders.length > 0 && (
-                            <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider whitespace-nowrap">
-                                    Select Job:
-                                </span>
-                                <select
-                                    value={workOrder._id}
-                                    onChange={(e) => onSelectWorkOrder && onSelectWorkOrder(e.target.value)}
-                                    className="text-xs font-semibold border border-border rounded-md py-1 px-2.5 focus:ring-primary focus:border-primary bg-card-bg text-text-main cursor-pointer"
-                                >
-                                    {allWorkOrders.map((w) => (
-                                        <option key={w._id} value={w._id}>
-                                            {w.workOrderNumber} - {w.customer?.companyName || 'Customer'} ({w.status})
-                                        </option>
-                                    ))}
-                                </select>
+                            <div className="relative" ref={jobDropdownRef}>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider whitespace-nowrap">
+                                        Select Job:
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsJobDropdownOpen((prev) => !prev)}
+                                        className="flex items-center justify-between gap-2 text-xs font-semibold border border-border rounded-lg py-1.5 px-3 bg-card-bg hover:bg-app-bg text-text-main shadow-2xs transition-all cursor-pointer min-w-[240px] max-w-[320px]"
+                                        title="Click to search and change active Work Order"
+                                    >
+                                        <div className="flex items-center gap-1.5 truncate">
+                                            <span className="font-mono font-bold text-primary shrink-0">
+                                                {workOrder.workOrderNumber}
+                                            </span>
+                                            <span className="text-text-muted truncate">
+                                                • {workOrder.customer?.companyName || workOrder.customer?.name || 'Customer'}
+                                            </span>
+                                        </div>
+                                        <ChevronDown size={14} className={`text-text-muted shrink-0 transition-transform duration-150 ${isJobDropdownOpen ? 'rotate-180' : ''}`} />
+                                    </button>
+                                </div>
+
+                                {/* Custom Combobox Dropdown Panel */}
+                                {isJobDropdownOpen && (
+                                    <div className="absolute right-0 top-full mt-1.5 z-50 w-80 sm:w-96 bg-card-bg border border-border rounded-xl shadow-xl p-3 font-sans space-y-2.5 animate-in fade-in zoom-in-95 duration-100">
+                                        {/* Status Filter Pill Buttons */}
+                                        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                                            {[
+                                                { key: 'ALL', label: 'All' },
+                                                { key: 'IN_PROGRESS', label: 'In Progress' },
+                                                { key: 'COMPLETED', label: 'Completed' },
+                                                { key: 'CANCELLED', label: 'Cancelled' }
+                                            ].map((f) => (
+                                                <button
+                                                    key={f.key}
+                                                    type="button"
+                                                    onClick={() => setJobStatusFilter(f.key)}
+                                                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase transition-colors shrink-0 cursor-pointer ${
+                                                        jobStatusFilter === f.key
+                                                            ? 'bg-primary text-white shadow-2xs'
+                                                            : 'bg-app-bg text-text-muted hover:text-text-main border border-border'
+                                                    }`}
+                                                >
+                                                    {f.label}
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        {/* Search Input Box */}
+                                        <div className="relative">
+                                            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                                            <input
+                                                type="text"
+                                                placeholder="Search WO# or Client..."
+                                                value={jobSearchQuery}
+                                                onChange={(e) => setJobSearchQuery(e.target.value)}
+                                                className="w-full pl-8 pr-7 py-1.5 text-xs bg-app-bg border border-border rounded-lg text-text-main focus:outline-none focus:border-primary font-sans"
+                                                autoFocus
+                                            />
+                                            {jobSearchQuery && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setJobSearchQuery('')}
+                                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-main p-0.5 cursor-pointer"
+                                                >
+                                                    <X size={12} />
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {/* Filtered Options List */}
+                                        <ul className="max-h-56 overflow-y-auto divide-y divide-border/50 text-xs">
+                                            {filteredWorkOrders.length === 0 ? (
+                                                <li className="py-4 text-center text-xs text-text-muted font-medium">
+                                                    No Work Orders match filters
+                                                </li>
+                                            ) : (
+                                                filteredWorkOrders.map((w) => {
+                                                    const isSelected = w._id === workOrder._id;
+                                                    const cName = w.customer?.companyName || w.customer?.name || 'Customer';
+                                                    const badgeClass =
+                                                        w.status === 'IN_PROGRESS'
+                                                            ? 'bg-orange-100 text-orange-700 border-orange-200'
+                                                            : w.status === 'COMPLETED'
+                                                            ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                                            : w.status === 'CANCELLED'
+                                                            ? 'bg-rose-100 text-rose-700 border-rose-200'
+                                                            : 'bg-gray-100 text-gray-700 border-gray-200';
+
+                                                    return (
+                                                        <li
+                                                            key={w._id}
+                                                            onClick={() => {
+                                                                if (onSelectWorkOrder) onSelectWorkOrder(w._id);
+                                                                setIsJobDropdownOpen(false);
+                                                            }}
+                                                            className={`p-2 rounded-lg cursor-pointer transition-colors flex items-center justify-between gap-2 ${
+                                                                isSelected
+                                                                    ? 'bg-primary/10 text-primary font-bold'
+                                                                    : 'hover:bg-app-bg text-text-main'
+                                                            }`}
+                                                        >
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <span className="font-mono font-bold">{w.workOrderNumber}</span>
+                                                                    <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold border ${badgeClass}`}>
+                                                                        {w.status === 'IN_PROGRESS' ? 'In Progress' : w.status || 'Pending'}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="text-[11px] text-text-muted truncate font-normal mt-0.5">
+                                                                    {cName} {w.finishedGood?.name ? `• ${w.finishedGood.name}` : ''}
+                                                                </div>
+                                                            </div>
+                                                            {isSelected && <Check size={14} className="text-primary shrink-0" />}
+                                                        </li>
+                                                    );
+                                                })
+                                            )}
+                                        </ul>
+                                    </div>
+                                )}
                             </div>
                         )}
 

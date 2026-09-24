@@ -3,7 +3,9 @@ import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import ProductionStageMonitor from '../components/production/ProductionStageMonitor';
 import CreateWorkOrderModal from '../components/production/CreateWorkOrderModal';
 import DetailViewModal from '../components/shared/DetailViewModal';
-import { Layers, Activity, FileText, Plus, Eye } from 'lucide-react';
+import { Layers, Activity, FileText, Plus, Eye, AlertTriangle } from 'lucide-react';
+import axiosInstance from '../api/axiosInstance';
+import toast from 'react-hot-toast';
 
 const STAGE_LABELS = {
     TAPE_EXTRUSION: 'Tape Extrusion',
@@ -23,9 +25,34 @@ export default function ProductionPage() {
     const [viewOrderRecord, setViewOrderRecord] = useState(null);
     const [refreshKey, setRefreshKey] = useState(0);
 
+    const [cancelModalOpen, setCancelModalOpen] = useState(false);
+    const [woToCancel, setWoToCancel] = useState(null);
+    const [isCancelling, setIsCancelling] = useState(false);
+
     const handleTrackJob = (workOrderId) => {
         setSelectedWorkOrderId(workOrderId);
         setActiveTabKey('stage-monitor');
+    };
+
+    const handleConfirmCancel = async () => {
+        const id = woToCancel?._id || woToCancel;
+        if (!id) return;
+        try {
+            setIsCancelling(true);
+            const res = await axiosInstance.patch(`/work-orders/${id}/cancel`);
+            if (res.data?.success) {
+                toast.success('Work Order cancelled successfully');
+                setCancelModalOpen(false);
+                setWoToCancel(null);
+                setRefreshKey((prev) => prev + 1);
+            } else {
+                toast.error(res.data?.message || 'Failed to cancel Work Order');
+            }
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to cancel Work Order');
+        } finally {
+            setIsCancelling(false);
+        }
     };
 
     const tabs = [
@@ -45,8 +72,16 @@ export default function ProductionPage() {
                     render: (row) => row.customer?.companyName || row.customer?.name || '-'
                 },
                 {
-                    header: 'PRODUCT SPECIFICATION',
-                    render: (row) => row.finishedGood?.name || '-'
+                    header: 'WORK TITLE',
+                    title: 'WORK TITLE',
+                    render: (row) => {
+                        const desc = row.description || row.remarks || row.jobOrderDetails?.description || row.finishedGood?.name || '-';
+                        return (
+                            <div className="text-xs text-gray-800 whitespace-normal break-words line-clamp-3 min-w-[250px]" title={desc}>
+                                {desc}
+                            </div>
+                        );
+                    }
                 },
                 {
                     header: 'TARGET BAGS',
@@ -129,11 +164,13 @@ export default function ProductionPage() {
                         <div className="flex items-center gap-1.5">
                             <button
                                 type="button"
-                                onClick={() => setViewOrderRecord(row)}
-                                className="p-1.5 text-text-muted hover:text-primary rounded-md hover:bg-app-bg transition-colors cursor-pointer"
-                                title="View Job Card Details"
+                                onClick={() => {
+                                    setViewOrderRecord(row);
+                                }}
+                                className="text-gray-500 hover:text-blue-600 mr-3 cursor-pointer"
+                                title="View Details"
                             >
-                                <Eye size={15} />
+                                <Eye size={14} />
                             </button>
                             <button
                                 type="button"
@@ -146,7 +183,7 @@ export default function ProductionPage() {
                             {row.status !== 'COMPLETED' && row.status !== 'CANCELLED' && (
                                 <button
                                     type="button"
-                                    onClick={() => handleCancelWorkOrder(row._id)}
+                                    onClick={() => { setWoToCancel(row); setCancelModalOpen(true); }}
                                     className="border border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-900 px-2 py-1 rounded-md text-xs font-bold transition-all cursor-pointer"
                                     title="Cancel Work Order"
                                 >
@@ -212,6 +249,51 @@ export default function ProductionPage() {
                 tabKey="work-orders"
                 tabLabel="Work Order"
             />
+
+            {/* Custom Cancel Confirmation Modal */}
+            {cancelModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full font-sans">
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="p-2.5 rounded-full bg-rose-100 text-rose-600 shrink-0">
+                                <AlertTriangle size={22} />
+                            </div>
+                            <h3 className="text-base font-bold text-gray-900">
+                                Cancel Work Order
+                            </h3>
+                        </div>
+                        <p className="text-xs text-gray-600 mb-6 leading-relaxed">
+                            Are you sure you want to cancel this? This action cannot be undone.
+                            {woToCancel?.workOrderNumber && (
+                                <span className="block mt-1 font-mono font-bold text-rose-600">
+                                    {woToCancel.workOrderNumber}
+                                </span>
+                            )}
+                        </p>
+                        <div className="flex items-center justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setCancelModalOpen(false);
+                                    setWoToCancel(null);
+                                }}
+                                disabled={isCancelling}
+                                className="px-4 py-2 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors cursor-pointer disabled:opacity-50"
+                            >
+                                Go Back
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleConfirmCancel}
+                                disabled={isCancelling}
+                                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-md transition-colors shadow-xs cursor-pointer disabled:opacity-50"
+                            >
+                                {isCancelling ? 'Cancelling...' : 'Yes, Cancel'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 }

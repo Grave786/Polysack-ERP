@@ -162,6 +162,8 @@ const createFinishedGood = async (req, res) => {
             dimensionUnit: selectedUnit,
             bagCapacity: bagCapacity !== undefined ? Number(bagCapacity) : undefined,
             pricePerBag: pricePerBag !== undefined ? Number(pricePerBag) : 0,
+            storageBayLocation: req.body.storageBayLocation !== undefined ? req.body.storageBayLocation : (req.body.warehouseLocation || ''),
+            warehouseLocation: req.body.warehouseLocation || req.body.storageBayLocation || 'Finished Goods Warehouse - Bay 1',
             isActive: isActive !== undefined ? isActive : true,
             tenant: tenantId
         });
@@ -554,6 +556,8 @@ const updateFinishedGood = async (req, res) => {
         }
         if (bagCapacity !== undefined) finishedGood.bagCapacity = Number(bagCapacity);
         if (pricePerBag !== undefined) finishedGood.pricePerBag = Number(pricePerBag);
+        if (req.body.storageBayLocation !== undefined) finishedGood.storageBayLocation = req.body.storageBayLocation;
+        if (req.body.warehouseLocation !== undefined) finishedGood.warehouseLocation = req.body.warehouseLocation;
         if (isActive !== undefined) finishedGood.isActive = isActive;
 
         await finishedGood.save();

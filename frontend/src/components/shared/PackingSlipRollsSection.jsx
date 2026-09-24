@@ -24,6 +24,7 @@ export const createEmptyRoll = (index = 1) => ({
 export default function PackingSlipRollsSection({
     rolls = [],
     onChange,
+    availableRolls = [],
     title = 'Packing Slip & Roll Specifications',
     subtitle = 'Inward roll specifications from paper packing list',
     required = false
@@ -38,6 +39,30 @@ export default function PackingSlipRollsSection({
             return;
         }
         onChange(rolls.filter((_, idx) => idx !== indexToRemove));
+    };
+
+    const handleSelectAvailableRoll = (idx, selectedRoll) => {
+        const updated = rolls.map((roll, i) => {
+            if (i !== idx) return roll;
+            return {
+                ...roll,
+                _id: selectedRoll._id,
+                rollId: selectedRoll._id,
+                rollNo: selectedRoll.rollNo,
+                rollNumber: selectedRoll.rollNo,
+                materialName: selectedRoll.materialName || '',
+                remainingMeters: selectedRoll.remainingMeters,
+                usedMeters: selectedRoll.usedMeters,
+                fabricLength: selectedRoll.remainingMeters,
+                length: selectedRoll.remainingMeters,
+                width: selectedRoll.width != null ? selectedRoll.width : roll.width,
+                grossWeight: selectedRoll.grossWeight != null ? selectedRoll.grossWeight : roll.grossWeight,
+                netWeight: selectedRoll.netWeight != null ? selectedRoll.netWeight : roll.netWeight,
+                totalQuantityKg: selectedRoll.totalQuantityKg != null ? selectedRoll.totalQuantityKg : roll.totalQuantityKg,
+                totalQuantityPcs: selectedRoll.totalQuantityPcs != null ? selectedRoll.totalQuantityPcs : roll.totalQuantityPcs
+            };
+        });
+        onChange(updated);
     };
 
     const handleRollChange = (index, field, value) => {
@@ -154,18 +179,65 @@ export default function PackingSlipRollsSection({
                                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                                     {/* Roll No. */}
                                     <div className="col-span-2 sm:col-span-1">
-                                        <label className="block text-[10px] font-bold uppercase tracking-wide text-text-main mb-0.5">
-                                            Roll No. <span className="text-danger">*</span>
-                                        </label>
-                                        <input
-                                            type="text"
-                                            required={required}
-                                            maxLength={50}
-                                            placeholder="e.g. 1388/27"
-                                            value={roll.rollNumber || roll.rollNo || ''}
-                                            onChange={(e) => handleRollChange(idx, 'rollNo', e.target.value)}
-                                            className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary uppercase"
-                                        />
+                                        <div className="flex items-center justify-between mb-0.5">
+                                            <label className="block text-[10px] font-bold uppercase tracking-wide text-text-main">
+                                                Roll No. <span className="text-danger">*</span>
+                                            </label>
+                                            {availableRolls.length > 0 && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const toggled = !roll.isManualEntry;
+                                                        handleRollChange(idx, 'isManualEntry', toggled);
+                                                    }}
+                                                    className="text-[9px] text-primary hover:underline font-semibold cursor-pointer"
+                                                >
+                                                    {roll.isManualEntry ? 'Select Roll' : 'Manual'}
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {availableRolls.length > 0 && !roll.isManualEntry ? (
+                                            <select
+                                                required={required}
+                                                value={roll.rollId || roll._id || ''}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (!val) {
+                                                        handleRollChange(idx, 'rollId', '');
+                                                        handleRollChange(idx, 'rollNo', '');
+                                                        return;
+                                                    }
+                                                    const found = availableRolls.find((r) => String(r._id) === val);
+                                                    if (found) {
+                                                        handleSelectAvailableRoll(idx, found);
+                                                    }
+                                                }}
+                                                className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary truncate cursor-pointer"
+                                            >
+                                                <option value="">-- Select Available Roll --</option>
+                                                {availableRolls.map((r) => (
+                                                    <option key={r._id} value={r._id}>
+                                                        {r.rollNo} - {r.materialName} (Available: {r.remainingMeters}m / Used: {r.usedMeters}m)
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        ) : (
+                                            <input
+                                                type="text"
+                                                required={required}
+                                                maxLength={50}
+                                                placeholder="e.g. 1388/27"
+                                                value={roll.rollNumber || roll.rollNo || ''}
+                                                onChange={(e) => handleRollChange(idx, 'rollNo', e.target.value)}
+                                                className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary uppercase"
+                                            />
+                                        )}
+                                        {roll.materialName && (
+                                            <p className="text-[9.5px] text-primary font-medium truncate mt-0.5">
+                                                {roll.materialName}
+                                            </p>
+                                        )}
                                     </div>
 
                                     {/* Fabric Length (Meters) */}

@@ -100,10 +100,31 @@ const FinishedGoodSchema = new mongoose.Schema({
         trim: true,
         default: 'Milky White (2-Color Flexo)'
     },
+    printSpec: {
+        printSides: {
+            type: String,
+            enum: ['FRONT_ONLY', 'BACK_ONLY', 'BOTH', 'NONE'],
+            default: 'NONE'
+        },
+        frontColours: { type: Number, default: 0, min: 0 },
+        backColours: { type: Number, default: 0, min: 0 }
+    },
+    printSides: {
+        type: String,
+        enum: ['FRONT_ONLY', 'BACK_ONLY', 'BOTH', 'NONE', ''],
+        default: 'NONE'
+    },
+    frontColours: { type: Number, default: 0, min: 0 },
+    backColours: { type: Number, default: 0, min: 0 },
     warehouseLocation: {
         type: String,
         trim: true,
         default: 'Finished Goods Warehouse - Bay 1'
+    },
+    storageBayLocation: {
+        type: String,
+        trim: true,
+        default: ''
     },
     pricePerBag: {
         type: Number,

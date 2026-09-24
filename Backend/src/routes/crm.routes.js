@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const CustomerInteraction = require('../models/customerInteraction.model');
 const Complaint = require('../models/complaint.model');
+const OrderEnquiry = require('../models/orderEnquiry.model');
 const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
 const {
     // Interactions
@@ -18,7 +19,14 @@ const {
     exportComplaintsCsv,
     getComplaintById,
     updateComplaint,
-    deleteComplaint
+    deleteComplaint,
+
+    // Order Enquiries
+    createOrderEnquiry,
+    getOrderEnquiries,
+    getOrderEnquiryById,
+    updateOrderEnquiry,
+    deleteOrderEnquiry
 } = require('../controllers/crm.controller');
 const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
 
@@ -131,5 +139,51 @@ router.delete('/complaints/:id', authenticate, checkPermission('SALES', 'DELETE'
  * @access  Private (SALES:DELETE)
  */
 router.post('/complaints/bulk-delete', authenticate, checkPermission('SALES', 'DELETE'), createBulkDeleteHandler(Complaint, { resourceName: 'CRM Complaints' }));
+
+// ==========================================
+// 3. ORDER ENQUIRY ROUTES
+// ==========================================
+
+/**
+ * @route   POST /api/crm/enquiries
+ * @desc    Create a new Order Enquiry
+ * @access  Private (SALES:CREATE)
+ */
+router.post('/enquiries', authenticate, checkPermission('SALES', 'CREATE'), createOrderEnquiry);
+
+/**
+ * @route   GET /api/crm/enquiries
+ * @desc    Get Order Enquiries list
+ * @access  Private (SALES:READ)
+ */
+router.get('/enquiries', authenticate, checkPermission('SALES', 'READ'), getOrderEnquiries);
+
+/**
+ * @route   GET /api/crm/enquiries/:id
+ * @desc    Get Order Enquiry by ID
+ * @access  Private (SALES:READ)
+ */
+router.get('/enquiries/:id', authenticate, checkPermission('SALES', 'READ'), getOrderEnquiryById);
+
+/**
+ * @route   PUT /api/crm/enquiries/:id
+ * @desc    Update Order Enquiry
+ * @access  Private (SALES:UPDATE)
+ */
+router.put('/enquiries/:id', authenticate, checkPermission('SALES', 'UPDATE'), updateOrderEnquiry);
+
+/**
+ * @route   DELETE /api/crm/enquiries/:id
+ * @desc    Soft Delete Order Enquiry
+ * @access  Private (SALES:DELETE)
+ */
+router.delete('/enquiries/:id', authenticate, checkPermission('SALES', 'DELETE'), deleteOrderEnquiry);
+
+/**
+ * @route   POST /api/crm/enquiries/bulk-delete
+ * @desc    Bulk Soft Delete Order Enquiries
+ * @access  Private (SALES:DELETE)
+ */
+router.post('/enquiries/bulk-delete', authenticate, checkPermission('SALES', 'DELETE'), createBulkDeleteHandler(OrderEnquiry, { resourceName: 'Order Enquiries' }));
 
 module.exports = router;

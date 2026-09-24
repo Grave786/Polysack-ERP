@@ -58,6 +58,9 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     // Job Order Details Form State
     const [orderDate, setOrderDate] = useState(getTodayLocalDateString());
     const [productCategory, setProductCategory] = useState('Print');
+    const [printSides, setPrintSides] = useState('BOTH');
+    const [frontColours, setFrontColours] = useState(1);
+    const [backColours, setBackColours] = useState(1);
     const [jobDescriptionPrintColours, setJobDescriptionPrintColours] = useState('One Colour');
     const [jobDescriptionPrintSide, setJobDescriptionPrintSide] = useState('Single Side');
     const [customPrintSide, setCustomPrintSide] = useState('');
@@ -79,6 +82,11 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
     const [purchaseOrderFiles, setPurchaseOrderFiles] = useState([]);
     const [rolls, setRolls] = useState([]);
+    const [availableRolls, setAvailableRolls] = useState([]);
+
+    // Auto-generated Editable Description State
+    const [description, setDescription] = useState('');
+    const [isDescriptionManuallyEdited, setIsDescriptionManuallyEdited] = useState(false);
 
     // Raw Material Attributes (shared masters: Quality Fabric, Lamination, Colours, Grammage)
     const [rmAttributes, setRmAttributes] = useState({});
@@ -108,6 +116,9 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
         setPriority('MEDIUM');
         setOrderDate(getTodayLocalDateString());
         setProductCategory('Print');
+        setPrintSides('BOTH');
+        setFrontColours(1);
+        setBackColours(1);
         setJobDescriptionPrintColours('One Colour');
         setJobDescriptionPrintSide('Single Side');
         setCustomPrintSide('');
@@ -129,7 +140,60 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
         setExpectedDeliveryDate('');
         setPurchaseOrderFiles([]);
         setRolls([]);
+        setDescription('');
+        setIsDescriptionManuallyEdited(false);
     };
+
+    // Auto-generate descriptive summary from key form variables
+    const generateWorkOrderDescription = () => {
+        const parts = [];
+        const selectedFg = finishedGoods.find((fg) => fg._id === finishedGood);
+        if (selectedFg) {
+            parts.push(`${selectedFg.name || selectedFg.code}`);
+        }
+        if (productCategory) {
+            parts.push(`Category: ${productCategory}`);
+        }
+        const fabricSpecs = [];
+        if (materialQualityFabric) fabricSpecs.push(materialQualityFabric);
+        if (materialColour) fabricSpecs.push(materialColour);
+        if (fabricGrammage) fabricSpecs.push(`${fabricGrammage} GSM`);
+        if (fabricLaminationType) fabricSpecs.push(fabricLaminationType);
+        if (fabricWidthInch && fabricLengthInch) {
+            fabricSpecs.push(`${fabricWidthInch}" x ${fabricLengthInch}"`);
+        }
+        if (fabricSpecs.length > 0) {
+            parts.push(`Fabric: ${fabricSpecs.join(', ')}`);
+        }
+        if (productCategory === 'Plain') {
+            parts.push('Print: Plain / Unprinted');
+        } else if (printSides === 'BOTH') {
+            parts.push(`Print: Front & Back (F: ${frontColours || 1}-Col, B: ${backColours || 1}-Col${printingColour ? ` ${printingColour}` : ''})`);
+        } else if (printSides === 'FRONT_ONLY') {
+            parts.push(`Print: Front Only (${frontColours || 1}-Col${printingColour ? ` ${printingColour}` : ''})`);
+        } else if (printSides === 'BACK_ONLY') {
+            parts.push(`Print: Back Only (${backColours || 1}-Col${printingColour ? ` ${printingColour}` : ''})`);
+        }
+        if (targetQuantity) {
+            parts.push(`Target: ${Number(targetQuantity).toLocaleString('en-IN')} Bags`);
+        }
+        return parts.join(' | ');
+    };
+
+    // Listen to changes in key variables and auto-generate description if not manually edited
+    useEffect(() => {
+        if (!isDescriptionManuallyEdited) {
+            const autoText = generateWorkOrderDescription();
+            if (autoText) {
+                setDescription(autoText);
+            }
+        }
+    }, [
+        finishedGood, productCategory, materialColour, printingColour,
+        materialQualityFabric, fabricGrammage, fabricLaminationType,
+        fabricWidthInch, fabricLengthInch, printSides, frontColours, backColours,
+        targetQuantity, isDescriptionManuallyEdited, finishedGoods
+    ]);
 
     // Fetch dropdown options & tenant production settings when modal opens
     useEffect(() => {
@@ -138,12 +202,13 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
         const fetchDropdowns = async () => {
             try {
                 setIsLoadingDropdowns(true);
-                const [custRes, fgRes, mchRes, profileRes, attrRes] = await Promise.all([
+                const [custRes, fgRes, mchRes, profileRes, attrRes, rollsRes] = await Promise.all([
                     axiosInstance.get('/customers?isActive=true&limit=100'),
                     axiosInstance.get('/finished-goods?isActive=true&limit=100'),
                     axiosInstance.get('/machines?isActive=true&limit=100'),
                     axiosInstance.get('/admin/company-profile').catch(() => null),
-                    axiosInstance.get('/raw-material-attributes').catch(() => null)
+                    axiosInstance.get('/raw-material-attributes').catch(() => null),
+                    axiosInstance.get('/work-orders/available-rolls').catch(() => null)
                 ]);
 
                 if (custRes.data?.success) {
@@ -155,7 +220,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                             setContactPersonName(list[0].contactPerson);
                         }
                         if (list[0].phone && !customerContactNumber) {
-                            setCustomerContactNumber(list[0].phone);
+                            setCustomerContactNumber(list[0].phone.replace(/\D/g, '').slice(0, 10));
                         }
                     }
                 }
@@ -179,6 +244,11 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 if (attrRes?.data?.success && attrRes.data?.data) {
                     setRmAttributes(attrRes.data.data);
                 }
+
+                if (rollsRes?.data?.success && Array.isArray(rollsRes.data?.data)) {
+                    // Filter to ensure only rolls with remaining stock > 0
+                    setAvailableRolls(rollsRes.data.data.filter((r) => Number(r.remainingMeters) > 0));
+                }
             } catch (err) {
                 console.error('Failed to load dropdown options:', err);
                 toast.error('Failed to load customers, products, or machine options.');
@@ -193,10 +263,16 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     if (!isOpen) return null;
 
     const selectedMachineObj = machines.find((m) => m._id === assignedMachine) || null;
-    const rawOperator = selectedMachineObj?.currentOperator;
-    const primaryOperator = typeof rawOperator === 'object' && rawOperator !== null
-        ? `${rawOperator.employeeCode ? `${rawOperator.employeeCode} - ` : ''}${rawOperator.name || ''}`
-        : (rawOperator || (assignedMachine ? 'No Operator Assigned' : ''));
+    const rawOps = selectedMachineObj
+        ? ((Array.isArray(selectedMachineObj.currentOperators) && selectedMachineObj.currentOperators.length > 0)
+            ? selectedMachineObj.currentOperators
+            : (selectedMachineObj.currentOperator ? [selectedMachineObj.currentOperator] : []))
+        : [];
+    const assignedOperatorsStr = rawOps.length > 0
+        ? rawOps.map((op) => (typeof op === 'object' && op !== null
+            ? `${op.employeeCode ? `${op.employeeCode} - ` : ''}${op.name || ''}`
+            : String(op))).join(', ')
+        : (assignedMachine ? 'No Operator Assigned' : '');
     // Collect which required fields are still missing (used for inline feedback)
     const missingFields = [];
     if (!customer) missingFields.push('Customer / Client');
@@ -218,7 +294,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 setContactPersonName(selectedCust.contactPerson);
             }
             if (selectedCust.phone) {
-                setCustomerContactNumber(selectedCust.phone);
+                setCustomerContactNumber(selectedCust.phone.replace(/\D/g, '').slice(0, 10));
             }
         }
     };
@@ -467,16 +543,27 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 targetQuantity: targetQtyNum,
                 priority: priority || 'MEDIUM',
                 assignedMachine: assignedMachine || null,
+                description: description || '',
+                remarks: description || '',
                 jobOrderDetails: {
                     orderDate: orderDate || getTodayLocalDateString(),
                     productCategory,
-                    jobDescriptionPrintColours: productCategory === 'Print' ? jobDescriptionPrintColours : 'No Colour or Plain',
-                    jobDescriptionPrintSide:
-                        jobDescriptionPrintSide === 'Other'
-                            ? customPrintSide
-                                ? `Other: ${customPrintSide}`
-                                : 'Other'
-                            : jobDescriptionPrintSide,
+                    printSpec: {
+                        printSides: productCategory === 'Plain' ? 'NONE' : printSides,
+                        frontColours: productCategory === 'Plain' ? 0 : ((printSides === 'FRONT_ONLY' || printSides === 'BOTH') ? (Number(frontColours) || 1) : 0),
+                        backColours: productCategory === 'Plain' ? 0 : ((printSides === 'BACK_ONLY' || printSides === 'BOTH') ? (Number(backColours) || 1) : 0)
+                    },
+                    printSides: productCategory === 'Plain' ? 'NONE' : printSides,
+                    frontColours: productCategory === 'Plain' ? 0 : ((printSides === 'FRONT_ONLY' || printSides === 'BOTH') ? (Number(frontColours) || 1) : 0),
+                    backColours: productCategory === 'Plain' ? 0 : ((printSides === 'BACK_ONLY' || printSides === 'BOTH') ? (Number(backColours) || 1) : 0),
+                    jobDescriptionPrintColours: productCategory === 'Plain'
+                        ? 'No Colour or Plain'
+                        : (printSides === 'BOTH'
+                            ? `Front: ${frontColours || 1}-Color, Back: ${backColours || 1}-Color`
+                            : (printSides === 'FRONT_ONLY' ? `Front: ${frontColours || 1}-Color` : `Back: ${backColours || 1}-Color`)),
+                    jobDescriptionPrintSide: productCategory === 'Plain'
+                        ? 'Only Plain'
+                        : (printSides === 'BOTH' ? 'Double Side' : 'Single Side'),
                     materialQualityFabric,
                     fabricLaminationType,
                     materialColour,
@@ -496,6 +583,8 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                     orderConfirmed: Boolean(orderConfirmed),
                     expectedDeliveryDate: orderConfirmed && expectedDeliveryDate ? expectedDeliveryDate : null,
                     purchaseOrderFiles,
+                    description: description || '',
+                    remarks: description || '',
                     rolls: rolls && rolls.length > 0 ? rolls : []
                 }
             };
@@ -666,14 +755,14 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
 
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                                Primary Operator
+                                Assigned Operator(s)
                             </label>
                             <input
                                 type="text"
                                 readOnly
                                 disabled
                                 placeholder="Select a machine first"
-                                value={primaryOperator}
+                                value={assignedOperatorsStr}
                                 className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs text-text-muted font-medium focus:outline-none cursor-not-allowed"
                             />
                         </div>
@@ -760,53 +849,63 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                         {/* Print Configurations (Shown only if Product Category = Print) */}
                         {productCategory === 'Print' && (
                             <div className="p-3.5 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200/80 dark:border-blue-800/40 rounded-xl space-y-3 animate-in fade-in duration-200">
-                                <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-700 dark:text-blue-400 block">
-                                    Printing Job Configuration
-                                </span>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-700 dark:text-blue-400 block">
+                                        Printing Specification (Sides & Colours per side)
+                                    </span>
+                                    <span className="text-[10px] font-bold text-text-muted">
+                                        {printSides === 'BOTH' ? 'Both Sides (Front & Back)' : printSides === 'FRONT_ONLY' ? 'Front Only' : printSides === 'BACK_ONLY' ? 'Back Only' : 'Plain'}
+                                    </span>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                     <div>
                                         <label className="block text-[10.5px] font-bold uppercase tracking-wide text-text-main mb-1">
-                                            Job Description (Print Colours)
+                                            Print Sides *
                                         </label>
                                         <select
-                                            value={jobDescriptionPrintColours}
-                                            onChange={(e) => setJobDescriptionPrintColours(e.target.value)}
+                                            value={printSides}
+                                            onChange={(e) => setPrintSides(e.target.value)}
                                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-medium"
                                         >
-                                            <option value="One Colour">One Colour</option>
-                                            <option value="Two Colour">Two Colour</option>
-                                            <option value="Three Colour">Three Colour</option>
-                                            <option value="Four Colour">Four Colour</option>
-                                            <option value="Five Colour">Five Colour</option>
-                                            <option value="Six Colour">Six Colour</option>
-                                            <option value="No Colour or Plain">No Colour or Plain</option>
+                                            <option value="BOTH">Both Sides (Front & Back)</option>
+                                            <option value="FRONT_ONLY">Front Only</option>
+                                            <option value="BACK_ONLY">Back Only</option>
+                                            <option value="NONE">None (Plain)</option>
                                         </select>
                                     </div>
 
-                                    <div>
-                                        <label className="block text-[10.5px] font-bold uppercase tracking-wide text-text-main mb-1">
-                                            Job Description 2 (Print Side)
-                                        </label>
-                                        <select
-                                            value={jobDescriptionPrintSide}
-                                            onChange={(e) => setJobDescriptionPrintSide(e.target.value)}
-                                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-medium"
-                                        >
-                                            <option value="Single Side">Single Side</option>
-                                            <option value="Double Side">Double Side</option>
-                                            <option value="Only Plain">Only Plain</option>
-                                            <option value="Other">Other (Custom)</option>
-                                        </select>
-                                        {jobDescriptionPrintSide === 'Other' && (
+                                    {(printSides === 'FRONT_ONLY' || printSides === 'BOTH') && (
+                                        <div>
+                                            <label className="block text-[10.5px] font-bold uppercase tracking-wide text-text-main mb-1">
+                                                Front Colours (Qty) *
+                                            </label>
                                             <input
-                                                type="text"
-                                                placeholder="Specify custom print side..."
-                                                value={customPrintSide}
-                                                onChange={(e) => setCustomPrintSide(e.target.value)}
-                                                className="mt-1.5 w-full border border-blue-300 dark:border-blue-700 rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans animate-in fade-in"
+                                                type="number"
+                                                min="1"
+                                                max="8"
+                                                value={frontColours}
+                                                onChange={(e) => setFrontColours(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                                                className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-bold"
                                             />
-                                        )}
-                                    </div>
+                                        </div>
+                                    )}
+
+                                    {(printSides === 'BACK_ONLY' || printSides === 'BOTH') && (
+                                        <div>
+                                            <label className="block text-[10.5px] font-bold uppercase tracking-wide text-text-main mb-1">
+                                                Back Colours (Qty) *
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="8"
+                                                value={backColours}
+                                                onChange={(e) => setBackColours(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                                                className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-bold"
+                                            />
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -954,9 +1053,13 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                                     </label>
                                     <input
                                         type="tel"
-                                        placeholder="e.g. +91 98765 43210"
+                                        maxLength={10}
+                                        placeholder="10-digit mobile number"
                                         value={customerContactNumber}
-                                        onChange={(e) => setCustomerContactNumber(e.target.value)}
+                                        onChange={(e) => {
+                                            const numericValue = e.target.value.replace(/\D/g, '').slice(0, 10);
+                                            setCustomerContactNumber(numericValue);
+                                        }}
                                         className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
                                     />
                                 </div>
@@ -1060,13 +1163,49 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                             </div>
                         )}
 
-                        {/* Packing Slip & Roll Specifications (Repeatable Multi-Rolls) */}
+                        {/* Auto-generated & Editable Description / Notes */}
+                        <div className="p-3 bg-app-bg border border-border rounded-xl space-y-1.5">
+                            <div className="flex items-center justify-between">
+                                <label className="block text-[10.5px] font-bold uppercase tracking-wider text-text-main">
+                                    Description / Notes (Auto-Generated & Editable)
+                                </label>
+                                {isDescriptionManuallyEdited && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setIsDescriptionManuallyEdited(false);
+                                            const autoText = generateWorkOrderDescription();
+                                            setDescription(autoText);
+                                        }}
+                                        className="text-[10px] text-primary hover:underline font-bold cursor-pointer"
+                                    >
+                                        Reset to Auto-Generated
+                                    </button>
+                                )}
+                            </div>
+                            <textarea
+                                rows={3}
+                                placeholder="Auto-generated descriptive notes based on selected specs..."
+                                value={description}
+                                onChange={(e) => {
+                                    setDescription(e.target.value);
+                                    setIsDescriptionManuallyEdited(true);
+                                }}
+                                className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                            />
+                            <p className="text-[10px] text-text-muted">
+                                {isDescriptionManuallyEdited ? 'Customized manually.' : 'Auto-generating from product, fabric and print specifications.'}
+                            </p>
+                        </div>
+
+                        {/* Packing Slip & Roll Specifications (Repeatable Multi-Rolls with Stock Availability) */}
                         <div className="pt-2">
                             <PackingSlipRollsSection
                                 rolls={rolls}
                                 onChange={setRolls}
+                                availableRolls={availableRolls}
                                 title="Job Order Roll Specifications"
-                                description="Specify fabric rolls associated with this job card / order if applicable."
+                                subtitle="Select available inventory rolls with remaining meters stock or enter manual rolls."
                             />
                         </div>
 
