@@ -141,6 +141,7 @@ const FinishedGoodSchema = new mongoose.Schema({
         default: 0,
         min: [0, 'Wholesale price cannot be negative']
     },
+    inks: [{ type: String }],
     isActive: {
         type: Boolean,
         default: true

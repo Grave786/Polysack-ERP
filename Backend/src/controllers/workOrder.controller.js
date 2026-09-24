@@ -317,6 +317,7 @@ const createWorkOrder = async (req, res) => {
             assignedMachine: assignedMachine || null,
             stages,
             jobOrderDetails,
+            inks: Array.isArray(req.body.inks) ? req.body.inks.filter(Boolean) : (Array.isArray(req.body.inksRequired) ? req.body.inksRequired : []),
             isActive: true
         }], sessionOption);
 

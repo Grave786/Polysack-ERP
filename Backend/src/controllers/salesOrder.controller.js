@@ -133,6 +133,7 @@ const createSalesOrder = async (req, res) => {
             cleanedItems.push({
                 finishedGood: item.finishedGood,
                 quantity: qty,
+                unit: item.unit || 'Pcs',
                 dispatchedQuantity: 0, // Always 0 on creation
                 ratePerUnit: rate
             });
@@ -237,6 +238,15 @@ const getSalesOrders = async (req, res) => {
             SalesOrder.find(filter)
                 .populate('customer', 'companyName code contactPerson phone')
                 .populate('dispatchLocation', 'name code type')
+                .populate({
+                    path: 'items.finishedGood',
+                    select: 'name code uom currentStock pricePerBag title productName bagName specification'
+                })
+                .populate({
+                    path: 'items.product',
+                    select: 'title productName name bagName specification',
+                    strictPopulate: false
+                })
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum),
@@ -292,8 +302,13 @@ const getSalesOrderById = async (req, res) => {
             .populate('dispatchLocation', 'name code type')
             .populate({
                 path: 'items.finishedGood',
-                select: 'name code uom currentStock pricePerBag',
+                select: 'name code uom currentStock pricePerBag title productName bagName specification',
                 populate: { path: 'uom', select: 'name symbol' }
+            })
+            .populate({
+                path: 'items.product',
+                select: 'title productName name bagName specification',
+                strictPopulate: false
             });
 
         if (!salesOrder) {
@@ -438,6 +453,7 @@ const updateSalesOrder = async (req, res) => {
                 cleanedItems.push({
                     finishedGood: item.finishedGood,
                     quantity: qty,
+                    unit: item.unit || existingItem?.unit || 'Pcs',
                     dispatchedQuantity: existingDispatched,
                     ratePerUnit: rate
                 });

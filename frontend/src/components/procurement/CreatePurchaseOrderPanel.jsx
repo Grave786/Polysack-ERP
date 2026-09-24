@@ -5,7 +5,7 @@ import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { getTodayLocalDateString, getFutureLocalDateString } from '../../utils/dateUtils';
 
-export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess }) {
+export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, editPo }) {
     const [suppliers, setSuppliers] = useState([]);
     const [locations, setLocations] = useState([]);
     const [rawMaterials, setRawMaterials] = useState([]);
@@ -19,21 +19,42 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
     const [expectedDelivery, setExpectedDelivery] = useState(getFutureLocalDateString(7));
     const [deliveryLocation, setDeliveryLocation] = useState('');
     const [notes, setNotes] = useState('');
-    const [sendImmediately, setSendImmediately] = useState(false);
 
     // Repeatable items array
     const [items, setItems] = useState([
-        { rawMaterial: '', orderedQuantity: 100, ratePerUnit: 0 }
+        { rawMaterial: '', orderedQuantity: 100, ratePerUnit: 0, unit: 'Kg' }
     ]);
 
-    // Fetch prerequisite options (suppliers, locations, raw materials) & reset dates
+    // Fetch prerequisite options (suppliers, locations, raw materials) & populate edit data
     useEffect(() => {
         if (!isOpen) return;
 
-        console.log('[Date Verification] Purchase Order Form Opened — Local Today:', getTodayLocalDateString(), 'Expected Delivery Default:', getFutureLocalDateString(7));
+        if (editPo) {
+            const suppId = typeof editPo.supplier === 'object' ? editPo.supplier?._id : editPo.supplier;
+            setSupplier(suppId || '');
+            setPoDate(editPo.poDate ? new Date(editPo.poDate).toISOString().split('T')[0] : getTodayLocalDateString());
+            setExpectedDelivery(editPo.expectedDelivery ? new Date(editPo.expectedDelivery).toISOString().split('T')[0] : getFutureLocalDateString(7));
+            const locId = typeof editPo.deliveryLocation === 'object' ? editPo.deliveryLocation?._id : editPo.deliveryLocation;
+            setDeliveryLocation(locId || '');
+            setNotes(editPo.notes || '');
 
-        setPoDate(getTodayLocalDateString());
-        setExpectedDelivery(getFutureLocalDateString(7));
+            const rawItems = editPo.items || editPo.materials;
+            if (Array.isArray(rawItems) && rawItems.length > 0) {
+                setItems(
+                    rawItems.map((it) => ({
+                        rawMaterial: typeof it.rawMaterial === 'object' ? it.rawMaterial?._id : it.rawMaterial || '',
+                        orderedQuantity: Number(it.orderedQuantity ?? it.quantity ?? 100),
+                        ratePerUnit: Number(it.ratePerUnit ?? it.pricePerUnit ?? it.price ?? 0),
+                        unit: it.unit || 'Kg'
+                    }))
+                );
+            }
+        } else {
+            setPoDate(getTodayLocalDateString());
+            setExpectedDelivery(getFutureLocalDateString(7));
+            setNotes('');
+        }
+
         setIsLoadingData(true);
         Promise.all([
             axiosInstance.get('/suppliers?isActive=true&limit=200'),
@@ -44,19 +65,19 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                 if (supRes.data?.success) {
                     const sups = supRes.data.data || [];
                     setSuppliers(sups);
-                    if (sups.length > 0) setSupplier(sups[0]._id);
+                    if (!editPo && sups.length > 0) setSupplier(sups[0]._id);
                 }
                 if (locRes.data?.success) {
                     const locs = locRes.data.data || [];
                     setLocations(locs);
-                    if (locs.length > 0) setDeliveryLocation(locs[0]._id);
+                    if (!editPo && locs.length > 0) setDeliveryLocation(locs[0]._id);
                 }
                 if (rmRes.data?.success) {
                     const rms = rmRes.data.data || [];
                     setRawMaterials(rms);
-                    if (rms.length > 0 && items.length > 0 && !items[0].rawMaterial) {
+                    if (!editPo && rms.length > 0 && items.length > 0 && !items[0].rawMaterial) {
                         setItems([
-                            { rawMaterial: rms[0]._id, orderedQuantity: 100, ratePerUnit: rms[0].pricePerUnit || 0 }
+                            { rawMaterial: rms[0]._id, orderedQuantity: 100, ratePerUnit: rms[0].pricePerUnit || 0, unit: 'Kg' }
                         ]);
                     }
                 }
@@ -66,7 +87,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                 toast.error('Failed to load supplier & raw material lists');
             })
             .finally(() => setIsLoadingData(false));
-    }, [isOpen]);
+    }, [isOpen, editPo]);
 
     // Handle Expected Delivery Date Change with Live Self-Correction
     const handleExpectedDeliveryChange = (e) => {
@@ -84,7 +105,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
     const handleAddItemRow = () => {
         const defaultRm = rawMaterials.length > 0 ? rawMaterials[0]._id : '';
         const defaultRate = rawMaterials.length > 0 ? (rawMaterials[0].pricePerUnit || 0) : 0;
-        setItems((prev) => [...prev, { rawMaterial: defaultRm, orderedQuantity: 100, ratePerUnit: defaultRate }]);
+        setItems((prev) => [...prev, { rawMaterial: defaultRm, orderedQuantity: 100, ratePerUnit: defaultRate, unit: 'Kg' }]);
     };
 
     const handleRemoveItemRow = (index) => {
@@ -118,9 +139,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
         return acc + (qty * rate);
     }, 0);
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-
+    const submitOrder = async (targetStatus = 'SENT_TO_SUPPLIER') => {
         if (!supplier) {
             toast.error('Please select a Supplier');
             return;
@@ -161,24 +180,34 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                 expectedDelivery,
                 deliveryLocation: deliveryLocation || undefined,
                 notes: notes.trim() || undefined,
-                status: sendImmediately ? 'SENT_TO_SUPPLIER' : 'DRAFT',
+                status: targetStatus,
                 items: items.map((i) => ({
                     rawMaterial: i.rawMaterial,
                     orderedQuantity: Number(i.orderedQuantity),
-                    ratePerUnit: Number(i.ratePerUnit)
+                    ratePerUnit: Number(i.ratePerUnit),
+                    unit: i.unit || 'Kg'
                 }))
             };
 
-            const res = await axiosInstance.post('/purchase-orders', payload);
+            let res;
+            if (editPo?._id) {
+                res = await axiosInstance.put(`/purchase-orders/${editPo._id}`, payload);
+            } else {
+                res = await axiosInstance.post('/purchase-orders', payload);
+            }
 
             if (res.data?.success) {
-                toast.success(`Purchase Order ${res.data.data?.poNumber || ''} created successfully!`);
+                const poNum = res.data.data?.poNumber || editPo?.poNumber || '';
+                const actionMsg = targetStatus === 'DRAFT'
+                    ? (editPo ? `Draft PO ${poNum} updated successfully!` : `Purchase Order ${poNum} saved as Draft!`)
+                    : (editPo ? `Purchase Order ${poNum} updated and issued to supplier!` : `Purchase Order ${poNum} created & issued to supplier!`);
+                toast.success(actionMsg);
                 if (onSuccess) onSuccess();
                 onClose();
             }
         } catch (err) {
-            console.error('Error creating Purchase Order:', err);
-            toast.error(err.response?.data?.message || 'Failed to create Purchase Order');
+            console.error('Error saving Purchase Order:', err);
+            toast.error(err.response?.data?.message || 'Failed to save Purchase Order');
         } finally {
             setIsSubmitting(false);
         }
@@ -188,10 +217,10 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
         <SlideOverPanel
             isOpen={isOpen}
             onClose={onClose}
-            title="Issue New Purchase Order"
-            subtitle="Create raw material purchase order for suppliers"
+            title={editPo ? `Edit Purchase Order (${editPo.poNumber || ''})` : "Issue New Purchase Order"}
+            subtitle={editPo ? "Modify draft purchase order details" : "Create raw material purchase order for suppliers"}
         >
-            <form onSubmit={handleSubmit} className="space-y-4 font-sans text-xs">
+            <form onSubmit={(e) => { e.preventDefault(); submitOrder('SENT_TO_SUPPLIER'); }} className="space-y-4 font-sans text-xs">
                 {/* Supplier Selection */}
                 <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
@@ -219,18 +248,19 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                     )}
                 </div>
 
-                {/* PO Date, Expected Delivery & Delivery Location */}
-                <div className="grid grid-cols-3 gap-3">
+                {/* PO Date & Expected Delivery Date (Side-by-Side) */}
+                <div className="grid grid-cols-2 gap-4">
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            PO Date
+                            PO Date *
                         </label>
-                        <div className="w-full border border-border/80 rounded-md p-2.5 bg-app-bg text-xs font-mono font-bold text-text-main flex items-center justify-between">
-                            <span>{new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
-                            <span className="bg-green-100 text-green-800 font-semibold px-2 py-1 rounded text-xs">
-                                Today (Auto)
-                            </span>
-                        </div>
+                        <input
+                            type="date"
+                            value={poDate}
+                            onChange={(e) => setPoDate(e.target.value)}
+                            className="border border-border rounded p-2 text-xs w-full bg-card-bg text-text-main font-mono font-bold focus:outline-none focus:border-primary cursor-pointer"
+                            required
+                        />
                     </div>
 
                     <div>
@@ -243,27 +273,28 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                             min={getTodayLocalDateString()}
                             value={expectedDelivery}
                             onChange={handleExpectedDeliveryChange}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
                         />
                     </div>
+                </div>
 
-                    <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Delivery Location
-                        </label>
-                        <select
-                            value={deliveryLocation}
-                            onChange={(e) => setDeliveryLocation(e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main font-semibold focus:outline-none focus:border-primary cursor-pointer"
-                        >
-                            <option value="">-- Select Location --</option>
-                            {locations.map((loc) => (
-                                <option key={loc._id} value={loc._id}>
-                                    {loc.code ? `${loc.code} - ` : ''}{loc.name}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
+                {/* Delivery Location (Full Width Below Dates) */}
+                <div className="w-full">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                        Delivery Location
+                    </label>
+                    <select
+                        value={deliveryLocation}
+                        onChange={(e) => setDeliveryLocation(e.target.value)}
+                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main font-semibold focus:outline-none focus:border-primary cursor-pointer"
+                    >
+                        <option value="">-- Select Location --</option>
+                        {locations.map((loc) => (
+                            <option key={loc._id} value={loc._id}>
+                                {loc.code ? `${loc.code} - ` : ''}{loc.name}
+                            </option>
+                        ))}
+                    </select>
                 </div>
 
                 {/* Repeatable Items Section */}
@@ -320,16 +351,28 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                                 <div className="grid grid-cols-2 gap-2">
                                     <div>
                                         <label className="block text-[10px] font-bold text-text-muted mb-0.5">
-                                            Ordered Qty *
+                                            Ordered Qty & Unit *
                                         </label>
-                                        <input
-                                            type="number"
-                                            min="1"
-                                            required
-                                            value={item.orderedQuantity}
-                                            onChange={(e) => handleItemChange(idx, 'orderedQuantity', e.target.value)}
-                                            className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
-                                        />
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                required
+                                                value={item.orderedQuantity}
+                                                onChange={(e) => handleItemChange(idx, 'orderedQuantity', e.target.value)}
+                                                className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
+                                            />
+                                            <select
+                                                value={item.unit || 'Kg'}
+                                                onChange={(e) => handleItemChange(idx, 'unit', e.target.value)}
+                                                className="border border-border rounded p-1.5 bg-card-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                                            >
+                                                <option value="Kg">Kg</option>
+                                                <option value="Roll">Roll</option>
+                                                <option value="Bags">Bags</option>
+                                                <option value="Pcs">Pcs</option>
+                                            </select>
+                                        </div>
                                     </div>
 
                                     <div>
@@ -358,22 +401,8 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                     <span className="text-sm text-primary">₹{computedTotalValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                 </div>
 
-                {/* Send Immediately Checkbox */}
-                <div className="flex items-center gap-2 pt-1">
-                    <input
-                        type="checkbox"
-                        id="sendImmediately"
-                        checked={sendImmediately}
-                        onChange={(e) => setSendImmediately(e.target.checked)}
-                        className="rounded border-border text-primary focus:ring-primary cursor-pointer"
-                    />
-                    <label htmlFor="sendImmediately" className="text-xs font-semibold text-text-main cursor-pointer">
-                        Send to supplier immediately (sets status to 'Sent to Supplier')
-                    </label>
-                </div>
-
                 {/* Submit Actions */}
-                <div className="pt-3 border-t border-border flex justify-end gap-3">
+                <div className="pt-3 border-t border-border flex justify-end gap-2.5">
                     <button
                         type="button"
                         onClick={onClose}
@@ -382,12 +411,22 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess })
                         Cancel
                     </button>
                     <button
+                        type="button"
+                        disabled={isSubmitting}
+                        onClick={() => submitOrder('DRAFT')}
+                        className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-lg text-xs transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                        {isSubmitting
+                            ? (editPo ? 'Updating Draft...' : 'Saving Draft...')
+                            : (editPo ? 'Update Draft' : 'Save as Draft')}
+                    </button>
+                    <button
                         type="submit"
                         disabled={isSubmitting}
                         className="px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
                         <ShoppingBag size={15} />
-                        <span>{isSubmitting ? 'Issuing PO...' : 'Issue Purchase Order'}</span>
+                        <span>{isSubmitting ? (editPo ? 'Updating PO...' : 'Issuing PO...') : (editPo ? 'Update & Issue PO' : 'Issue Purchase Order')}</span>
                     </button>
                 </div>
             </form>

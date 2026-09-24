@@ -14,7 +14,8 @@ import {
     UploadCloud,
     Trash2,
     X,
-    Paperclip
+    Paperclip,
+    Plus
 } from 'lucide-react';
 
 const STAGE_LABELS = {
@@ -83,6 +84,8 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [purchaseOrderFiles, setPurchaseOrderFiles] = useState([]);
     const [rolls, setRolls] = useState([]);
     const [availableRolls, setAvailableRolls] = useState([]);
+    const [rawMaterials, setRawMaterials] = useState([]);
+    const [inks, setInks] = useState([]);
 
     // Auto-generated Editable Description State
     const [description, setDescription] = useState('');
@@ -140,6 +143,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
         setExpectedDeliveryDate('');
         setPurchaseOrderFiles([]);
         setRolls([]);
+        setInks([]);
         setDescription('');
         setIsDescriptionManuallyEdited(false);
     };
@@ -202,13 +206,14 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
         const fetchDropdowns = async () => {
             try {
                 setIsLoadingDropdowns(true);
-                const [custRes, fgRes, mchRes, profileRes, attrRes, rollsRes] = await Promise.all([
+                const [custRes, fgRes, mchRes, profileRes, attrRes, rollsRes, rmRes] = await Promise.all([
                     axiosInstance.get('/customers?isActive=true&limit=100'),
                     axiosInstance.get('/finished-goods?isActive=true&limit=100'),
                     axiosInstance.get('/machines?isActive=true&limit=100'),
                     axiosInstance.get('/admin/company-profile').catch(() => null),
                     axiosInstance.get('/raw-material-attributes').catch(() => null),
-                    axiosInstance.get('/work-orders/available-rolls').catch(() => null)
+                    axiosInstance.get('/work-orders/available-rolls').catch(() => null),
+                    axiosInstance.get('/raw-materials?isActive=true&limit=100').catch(() => null)
                 ]);
 
                 if (custRes.data?.success) {
@@ -248,6 +253,10 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 if (rollsRes?.data?.success && Array.isArray(rollsRes.data?.data)) {
                     // Filter to ensure only rolls with remaining stock > 0
                     setAvailableRolls(rollsRes.data.data.filter((r) => Number(r.remainingMeters) > 0));
+                }
+
+                if (rmRes?.data?.success && Array.isArray(rmRes.data?.data)) {
+                    setRawMaterials(rmRes.data.data);
                 }
             } catch (err) {
                 console.error('Failed to load dropdown options:', err);
@@ -545,6 +554,9 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 assignedMachine: assignedMachine || null,
                 description: description || '',
                 remarks: description || '',
+                inks: (inks || [])
+                    .filter((i) => i && String(i).trim() !== '')
+                    .map((i) => String(i).trim()),
                 jobOrderDetails: {
                     orderDate: orderDate || getTodayLocalDateString(),
                     productCategory,
@@ -686,7 +698,14 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                         <select
                             required
                             value={finishedGood}
-                            onChange={(e) => setFinishedGood(e.target.value)}
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                setFinishedGood(val);
+                                const selectedFg = finishedGoods.find((fg) => fg._id === val);
+                                if (selectedFg && Array.isArray(selectedFg.inks) && selectedFg.inks.length > 0) {
+                                    setInks([...selectedFg.inks]);
+                                }
+                            }}
                             disabled={isLoadingDropdowns}
                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50"
                         >
@@ -944,6 +963,54 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                                 options={rmAttributes.materialColour || []}
                                 onOpenAdd={() => handleOpenAddAttributeModal('materialColour', 'Material Colour', 'printingColour')}
                             />
+                        </div>
+
+                        {/* INKS REQUIRED (OPTIONAL) */}
+                        <div className="space-y-3 pt-3.5 border-t border-border">
+                            <div className="flex items-center justify-between pb-0.5">
+                                <h4 className="text-[11px] font-bold uppercase tracking-wide text-primary flex items-center gap-1.5">
+                                    <span>INKS REQUIRED (OPTIONAL)</span>
+                                </h4>
+                                <span className="text-[10px] text-text-muted font-medium">Ink variants</span>
+                            </div>
+
+                            <div className="space-y-2">
+                                {(inks || []).map((inkItem, index) => (
+                                    <div key={index} className="flex items-center gap-2">
+                                        <input
+                                            type="text"
+                                            placeholder="e.g., Red Ink"
+                                            value={inkItem}
+                                            onChange={(e) => {
+                                                const updatedInks = [...(inks || [])];
+                                                updatedInks[index] = e.target.value;
+                                                setInks(updatedInks);
+                                            }}
+                                            className="h-10 flex-1 border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const updatedInks = (inks || []).filter((_, i) => i !== index);
+                                                setInks(updatedInks);
+                                            }}
+                                            className="h-10 px-3 flex items-center justify-center text-rose-500 hover:text-rose-700 hover:bg-rose-50 border border-border rounded-md transition-colors cursor-pointer"
+                                            title="Delete Ink"
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+
+                                <button
+                                    type="button"
+                                    onClick={() => setInks([...(inks || []), ''])}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-primary hover:text-primary-hover border border-dashed border-primary/40 hover:border-primary rounded-md transition-colors cursor-pointer bg-primary/5"
+                                >
+                                    <Plus size={14} />
+                                    <span>+ Add Ink Requirement</span>
+                                </button>
+                            </div>
                         </div>
 
                         {/* Fabric Grammage, Bag Weight (Gms) & Fabric Average */}

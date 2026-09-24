@@ -35,6 +35,7 @@ const createRawMaterial = async (req, res) => {
             defaultLocation,
             materialGrade,
             color,
+            colors,
             hsnCode,
             moq,
             materialDescription,
@@ -131,6 +132,7 @@ const createRawMaterial = async (req, res) => {
             defaultLocation: defaultLocation || null,
             materialGrade: materialGrade ? String(materialGrade).trim() : 'Virgin Grade 100',
             color: effectiveColor,
+            colors: Array.isArray(colors) ? colors.filter((c) => c && String(c).trim() !== '').map((c) => String(c).trim()) : [],
             hsnCode: hsnCode ? String(hsnCode).trim() : '39012000',
             moq: moq !== undefined && moq !== '' ? Number(moq) : 1000,
             materialDescription: materialDescription ? String(materialDescription).trim() : '',
@@ -408,6 +410,7 @@ const updateRawMaterial = async (req, res) => {
             defaultLocation,
             materialGrade,
             color,
+            colors,
             hsnCode,
             moq,
             materialDescription,
@@ -521,6 +524,9 @@ const updateRawMaterial = async (req, res) => {
             if (!rawMaterial.materialColour) {
                 rawMaterial.materialColour = String(color).trim();
             }
+        }
+        if (colors !== undefined) {
+            rawMaterial.colors = Array.isArray(colors) ? colors.filter((c) => c && String(c).trim() !== '').map((c) => String(c).trim()) : [];
         }
         if (hsnCode !== undefined) rawMaterial.hsnCode = String(hsnCode).trim();
         if (moq !== undefined) rawMaterial.moq = Number(moq);

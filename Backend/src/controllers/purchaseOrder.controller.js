@@ -133,6 +133,7 @@ const createPurchaseOrder = async (req, res) => {
             cleanedItems.push({
                 rawMaterial: item.rawMaterial,
                 orderedQuantity: qty,
+                unit: item.unit || 'Kg',
                 receivedQuantity: 0, // Always 0 on creation
                 ratePerUnit: rate
             });
@@ -323,7 +324,7 @@ const getPurchaseOrderById = async (req, res) => {
  */
 const updatePurchaseOrder = async (req, res) => {
     try {
-        const tenantId = req.user?.tenant;
+        const tenantId = req.user?.tenant || req.tenantId;
         if (!tenantId) {
             return res.status(403).json({
                 success: false,
@@ -356,7 +357,8 @@ const updatePurchaseOrder = async (req, res) => {
             expectedDelivery,
             items,
             deliveryLocation,
-            notes
+            notes,
+            status
         } = req.body;
 
         if (supplier) {
@@ -388,6 +390,12 @@ const updatePurchaseOrder = async (req, res) => {
         if (poDate) purchaseOrder.poDate = poDate;
         if (expectedDelivery) purchaseOrder.expectedDelivery = expectedDelivery;
         if (notes !== undefined) purchaseOrder.notes = notes;
+        if (status) {
+            const validStatuses = ['DRAFT', 'SENT_TO_SUPPLIER', 'PENDING_APPROVAL', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'];
+            if (validStatuses.includes(status)) {
+                purchaseOrder.status = status;
+            }
+        }
 
         if (items !== undefined) {
             if (!Array.isArray(items) || items.length === 0) {
@@ -425,6 +433,7 @@ const updatePurchaseOrder = async (req, res) => {
                 cleanedItems.push({
                     rawMaterial: item.rawMaterial,
                     orderedQuantity: qty,
+                    unit: item.unit || 'Kg',
                     receivedQuantity: 0,
                     ratePerUnit: rate
                 });
@@ -444,6 +453,7 @@ const updatePurchaseOrder = async (req, res) => {
 
             purchaseOrder.items = cleanedItems;
             purchaseOrder.totalValue = computedTotalValue;
+            purchaseOrder.totalAmount = computedTotalValue;
         }
 
         await purchaseOrder.save();

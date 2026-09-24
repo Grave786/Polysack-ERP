@@ -72,7 +72,7 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                             <tr className="border-b border-border/60 bg-app-bg text-[10px] font-bold uppercase text-text-muted">
                                 <th className="p-2.5">#</th>
                                 <th className="p-2.5">Bag Specification</th>
-                                <th className="p-2.5 text-right">Quantity (Bags)</th>
+                                <th className="p-2.5 text-right">Quantity</th>
                                 <th className="p-2.5 text-right">Rate (₹)</th>
                                 <th className="p-2.5 text-right">Subtotal</th>
                             </tr>
@@ -80,8 +80,20 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                         <tbody className="divide-y divide-border/40 font-sans">
                             {items.map((it, idx) => {
                                 const fg = typeof it.finishedGood === 'object' ? it.finishedGood : null;
-                                const fgName = fg?.name || it.finishedGoodName || 'Finished Goods Bag';
-                                const fgCode = fg?.code || '';
+                                const fgName =
+                                    it.product?.productName ||
+                                    it.product?.title ||
+                                    it.product?.name ||
+                                    it.product?.bagName ||
+                                    fg?.name ||
+                                    fg?.title ||
+                                    fg?.productName ||
+                                    fg?.bagName ||
+                                    it.finishedGoodName ||
+                                    it.bagName ||
+                                    it.description ||
+                                    'Unknown Product';
+                                const fgCode = it.product?.code || fg?.code || '';
                                 const qty = Number(it.quantity || 0);
                                 const rate = Number(it.ratePerUnit || 0);
                                 const lineTotal = qty * rate;
@@ -90,10 +102,14 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                                     <tr key={idx} className="hover:bg-app-bg/50">
                                         <td className="p-2.5 text-text-muted font-mono">{idx + 1}</td>
                                         <td className="p-2.5">
-                                            <div className="font-semibold text-text-main">{fgName}</div>
+                                            <div className="font-semibold text-text-main">
+                                                {it.product?.productName || it.product?.title || it.product?.name || it.product?.bagName || fg?.name || fg?.title || it.finishedGoodName || it.bagName || 'Unknown Product'}
+                                            </div>
                                             {fgCode && <div className="text-[10px] font-mono text-text-muted">{fgCode}</div>}
                                         </td>
-                                        <td className="p-2.5 text-right font-mono font-bold text-text-main">{qty.toLocaleString()}</td>
+                                        <td className="p-2.5 text-right font-mono font-bold text-text-main">
+                                            {qty.toLocaleString()} {it.unit && <span className="text-[10px] text-text-muted font-sans font-normal ml-0.5">{it.unit}</span>}
+                                        </td>
                                         <td className="p-2.5 text-right font-mono">₹{rate.toFixed(2)}</td>
                                         <td className="p-2.5 text-right font-mono font-bold text-text-main">₹{lineTotal.toLocaleString()}</td>
                                     </tr>

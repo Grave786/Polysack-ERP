@@ -62,6 +62,7 @@ const RawMaterialSchema = new mongoose.Schema({
         trim: true,
         default: 'Natural White'
     },
+    colors: [{ type: String }],
     // Client-specified Raw Material Master fields
     materialDescription: {
         type: String,

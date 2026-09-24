@@ -97,6 +97,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                         return {
                             finishedGood: fgId || '',
                             quantity: qty > 0 ? String(qty) : '',
+                            unit: it.unit || 'Pcs',
                             ratePerUnit: rate >= 0 ? String(rate) : '',
                             subtotal: qty * rate
                         };
@@ -111,7 +112,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
             setDispatchLocation('');
             setStatus('CONFIRMED');
             setNotes('');
-            setItems([{ finishedGood: '', quantity: '', ratePerUnit: '', subtotal: 0 }]);
+            setItems([{ finishedGood: '', quantity: '', unit: 'Pcs', ratePerUnit: '', subtotal: 0 }]);
         }
     }, [isOpen, isEditMode, initialData]);
 
@@ -199,6 +200,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                 items: items.map((it) => ({
                     finishedGood: it.finishedGood,
                     quantity: Number(it.quantity),
+                    unit: it.unit || 'Pcs',
                     ratePerUnit: Number(it.ratePerUnit)
                 }))
             };
@@ -436,7 +438,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                         key={index}
                                         className="grid grid-cols-12 gap-2 items-center bg-app-bg p-2.5 border border-border/70 rounded-lg"
                                     >
-                                        <div className="col-span-12 sm:col-span-5">
+                                        <div className="col-span-12 sm:col-span-4">
                                             <label className="block text-[10px] font-bold uppercase tracking-wider text-text-muted mb-0.5">
                                                 Finished Bag Specification *
                                             </label>
@@ -455,24 +457,36 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                             </select>
                                         </div>
 
-                                        <div className="col-span-5 sm:col-span-3">
+                                        <div className="col-span-6 sm:col-span-4">
                                             <label className="block text-[10px] font-bold uppercase tracking-wider text-text-muted mb-0.5">
-                                                Order Qty (Bags) *
+                                                Order Qty & Unit *
                                             </label>
-                                            <input
-                                                type="number"
-                                                required
-                                                min="1"
-                                                placeholder="e.g. 5000"
-                                                value={item.quantity}
-                                                onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
-                                                className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
-                                            />
+                                            <div className="flex gap-1.5">
+                                                <input
+                                                    type="number"
+                                                    required
+                                                    min="1"
+                                                    placeholder="e.g. 5000"
+                                                    value={item.quantity}
+                                                    onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
+                                                    className="w-full min-w-0 border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
+                                                />
+                                                <select
+                                                    value={item.unit || 'Pcs'}
+                                                    onChange={(e) => handleItemChange(index, 'unit', e.target.value)}
+                                                    className="border border-border rounded p-1.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer shrink-0"
+                                                >
+                                                    <option value="Pcs">Pcs</option>
+                                                    <option value="Kg">Kg</option>
+                                                    <option value="Roll">Roll</option>
+                                                    <option value="Bags">Bags</option>
+                                                </select>
+                                            </div>
                                         </div>
 
-                                        <div className="col-span-4 sm:col-span-2">
+                                        <div className="col-span-3 sm:col-span-2">
                                             <label className="block text-[10px] font-bold uppercase tracking-wider text-text-muted mb-0.5">
-                                                Rate (₹/Bag) *
+                                                Rate (₹/Unit) *
                                             </label>
                                             <input
                                                 type="number"

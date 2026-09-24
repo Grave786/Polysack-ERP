@@ -63,6 +63,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                                 rawMaterial: rmId,
                                 name: rmName,
                                 code: rmCode,
+                                unit: i.unit || (typeof i.rawMaterial === 'object' && (i.rawMaterial?.uom?.symbol || i.rawMaterial?.uom?.name || i.rawMaterial?.uom)) || 'Kg',
                                 orderedQuantity: ordered,
                                 alreadyReceivedQuantity: alreadyRecv,
                                 remainingAllowed: remaining,
@@ -143,13 +144,15 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
             return;
         }
 
-        // Validate Packing Slip & Roll Specifications - Mandatory
-        if (!inwardRolls || inwardRolls.length === 0) {
-            toast.error('At least one Roll Specification is required. Please fill in the packing slip roll details.');
-            return;
-        }
+        const selectedPoItem = grnItems[0] || activePo?.items?.[0];
 
         const validRolls = [];
+        // Validate Packing Slip & Roll Specifications - Mandatory ONLY for Roll unit
+        if (selectedPoItem?.unit === 'Roll') {
+            if (!inwardRolls || inwardRolls.length === 0) {
+                toast.error('At least one Roll Specification is required for Roll items. Please fill in the packing slip roll details.');
+                return;
+            }
         for (let rIdx = 0; rIdx < inwardRolls.length; rIdx++) {
             const r = inwardRolls[rIdx];
             const rollNumberVal = (r.rollNumber || r.rollNo || '').trim();
@@ -192,9 +195,10 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
             });
         }
 
-        if (validRolls.length === 0) {
-            toast.error('Please enter at least one roll with a valid Roll Number.');
-            return;
+            if (validRolls.length === 0) {
+                toast.error('Please enter at least one roll with a valid Roll Number.');
+                return;
+            }
         }
 
         try {
@@ -226,6 +230,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
     const activePo = activePoDetails || po;
     if (!activePo) return null;
 
+    const selectedPoItem = grnItems[0] || activePo?.items?.[0];
     const supplierName = typeof activePo.supplier === 'object' ? (activePo.supplier?.companyName || activePo.supplier?.name) : 'Supplier';
 
     return (
@@ -291,10 +296,10 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                                     </div>
                                     <div className="text-right text-[10px]">
                                         <span className="text-text-muted block">
-                                            Ordered: <strong>{item.orderedQuantity}</strong> | Recv: <strong>{item.alreadyReceivedQuantity}</strong>
+                                            Ordered: <strong>{item.orderedQuantity} {item.unit || ''}</strong> | Recv: <strong>{item.alreadyReceivedQuantity} {item.unit || ''}</strong>
                                         </span>
                                         <span className="text-emerald-700 font-bold block">
-                                            Remaining: {item.remainingAllowed}
+                                            Remaining: {item.remainingAllowed} {item.unit || ''}
                                         </span>
                                     </div>
                                 </div>
@@ -302,7 +307,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                                 <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border/60">
                                     <div>
                                         <label className="block text-[10px] font-bold text-text-muted mb-0.5">
-                                            Received Qty (This GRN) *
+                                            Received Qty ({item.unit || 'Kg'}) *
                                         </label>
                                         <input
                                             type="number"
@@ -333,14 +338,26 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                     </div>
                 </div>
 
-                {/* Packing Slip & Roll Specifications (Multi-Roll Repeatable Section) */}
-                <PackingSlipRollsSection
-                    rolls={rolls}
-                    onChange={setRolls}
-                    title="Packing Slip & Roll Specifications"
-                    subtitle="Record multiple rolls inwarded with this purchase"
-                    required={true}
-                />
+                {/* Packing Slip & Roll Specifications vs Bulk Quantity Form */}
+                {selectedPoItem?.unit === 'Roll' ? (
+                    <PackingSlipRollsSection
+                        rolls={rolls}
+                        onChange={setRolls}
+                        title="Packing Slip & Roll Specifications"
+                        subtitle="Record multiple rolls inwarded with this purchase"
+                        required={true}
+                    />
+                ) : (
+                    <div className="bg-app-bg border border-border rounded-lg p-3 space-y-1">
+                        <div className="flex items-center gap-2 text-text-main font-bold text-xs">
+                            <CheckCircle2 size={15} className="text-emerald-600" />
+                            <span>Bulk Material Receipt ({selectedPoItem?.unit || 'Kg'})</span>
+                        </div>
+                        <p className="text-[11px] text-text-muted">
+                            Standard bulk inward: Direct quantity receipt in {selectedPoItem?.unit || 'Kg'} without individual roll tracking.
+                        </p>
+                    </div>
+                )}
 
                 {/* Inward Notes */}
                 <div>

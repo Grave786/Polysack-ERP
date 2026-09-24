@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Download, Truck, FileText, Check, ClipboardList, Eye } from 'lucide-react';
+import { Plus, Download, Truck, FileText, Check, ClipboardList, Eye, Pencil } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreatePurchaseOrderPanel from '../components/procurement/CreatePurchaseOrderPanel';
 import CreateGRNPanel from '../components/procurement/CreateGRNPanel';
@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 
 export default function ProcurementPage() {
     const [isCreatePoOpen, setIsCreatePoOpen] = useState(false);
+    const [editPo, setEditPo] = useState(null);
     const [selectedPoForGrn, setSelectedPoForGrn] = useState(null);
     const [isGrnPanelOpen, setIsGrnPanelOpen] = useState(false);
     const [isMatReceiptOpen, setIsMatReceiptOpen] = useState(false);
@@ -167,11 +168,25 @@ export default function ProcurementPage() {
                                 setViewRecord(row);
                                 setIsDetailModalOpen(true);
                             }}
-                            className="text-gray-500 hover:text-blue-600 mr-3 cursor-pointer"
+                            className="text-gray-500 hover:text-blue-600 mr-1.5 cursor-pointer"
                             title="View Details"
                         >
                             <Eye size={14} />
                         </button>
+
+                        {row.status === 'DRAFT' && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setEditPo(row);
+                                    setIsCreatePoOpen(true);
+                                }}
+                                className="text-gray-500 hover:text-amber-600 mr-1.5 cursor-pointer"
+                                title="Edit Draft Purchase Order"
+                            >
+                                <Pencil size={14} />
+                            </button>
+                        )}
 
                         {isPendingApproval && (
                             <button
@@ -334,7 +349,10 @@ export default function ProcurementPage() {
     ) : (
         <button
             type="button"
-            onClick={() => setIsCreatePoOpen(true)}
+            onClick={() => {
+                setEditPo(null);
+                setIsCreatePoOpen(true);
+            }}
             className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
         >
             <Plus size={15} />
@@ -354,10 +372,14 @@ export default function ProcurementPage() {
                 onTabChange={setActiveTab}
             />
 
-            {/* Issue Purchase Order Panel */}
+            {/* Issue / Edit Purchase Order Panel */}
             <CreatePurchaseOrderPanel
                 isOpen={isCreatePoOpen}
-                onClose={() => setIsCreatePoOpen(false)}
+                editPo={editPo}
+                onClose={() => {
+                    setIsCreatePoOpen(false);
+                    setEditPo(null);
+                }}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />
 

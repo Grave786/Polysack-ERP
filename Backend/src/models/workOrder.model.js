@@ -326,6 +326,7 @@ const WorkOrderSchema = new mongoose.Schema({
         type: JobOrderDetailsSchema,
         default: () => ({})
     },
+    inks: [{ type: String }],
     isActive: {
         type: Boolean,
         default: true

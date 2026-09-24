@@ -426,6 +426,7 @@ export default function TabbedResourcePage({
     const [employeesList, setEmployeesList] = useState([]);
     const [rawMaterialsList, setRawMaterialsList] = useState([]);
     const [bomIngredients, setBomIngredients] = useState([{ rawMaterial: '', quantityPerUnit: '' }]);
+    const [inks, setInks] = useState([]);
 
     // Raw Material Lookup Attributes State (9 master lists)
     const [rmAttributes, setRmAttributes] = useState({
@@ -1501,6 +1502,9 @@ export default function TabbedResourcePage({
             if (formData.materialColour) {
                 payload.color = formData.materialColour;
             }
+            if (Array.isArray(formData.colors)) {
+                payload.colors = formData.colors.filter((c) => c && String(c).trim() !== '').map((c) => String(c).trim());
+            }
         }
 
         if (key === 'finished-goods' || key === 'finishedbags' || key === 'finishedproducts') {
@@ -1555,6 +1559,9 @@ export default function TabbedResourcePage({
             payload.baseName = formData.baseName !== undefined ? formData.baseName : (formData.name || '');
 
             payload.materialRequirements = validIngredients;
+            payload.inks = (inks || [])
+                .filter((ink) => ink && String(ink).trim() !== '')
+                .map((ink) => String(ink).trim());
         }
 
 
@@ -1643,6 +1650,7 @@ export default function TabbedResourcePage({
     const handleOpenDrawer = () => {
         setEditingItem(null);
         setBomIngredients([{ rawMaterial: '', quantityPerUnit: '' }]);
+        setInks([]);
 
         const suggestedCode = generateSuggestedCode(activeTabKey, pagination?.total || 0);
 
@@ -1660,6 +1668,7 @@ export default function TabbedResourcePage({
             standardHours: 8,
             gracePeriodMinutes: 15,
             isActive: true,
+            colors: [],
             dimensionUnit: 'cm',
             dimensions: { width: '', length: '', unit: 'cm' },
             status: activeTabKey === 'customers' ? 'ACTIVE_CUSTOMER' : (activeTabKey === 'machines' ? 'AVAILABLE' : 'Active')
@@ -1754,8 +1763,10 @@ export default function TabbedResourcePage({
             shiftAssignment: typeof row.shiftAssignment === 'object' ? row.shiftAssignment?._id : row.shiftAssignment,
             facility: typeof row.facility === 'object' ? row.facility?._id : row.facility,
             finishedGood: typeof row.finishedGood === 'object' ? row.finishedGood?._id : row.finishedGood,
+            colors: Array.isArray(row.colors) ? row.colors : (row.colors || []),
             isActive: row.isActive !== false
         });
+        setInks(Array.isArray(row.inks) ? row.inks : (Array.isArray(row.inksUsed) ? row.inksUsed.map((i) => typeof i === 'string' ? i : (i.color || '')) : []));
         setIsDrawerOpen(true);
     };
 
@@ -3019,6 +3030,57 @@ export default function TabbedResourcePage({
                         </div>
                     </div>
 
+                    {/* INK / MATERIAL COLORS (OPTIONAL) */}
+                    <div className="space-y-3 pt-3.5 border-t border-border">
+                        <div className="flex items-center justify-between pb-0.5">
+                            <h4 className="text-[11px] font-bold uppercase tracking-wide text-primary flex items-center gap-1.5">
+                                <span>INK / MATERIAL COLORS (OPTIONAL)</span>
+                            </h4>
+                            <span className="text-[10px] text-text-muted font-medium">Color variants</span>
+                        </div>
+
+                        <div className="space-y-2">
+                            {(formData.colors || []).map((colorItem, index) => (
+                                <div key={index} className="flex items-center gap-2">
+                                    <input
+                                        type="text"
+                                        placeholder="e.g., Red, Milky White"
+                                        value={colorItem}
+                                        onChange={(e) => {
+                                            const updatedColors = [...(formData.colors || [])];
+                                            updatedColors[index] = e.target.value;
+                                            handleInputChange('colors', updatedColors);
+                                        }}
+                                        className="h-10 flex-1 border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const updatedColors = (formData.colors || []).filter((_, i) => i !== index);
+                                            handleInputChange('colors', updatedColors);
+                                        }}
+                                        className="h-10 px-3 flex items-center justify-center text-rose-500 hover:text-rose-700 hover:bg-rose-50 border border-border rounded-md transition-colors cursor-pointer"
+                                        title="Delete Color"
+                                    >
+                                        <Trash2 size={14} />
+                                    </button>
+                                </div>
+                            ))}
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const currentColors = formData.colors || [];
+                                    handleInputChange('colors', [...currentColors, '']);
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-primary hover:text-primary-hover border border-dashed border-primary/40 hover:border-primary rounded-md transition-colors cursor-pointer bg-primary/5"
+                            >
+                                <Plus size={14} />
+                                <span>+ Add New Color</span>
+                            </button>
+                        </div>
+                    </div>
+
                     {renderIsActiveToggle()}
                 </div>
             );
@@ -3569,6 +3631,54 @@ export default function TabbedResourcePage({
                                     </div>
                                 );
                             })}
+                        </div>
+                    </div>
+
+                    {/* INKS USED (OPTIONAL) */}
+                    <div className="space-y-3 pt-3.5 border-t border-border">
+                        <div className="flex items-center justify-between pb-0.5">
+                            <h4 className="text-[11px] font-bold uppercase tracking-wide text-primary flex items-center gap-1.5">
+                                <span>INKS USED (OPTIONAL)</span>
+                            </h4>
+                            <span className="text-[10px] text-text-muted font-medium">Ink variants</span>
+                        </div>
+
+                        <div className="space-y-2">
+                            {(inks || []).map((inkItem, index) => (
+                                <div key={index} className="flex items-center gap-2">
+                                    <input
+                                        type="text"
+                                        placeholder="e.g., Red Ink"
+                                        value={inkItem}
+                                        onChange={(e) => {
+                                            const updatedInks = [...(inks || [])];
+                                            updatedInks[index] = e.target.value;
+                                            setInks(updatedInks);
+                                        }}
+                                        className="h-10 flex-1 border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const updatedInks = (inks || []).filter((_, i) => i !== index);
+                                            setInks(updatedInks);
+                                        }}
+                                        className="h-10 px-3 flex items-center justify-center text-rose-500 hover:text-rose-700 hover:bg-rose-50 border border-border rounded-md transition-colors cursor-pointer"
+                                        title="Delete Ink"
+                                    >
+                                        <Trash2 size={14} />
+                                    </button>
+                                </div>
+                            ))}
+
+                            <button
+                                type="button"
+                                onClick={() => setInks([...(inks || []), ''])}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-primary hover:text-primary-hover border border-dashed border-primary/40 hover:border-primary rounded-md transition-colors cursor-pointer bg-primary/5"
+                            >
+                                <Plus size={14} />
+                                <span>+ Add Ink</span>
+                            </button>
                         </div>
                     </div>
 

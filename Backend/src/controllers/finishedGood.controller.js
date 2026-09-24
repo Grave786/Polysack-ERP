@@ -162,6 +162,7 @@ const createFinishedGood = async (req, res) => {
             dimensionUnit: selectedUnit,
             bagCapacity: bagCapacity !== undefined ? Number(bagCapacity) : undefined,
             pricePerBag: pricePerBag !== undefined ? Number(pricePerBag) : 0,
+            inks: Array.isArray(req.body.inks) ? req.body.inks.filter(Boolean) : (Array.isArray(req.body.inksUsed) ? req.body.inksUsed : []),
             storageBayLocation: req.body.storageBayLocation !== undefined ? req.body.storageBayLocation : (req.body.warehouseLocation || ''),
             warehouseLocation: req.body.warehouseLocation || req.body.storageBayLocation || 'Finished Goods Warehouse - Bay 1',
             isActive: isActive !== undefined ? isActive : true,
@@ -556,6 +557,11 @@ const updateFinishedGood = async (req, res) => {
         }
         if (bagCapacity !== undefined) finishedGood.bagCapacity = Number(bagCapacity);
         if (pricePerBag !== undefined) finishedGood.pricePerBag = Number(pricePerBag);
+        if (req.body.inks !== undefined) {
+            finishedGood.inks = Array.isArray(req.body.inks) ? req.body.inks.filter(Boolean) : [];
+        } else if (req.body.inksUsed !== undefined) {
+            finishedGood.inks = Array.isArray(req.body.inksUsed) ? req.body.inksUsed : [];
+        }
         if (req.body.storageBayLocation !== undefined) finishedGood.storageBayLocation = req.body.storageBayLocation;
         if (req.body.warehouseLocation !== undefined) finishedGood.warehouseLocation = req.body.warehouseLocation;
         if (isActive !== undefined) finishedGood.isActive = isActive;

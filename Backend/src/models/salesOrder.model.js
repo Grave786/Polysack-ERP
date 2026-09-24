@@ -11,6 +11,11 @@ const SoItemSchema = new mongoose.Schema({
         required: [true, 'Quantity is required'],
         min: [0.0001, 'Quantity must be greater than 0']
     },
+    unit: {
+        type: String,
+        enum: ['Pcs', 'Kg', 'Roll', 'Bags'],
+        default: 'Pcs'
+    },
     ratePerUnit: {
         type: Number,
         required: [true, 'Rate per unit is required'],

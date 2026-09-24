@@ -200,14 +200,15 @@ const createGRN = async (req, res) => {
                 : ((r.qtyPcs !== undefined && r.qtyPcs !== '' && r.qtyPcs !== null) ? Number(r.qtyPcs) : null)
         })) : [];
 
-        if (!cleanedRolls || cleanedRolls.length === 0) {
+        const hasRollUnit = poDoc.items.some(i => i.unit === 'Roll');
+        if (hasRollUnit && (!cleanedRolls || cleanedRolls.length === 0)) {
             if (useTransaction && session) {
                 if (session.inTransaction()) await session.abortTransaction();
                 session.endSession();
             }
             return res.status(400).json({
                 success: false,
-                message: 'At least one roll entry with a valid Roll Number is required for GRN creation.'
+                message: 'At least one roll entry with a valid Roll Number is required for Roll items.'
             });
         }
 

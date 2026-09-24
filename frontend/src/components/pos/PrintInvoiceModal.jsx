@@ -32,11 +32,22 @@ export default function PrintInvoiceModal({ isOpen, onClose, invoice }) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto font-sans">
-            <div className="bg-card-bg border border-border rounded-xl shadow-2xl max-w-2xl w-full p-6 space-y-5 print:p-0 print:border-none print:shadow-none print:max-w-none">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans print:p-0 print:bg-white print:block">
+            <style>
+                {`
+                  .no-scrollbar::-webkit-scrollbar {
+                      display: none;
+                  }
+                  .no-scrollbar {
+                      -ms-overflow-style: none;
+                      scrollbar-width: none;
+                  }
+                `}
+            </style>
+            <div className="bg-card-bg border border-border rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto no-scrollbar p-6 space-y-5 print:p-0 print:border-none print:shadow-none print:max-w-none print:max-h-none print:overflow-visible">
                 
                 {/* Modal Header Controls (Hidden on Print) */}
-                <div className="flex items-center justify-between border-b border-border pb-3 print:hidden">
+                <div className="sticky -top-6 -mx-6 px-6 py-4 bg-card-bg/95 backdrop-blur-xs z-10 flex items-center justify-between border-b border-border print:hidden">
                     <div className="flex items-center gap-2">
                         <CheckCircle size={20} className="text-emerald-500" />
                         <h2 className="text-base font-bold text-text-main">
@@ -165,7 +176,7 @@ export default function PrintInvoiceModal({ isOpen, onClose, invoice }) {
                 </div>
 
                 {/* Bottom Close Button (Hidden on Print) */}
-                <div className="flex justify-end pt-2 print:hidden">
+                <div className="flex justify-end pt-2 pb-8 print:hidden">
                     <button
                         type="button"
                         onClick={onClose}

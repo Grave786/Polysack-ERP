@@ -1128,18 +1128,29 @@ const MASTER_SCHEMAS = {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-border font-mono">
-                                {items.map((item, idx) => (
-                                    <tr key={idx} className="hover:bg-app-bg/50">
-                                        <td className="px-3 py-2 text-text-muted">{idx + 1}</td>
-                                        <td className="px-3 py-2 font-bold text-text-main font-sans">
-                                            {typeof item.rawMaterial === 'object' ? (item.rawMaterial?.name || item.rawMaterial?.code) : (item.materialName || item.rawMaterial || '-')}
-                                        </td>
-                                        <td className="px-3 py-2">{item.quantity != null ? `${item.quantity} ${item.uom || ''}` : '-'}</td>
-                                        <td className="px-3 py-2 text-emerald-700 font-bold">{item.receivedQuantity != null ? `${item.receivedQuantity} ${item.uom || ''}` : '0'}</td>
-                                        <td className="px-3 py-2">₹{item.unitPrice != null ? item.unitPrice : (item.rate || 0)}</td>
-                                        <td className="px-3 py-2 font-bold">₹{item.totalAmount != null ? item.totalAmount.toLocaleString('en-IN') : 0}</td>
-                                    </tr>
-                                ))}
+                                {items.map((item, idx) => {
+                                    const orderedDisplay = item.orderedQuantity != null
+                                        ? `${item.orderedQuantity} ${item.unit || ''}`.trim()
+                                        : (item.quantity != null ? `${item.quantity} ${item.uom || ''}`.trim() : '-');
+                                    const recvDisplay = item.receivedQuantity != null
+                                        ? `${item.receivedQuantity} ${item.unit || item.uom || ''}`.trim()
+                                        : '0';
+                                    const rateDisplay = item.ratePerUnit != null ? item.ratePerUnit : (item.unitPrice != null ? item.unitPrice : (item.rate || 0));
+                                    const amountDisplay = ((item.orderedQuantity != null && item.ratePerUnit != null) ? (item.orderedQuantity * item.ratePerUnit) : (item.totalAmount || 0));
+
+                                    return (
+                                        <tr key={idx} className="hover:bg-app-bg/50">
+                                            <td className="px-3 py-2 text-text-muted">{idx + 1}</td>
+                                            <td className="px-3 py-2 font-bold text-text-main font-sans">
+                                                {typeof item.rawMaterial === 'object' ? (item.rawMaterial?.name || item.rawMaterial?.code) : (item.materialName || item.rawMaterial || '-')}
+                                            </td>
+                                            <td className="px-3 py-2">{orderedDisplay}</td>
+                                            <td className="px-3 py-2 text-emerald-700 font-bold">{recvDisplay}</td>
+                                            <td className="px-3 py-2">₹{rateDisplay}</td>
+                                            <td className="px-3 py-2 font-bold">₹{amountDisplay.toLocaleString('en-IN')}</td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>

@@ -11,6 +11,11 @@ const PoItemSchema = new mongoose.Schema({
         required: [true, 'Ordered quantity is required'],
         min: [0.0001, 'Ordered quantity must be greater than 0']
     },
+    unit: {
+        type: String,
+        enum: ['Kg', 'Roll', 'Bags', 'Pcs'],
+        default: 'Kg'
+    },
     receivedQuantity: {
         type: Number,
         default: 0,
