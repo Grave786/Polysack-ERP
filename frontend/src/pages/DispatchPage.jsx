@@ -15,6 +15,7 @@ export default function DispatchPage() {
 
     // Sources (Sales Orders + POS Invoices) and Locations for drawer dropdowns
     const [dispatchableSources, setDispatchableSources] = useState([]);
+    const [orderSearch, setOrderSearch] = useState('');
     const [selectedSourceKey, setSelectedSourceKey] = useState('');
     const [selectedSource, setSelectedSource] = useState(null);
     const [locations, setLocations] = useState([]);
@@ -36,6 +37,7 @@ export default function DispatchPage() {
     // Fetch Dispatchable Sources & Locations when Drawer Opens
     useEffect(() => {
         if (isDrawerOpen) {
+            setOrderSearch('');
             setIsLoadingFormOptions(true);
             Promise.all([
                 axiosInstance.get('/dispatches/dispatchable-sources'),
@@ -354,6 +356,16 @@ export default function DispatchPage() {
         }
     ];
 
+    const filteredSources = dispatchableSources.filter((src) => {
+        if (!orderSearch.trim()) return true;
+        const q = orderSearch.toLowerCase();
+        return (
+            (src.label && src.label.toLowerCase().includes(q)) ||
+            (src.customerName && src.customerName.toLowerCase().includes(q)) ||
+            (src.referenceNumber && src.referenceNumber.toLowerCase().includes(q))
+        );
+    });
+
     const headerButton = (
         <button
             type="button"
@@ -396,19 +408,30 @@ export default function DispatchPage() {
                                 <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1 flex items-center justify-between">
                                     <span>Select Order / Invoice Reference *</span>
                                     <span className="text-[10px] text-text-muted font-normal">
-                                        {dispatchableSources.length} available to dispatch
+                                        {filteredSources.length} of {dispatchableSources.length} available to dispatch
                                     </span>
                                 </label>
+                                <input 
+                                    type="text" 
+                                    placeholder="🔍 Search SO#, INV# or Customer Name..." 
+                                    value={orderSearch}
+                                    onChange={(e) => setOrderSearch(e.target.value)}
+                                    className="w-full mb-2 border border-border rounded-md p-2 text-xs bg-card-bg text-text-main focus:outline-none focus:border-primary"
+                                />
                                 <select
                                     required
                                     value={selectedSource?.id || ''}
                                     onChange={(e) => handleSelectSource(e.target.value)}
                                     className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
                                 >
-                                    {dispatchableSources.length === 0 ? (
-                                        <option value="">No pending Sales Orders or POS Invoices available</option>
+                                    {filteredSources.length === 0 ? (
+                                        <option value="">
+                                            {dispatchableSources.length === 0
+                                                ? 'No pending Sales Orders or POS Invoices available'
+                                                : 'No matching orders found'}
+                                        </option>
                                     ) : (
-                                        dispatchableSources.map((src) => (
+                                        filteredSources.map((src) => (
                                             <option key={`${src.sourceType}_${src.id}`} value={src.id}>
                                                 {src.label}
                                             </option>

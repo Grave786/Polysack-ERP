@@ -7,7 +7,7 @@ export default function SlideOverPanel({
     subtitle,
     children,
     footer = null,
-    widthClass = 'w-full max-w-full sm:max-w-lg'
+    widthClass = 'w-full max-w-full sm:max-w-2xl'
 }) {
     if (!isOpen) return null;
 

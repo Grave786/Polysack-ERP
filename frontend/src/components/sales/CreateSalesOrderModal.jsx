@@ -370,12 +370,13 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                 <Calendar size={12} className="text-text-muted" />
                                 <span>Order Date</span>
                             </label>
-                            <div className="w-full border border-border/80 rounded-lg p-2.5 bg-app-bg text-xs font-mono font-bold text-text-main flex items-center justify-between">
-                                <span>{new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
-                                <span className="bg-green-100 text-green-800 font-semibold px-2 py-1 rounded text-xs">
-                                    Today (Auto)
-                                </span>
-                            </div>
+                            <input
+                                type="date"
+                                required
+                                value={orderDate || getTodayLocalDateString()}
+                                onChange={(e) => setOrderDate(e.target.value)}
+                                className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
+                            />
                         </div>
 
                         <div>

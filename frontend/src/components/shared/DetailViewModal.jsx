@@ -1181,7 +1181,10 @@ export default function DetailViewModal({
     record = null,
     tabKey = '',
     tabLabel = 'Record',
-    onEdit = null
+    onEdit = null,
+    resourceType = '',
+    type = '',
+    endpoint = ''
 }) {
     if (!isOpen || !record) return null;
 
@@ -1227,6 +1230,17 @@ export default function DetailViewModal({
     const titleText = record.workOrderNumber || record.name || record.companyName || record.code || `${tabLabel} Details`;
     const codeBadge = record.code || record.workOrderNumber || record.itemCode || record.customerCode || record.supplierCode || record.employeeCode || record.machineCode;
 
+    const activeContext = (resourceType || type || endpoint || tabKey || '').toLowerCase().replace(/[-_/]/g, '');
+    const isWorkOrder =
+        resourceType === 'workOrders' ||
+        resourceType === 'work-orders' ||
+        type === 'workOrders' ||
+        type === 'work-orders' ||
+        activeContext === 'workorders' ||
+        activeContext === 'workorder' ||
+        normalizedKey === 'work-orders' ||
+        Boolean(tabLabel && tabLabel.toLowerCase().includes('work order'));
+
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
             {/* Click-outside backdrop */}
@@ -1269,12 +1283,14 @@ export default function DetailViewModal({
 
                 {/* Modal Scrollable Body */}
                 <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-card-bg">
-                    <div className="col-span-full mb-4">
-                        <span className="text-xs font-bold text-gray-500 block">WORK TITLE / REQUIREMENT</span>
-                        <p className="text-sm font-medium mt-1">
-                            {record.description || record.remarks || record.jobOrderDetails?.description || '-'}
-                        </p>
-                    </div>
+                    {isWorkOrder && (
+                        <div className="col-span-full mb-4">
+                            <span className="text-xs font-bold text-gray-500 block">WORK TITLE / REQUIREMENT</span>
+                            <p className="text-sm font-medium mt-1">
+                                {record.description || record.remarks || record.jobOrderDetails?.description || '-'}
+                            </p>
+                        </div>
+                    )}
 
                     {sections.map((section, sIdx) => {
                         const customContent = section.renderCustom ? section.renderCustom(record) : null;
