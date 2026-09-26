@@ -5,7 +5,7 @@ import WorkOrderShortageModal from './WorkOrderShortageModal';
 import InlineLookupSelect from '../shared/InlineLookupSelect';
 import { getTodayLocalDateString } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
-import PackingSlipRollsSection from '../shared/PackingSlipRollsSection';
+import PackingSlipRollsSection, { createEmptyRoll } from '../shared/PackingSlipRollsSection';
 import {
     Layers,
     Info,
@@ -54,6 +54,8 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [targetQuantity, setTargetQuantity] = useState('');
     const [priority, setPriority] = useState('MEDIUM');
     const [assignedMachine, setAssignedMachine] = useState('');
+    const [assignedOperators, setAssignedOperators] = useState([]);
+    const [employees, setEmployees] = useState([]);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Job Order Details Form State
@@ -62,6 +64,8 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [printSides, setPrintSides] = useState('BOTH');
     const [frontColours, setFrontColours] = useState(1);
     const [backColours, setBackColours] = useState(1);
+    const [frontColorsList, setFrontColorsList] = useState([]);
+    const [backColorsList, setBackColorsList] = useState([]);
     const [jobDescriptionPrintColours, setJobDescriptionPrintColours] = useState('One Colour');
     const [jobDescriptionPrintSide, setJobDescriptionPrintSide] = useState('Single Side');
     const [customPrintSide, setCustomPrintSide] = useState('');
@@ -82,7 +86,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [orderConfirmed, setOrderConfirmed] = useState(false);
     const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
     const [purchaseOrderFiles, setPurchaseOrderFiles] = useState([]);
-    const [rolls, setRolls] = useState([]);
+    const [rolls, setRolls] = useState([createEmptyRoll(1)]);
     const [availableRolls, setAvailableRolls] = useState([]);
     const [rawMaterials, setRawMaterials] = useState([]);
     const [inks, setInks] = useState([]);
@@ -116,6 +120,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const resetForm = () => {
         setTargetQuantity('');
         setAssignedMachine('');
+        setAssignedOperators([]);
         setPriority('MEDIUM');
         setOrderDate(getTodayLocalDateString());
         setProductCategory('Print');
@@ -142,7 +147,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
         setOrderConfirmed(false);
         setExpectedDeliveryDate('');
         setPurchaseOrderFiles([]);
-        setRolls([]);
+        setRolls([createEmptyRoll(1)]);
         setInks([]);
         setDescription('');
         setIsDescriptionManuallyEdited(false);
@@ -206,14 +211,15 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
         const fetchDropdowns = async () => {
             try {
                 setIsLoadingDropdowns(true);
-                const [custRes, fgRes, mchRes, profileRes, attrRes, rollsRes, rmRes] = await Promise.all([
+                const [custRes, fgRes, mchRes, profileRes, attrRes, rollsRes, rmRes, empRes] = await Promise.all([
                     axiosInstance.get('/customers?isActive=true&limit=100'),
                     axiosInstance.get('/finished-goods?isActive=true&limit=100'),
                     axiosInstance.get('/machines?isActive=true&limit=100'),
                     axiosInstance.get('/admin/company-profile').catch(() => null),
                     axiosInstance.get('/raw-material-attributes').catch(() => null),
                     axiosInstance.get('/work-orders/available-rolls').catch(() => null),
-                    axiosInstance.get('/raw-materials?isActive=true&limit=100').catch(() => null)
+                    axiosInstance.get('/raw-materials?isActive=true&limit=100').catch(() => null),
+                    axiosInstance.get('/employees?isActive=true&limit=200').catch(() => null)
                 ]);
 
                 if (custRes.data?.success) {
@@ -239,7 +245,24 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 }
 
                 if (mchRes.data?.success) {
-                    setMachines(mchRes.data.data || []);
+                    const mchList = mchRes.data.data || [];
+                    setMachines(mchList);
+
+                    let empList = [];
+                    if (empRes?.data?.success && Array.isArray(empRes.data?.data)) {
+                        empList = empRes.data.data;
+                    }
+                    mchList.forEach((m) => {
+                        const mOps = Array.isArray(m.currentOperators) ? m.currentOperators : (m.currentOperator ? [m.currentOperator] : []);
+                        mOps.forEach((op) => {
+                            if (op && typeof op === 'object' && op._id && !empList.some((e) => e._id === op._id)) {
+                                empList.push(op);
+                            }
+                        });
+                    });
+                    setEmployees(empList);
+                } else if (empRes?.data?.success && Array.isArray(empRes.data?.data)) {
+                    setEmployees(empRes.data.data);
                 }
 
                 if (profileRes?.data?.success && profileRes.data?.data?.productionSettings?.activeStartingStage) {
@@ -287,6 +310,8 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     if (!customer) missingFields.push('Customer / Client');
     if (!finishedGood) missingFields.push('Finished Bag Specification');
     if (!targetQuantity || Number(targetQuantity) < 1) missingFields.push('Target Production Quantity (must be ≥ 1)');
+    const validRollsCount = (rolls || []).filter(r => (r.rollNumber || r.rollNo || r.rollId || r._id)).length;
+    if (validRollsCount === 0) missingFields.push('At least one Roll Issue / Specification');
     const isFormValid = missingFields.length === 0;
 
     const startingIndex = ALL_STAGE_KEYS.indexOf(activeStartingStage);
@@ -305,6 +330,21 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
             if (selectedCust.phone) {
                 setCustomerContactNumber(selectedCust.phone.replace(/\D/g, '').slice(0, 10));
             }
+        }
+    };
+
+    // Handle Machine Selection with Operator Auto-Fill
+    const handleMachineChange = (selectedMchId) => {
+        setAssignedMachine(selectedMchId);
+        const m = machines.find((item) => item._id === selectedMchId);
+        if (m) {
+            const ops = (Array.isArray(m.currentOperators) && m.currentOperators.length > 0)
+                ? m.currentOperators
+                : (m.currentOperator ? [m.currentOperator] : []);
+            const opIds = ops.map((op) => (typeof op === 'object' && op !== null ? (op._id || op.id) : op)).filter(Boolean);
+            setAssignedOperators(opIds);
+        } else {
+            setAssignedOperators([]);
         }
     };
 
@@ -490,6 +530,12 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
             return;
         }
 
+        const validRolls = (rolls || []).filter(r => (r.rollNumber || r.rollNo || r.rollId || r._id));
+        if (validRolls.length === 0) {
+            toast.error('Please assign/issue at least one Roll to this Work Order.');
+            return;
+        }
+
         const targetQtyNum = Number(targetQuantity);
         const targetFg = finishedGoods.find((fg) => fg._id === finishedGood);
         setSelectedFgObj(targetFg);
@@ -552,12 +598,14 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 targetQuantity: targetQtyNum,
                 priority: priority || 'MEDIUM',
                 assignedMachine: assignedMachine || null,
+                assignedOperators: assignedOperators || [],
                 description: description || '',
                 remarks: description || '',
                 inks: (inks || [])
                     .filter((i) => i && String(i).trim() !== '')
                     .map((i) => String(i).trim()),
                 jobOrderDetails: {
+                    assignedOperators: assignedOperators || [],
                     orderDate: orderDate || getTodayLocalDateString(),
                     productCategory,
                     printSpec: {
@@ -576,10 +624,13 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                     jobDescriptionPrintSide: productCategory === 'Plain'
                         ? 'Only Plain'
                         : (printSides === 'BOTH' ? 'Double Side' : 'Single Side'),
+                    frontColorsQty: frontColours,
+                    backColorsQty: backColours,
+                    frontColorsList: frontColorsList || [],
+                    backColorsList: backColorsList || [],
                     materialQualityFabric,
                     fabricLaminationType,
                     materialColour,
-                    printingColour,
                     fabricGrammage,
                     bagWeightGms: bagWeightGms !== '' ? Number(bagWeightGms) : null,
                     fabricAverage,
@@ -759,7 +810,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                             </label>
                             <select
                                 value={assignedMachine}
-                                onChange={(e) => setAssignedMachine(e.target.value)}
+                                onChange={(e) => handleMachineChange(e.target.value)}
                                 disabled={isLoadingDropdowns}
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50 font-sans"
                             >
@@ -773,17 +824,40 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                         </div>
 
                         <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                                Assigned Operator(s)
-                            </label>
-                            <input
-                                type="text"
-                                readOnly
-                                disabled
-                                placeholder="Select a machine first"
-                                value={assignedOperatorsStr}
-                                className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs text-text-muted font-medium focus:outline-none cursor-not-allowed"
-                            />
+                            <div className="flex items-center justify-between mb-1.5">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                    Assigned Operator(s)
+                                </label>
+                                {assignedOperators.length > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setAssignedOperators([])}
+                                        className="text-[10px] text-text-muted hover:text-rose-600 font-semibold cursor-pointer"
+                                    >
+                                        Clear All
+                                    </button>
+                                )}
+                            </div>
+                            <select
+                                multiple
+                                value={assignedOperators}
+                                onChange={(e) => {
+                                    const selected = Array.from(e.target.selectedOptions, (option) => option.value);
+                                    setAssignedOperators(selected);
+                                }}
+                                disabled={isLoadingDropdowns}
+                                className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans h-24 cursor-pointer disabled:opacity-50"
+                            >
+                                {employees.map((emp) => (
+                                    <option key={emp._id} value={emp._id}>
+                                        {emp.employeeCode ? `${emp.employeeCode} - ` : ''}{emp.name} {emp.department ? `(${emp.department})` : ''}
+                                    </option>
+                                ))}
+                            </select>
+                            <div className="flex items-center justify-between mt-1 text-[10px] text-text-muted">
+                                <span>Hold Ctrl (Cmd) to select multiple</span>
+                                <span>{assignedOperators.length} selected</span>
+                            </div>
                         </div>
                     </div>
 
@@ -904,9 +978,34 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                                                 min="1"
                                                 max="8"
                                                 value={frontColours}
-                                                onChange={(e) => setFrontColours(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                                                onChange={(e) => {
+                                                    const newQty = parseInt(e.target.value, 10) || 0;
+                                                    const currentColors = frontColorsList || [];
+                                                    const updatedColors = Array.from({ length: newQty }, (_, i) => currentColors[i] || '');
+                                                    setFrontColours(newQty);
+                                                    setFrontColorsList(updatedColors);
+                                                }}
                                                 className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-bold"
                                             />
+                                        </div>
+                                    )}
+
+                                    {frontColorsList?.length > 0 && (
+                                        <div className="col-span-full sm:col-span-1 flex flex-col gap-2 mt-1">
+                                            {frontColorsList.map((color, index) => (
+                                                <input
+                                                    key={`front-${index}`}
+                                                    type="text"
+                                                    placeholder={`Front Colour ${index + 1}`}
+                                                    value={color}
+                                                    onChange={(e) => {
+                                                        const newColors = [...frontColorsList];
+                                                        newColors[index] = e.target.value;
+                                                        setFrontColorsList(newColors);
+                                                    }}
+                                                    className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                                />
+                                            ))}
                                         </div>
                                     )}
 
@@ -920,9 +1019,34 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                                                 min="1"
                                                 max="8"
                                                 value={backColours}
-                                                onChange={(e) => setBackColours(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                                                onChange={(e) => {
+                                                    const newQty = parseInt(e.target.value, 10) || 0;
+                                                    const currentColors = backColorsList || [];
+                                                    const updatedColors = Array.from({ length: newQty }, (_, i) => currentColors[i] || '');
+                                                    setBackColours(newQty);
+                                                    setBackColorsList(updatedColors);
+                                                }}
                                                 className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-bold"
                                             />
+                                        </div>
+                                    )}
+
+                                    {backColorsList?.length > 0 && (
+                                        <div className="col-span-full sm:col-span-1 flex flex-col gap-2 mt-1">
+                                            {backColorsList.map((color, index) => (
+                                                <input
+                                                    key={`back-${index}`}
+                                                    type="text"
+                                                    placeholder={`Back Colour ${index + 1} (e.g. Blue)`}
+                                                    value={color}
+                                                    onChange={(e) => {
+                                                        const newColors = [...backColorsList];
+                                                        newColors[index] = e.target.value;
+                                                        setBackColorsList(newColors);
+                                                    }}
+                                                    className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                                />
+                                            ))}
                                         </div>
                                     )}
                                 </div>
@@ -947,21 +1071,14 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                             />
                         </div>
 
-                        {/* Material Colour & Printing Colour (Using shared Colour master) */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                        {/* Material Colour (Base) */}
+                        <div>
                             <InlineLookupSelect
                                 label="Material Colour (Base)"
                                 value={materialColour}
                                 onChange={(val) => setMaterialColour(val)}
                                 options={rmAttributes.materialColour || []}
                                 onOpenAdd={() => handleOpenAddAttributeModal('materialColour', 'Material Colour', 'materialColour')}
-                            />
-                            <InlineLookupSelect
-                                label="Printing Colour (Ink)"
-                                value={printingColour}
-                                onChange={(val) => setPrintingColour(val)}
-                                options={rmAttributes.materialColour || []}
-                                onOpenAdd={() => handleOpenAddAttributeModal('materialColour', 'Material Colour', 'printingColour')}
                             />
                         </div>
 
@@ -1265,7 +1382,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                             </p>
                         </div>
 
-                        {/* Packing Slip & Roll Specifications (Repeatable Multi-Rolls with Stock Availability) */}
+                        {/* Packing Slip & Roll Specifications (Mandatory Roll Selection & Specifications) */}
                         <div className="pt-2">
                             <PackingSlipRollsSection
                                 rolls={rolls}
@@ -1273,6 +1390,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                                 availableRolls={availableRolls}
                                 title="Job Order Roll Specifications"
                                 subtitle="Select available inventory rolls with remaining meters stock or enter manual rolls."
+                                required={true}
                             />
                         </div>
 

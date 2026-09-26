@@ -47,6 +47,16 @@ const CustomerSchema = new mongoose.Schema({
         uppercase: true,
         trim: true
     },
+    panNumber: {
+        type: String,
+        uppercase: true,
+        trim: true
+    },
+    paymentTerms: {
+        type: String,
+        trim: true,
+        default: 'Net 30'
+    },
     creditLimit: {
         type: Number,
         default: 0,

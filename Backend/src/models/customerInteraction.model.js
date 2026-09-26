@@ -9,7 +9,21 @@ const CustomerInteractionSchema = new mongoose.Schema({
     customer: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Customer',
-        required: [true, 'Customer reference is required']
+        default: null
+    },
+    customerName: {
+        type: String,
+        trim: true
+    },
+    enquiryId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'OrderEnquiry',
+        default: null
+    },
+    referenceId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'OrderEnquiry',
+        default: null
     },
     date: {
         type: Date,
@@ -18,10 +32,8 @@ const CustomerInteractionSchema = new mongoose.Schema({
     interactionType: {
         type: String,
         required: [true, 'Interaction type is required'],
-        enum: {
-            values: ['CALL', 'EMAIL', 'VISIT', 'FOLLOW_UP', 'MEETING', 'OTHER'],
-            message: '{VALUE} is not a valid interaction type.'
-        }
+        default: 'Phone Call',
+        enum: ['Phone Call', 'Email Communication', 'In-Person Meeting', 'Site Visit', 'WhatsApp', 'Other / Escalation']
     },
     subject: {
         type: String,
@@ -40,10 +52,7 @@ const CustomerInteractionSchema = new mongoose.Schema({
     status: {
         type: String,
         default: 'OPEN',
-        enum: {
-            values: ['OPEN', 'IN_PROGRESS', 'CLOSED'],
-            message: '{VALUE} is not a valid interaction status.'
-        }
+        enum: ['Open (Requires Follow-up)', 'In Progress', 'Closed (Resolved)', 'OPEN', 'CLOSED']
     },
     nextFollowUpDate: {
         type: Date,

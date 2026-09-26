@@ -207,6 +207,7 @@ app.use('/api/employees', employeeRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/rosters', rosterRoutes);
 app.use('/api/crm', crmRoutes);
+app.use('/api/order-enquiries', crmRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/dashboard', dashboardRoutes);

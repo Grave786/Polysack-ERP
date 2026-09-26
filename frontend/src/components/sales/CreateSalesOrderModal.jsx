@@ -105,14 +105,21 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                 );
             }
         } else if (isOpen && !isEditMode) {
-            // Reset for new Sales Order
-            setCustomerId('');
+            // Reset for new Sales Order or pre-fill from conversion initialData
+            const prefillCustId = initialData?.customerId || (typeof initialData?.customer === 'object' ? initialData?.customer?._id : initialData?.customer) || initialData?.customerRef || '';
+            setCustomerId(prefillCustId);
             setOrderDate(getTodayLocalDateString());
-            setDeliveryDue(getFutureLocalDateString(7));
-            setDispatchLocation('');
-            setStatus('CONFIRMED');
-            setNotes('');
-            setItems([{ finishedGood: '', quantity: '', unit: 'Pcs', ratePerUnit: '', subtotal: 0 }]);
+            setDeliveryDue(initialData?.deliveryDue ? formatToLocalDateString(initialData.deliveryDue) : getFutureLocalDateString(7));
+            setDispatchLocation(initialData?.dispatchLocation || '');
+            setStatus(initialData?.status || 'CONFIRMED');
+            setNotes(initialData?.notes || initialData?.description || '');
+            if (Array.isArray(initialData?.items) && initialData.items.length > 0) {
+                setItems(initialData.items);
+            } else if (initialData?.totalOrderQuantity) {
+                setItems([{ finishedGood: '', quantity: String(initialData.totalOrderQuantity), unit: 'Pcs', ratePerUnit: '', subtotal: 0 }]);
+            } else {
+                setItems([{ finishedGood: '', quantity: '', unit: 'Pcs', ratePerUnit: '', subtotal: 0 }]);
+            }
         }
     }, [isOpen, isEditMode, initialData]);
 
@@ -192,6 +199,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
 
             const payload = {
                 customer: customerId,
+                nslId: initialData?.nslId || undefined,
                 orderDate,
                 deliveryDue,
                 dispatchLocation: dispatchLocation || undefined,

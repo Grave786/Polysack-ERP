@@ -252,7 +252,7 @@ const getMachines = async (req, res) => {
                 .populate('defaultLocation', 'name code type')
                 .populate('currentOperators', 'name employeeCode department')
                 .populate('currentOperator', 'name employeeCode department')
-                .sort({ name: 1 })
+                .sort({ code: 1 })
                 .skip(skip)
                 .limit(limitNum),
             Machine.countDocuments(filter)
@@ -327,7 +327,7 @@ const exportMachines = async (req, res) => {
         const machines = await Machine.find(filter)
             .populate('currentOperators', 'name employeeCode department')
             .populate('currentOperator', 'name employeeCode')
-            .sort({ name: 1 });
+            .sort({ code: 1 });
 
         const fields = [
             { label: 'Machine Code', key: 'code' },

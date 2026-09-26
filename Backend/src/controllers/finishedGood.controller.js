@@ -267,7 +267,7 @@ const getFinishedGoods = async (req, res) => {
                 .populate('category', 'name type')
                 .populate('uom', 'name symbol type')
                 .populate('defaultLocation', 'name code type')
-                .sort({ name: 1 })
+                .sort({ code: 1 })
                 .skip(skip)
                 .limit(limitNum),
             FinishedGood.countDocuments(filter)
@@ -348,7 +348,7 @@ const exportFinishedGoods = async (req, res) => {
 
         const items = await FinishedGood.find(filter)
             .populate('category', 'name')
-            .sort({ name: 1 });
+            .sort({ code: 1 });
 
         const fields = [
             { label: 'Product Code', key: 'code' },

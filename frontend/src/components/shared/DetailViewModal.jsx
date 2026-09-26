@@ -483,6 +483,94 @@ function AttachmentsViewer({ files = [] }) {
  * Field schemas for all Master Data tabs
  */
 const MASTER_SCHEMAS = {
+    enquiries: [
+        {
+            title: 'Lead & Customer Information',
+            fields: [
+                { label: 'NSL Number', key: 'nslNumber', type: 'code' },
+                {
+                    label: 'CUSTOMER',
+                    key: (data) => data?.customerRef?.name || data?.customerRef?.companyName || data?.newCustomerDetails?.company || data?.newCustomerDetails?.name || data?.customer?.companyName || data?.customer?.name || '-',
+                    span: 2
+                },
+                { label: 'Customer Type', key: (r) => r.customerType || 'Existing' },
+                { label: 'Status', key: (r) => r.status || (r.orderConfirmed ? 'Confirmed' : 'Open'), type: 'status' },
+                { label: 'Enquiry Date', key: 'enquiryDate', type: 'date' },
+                { label: 'Order Confirmed', key: 'orderConfirmed', type: 'boolean' }
+            ]
+        },
+        {
+            title: 'Contact Details',
+            fields: [
+                { label: 'Contact Person', key: (r) => r.contactPerson || r.newCustomerDetails?.name || '-' },
+                { label: 'Contact Number', key: (r) => r.contactNumber || r.newCustomerDetails?.phone || '-' },
+                { label: 'Designation', key: (r) => r.contactDesignation || '-' },
+                { label: 'Email Address', key: (r) => r.newCustomerDetails?.email || '-' }
+            ]
+        },
+        {
+            title: 'Product Specifications',
+            fields: [
+                { label: 'Product Category', key: 'productCategory' },
+                { label: 'Total Order Qty', key: (r) => r.totalOrderQuantity ? `${Number(r.totalOrderQuantity).toLocaleString('en-IN')} Bags` : '-' },
+                { label: 'Fabric Quality', key: (r) => r.materialQualityFabric || '-' },
+                { label: 'Grammage', key: (r) => r.fabricGrammage ? `${r.fabricGrammage} GSM` : '-' },
+                { label: 'Lamination', key: (r) => r.fabricLaminationType || '-' },
+                { label: 'Material Colour', key: (r) => r.materialColour || '-' },
+                { label: 'Print Sides', key: (r) => r.printSides || '-' },
+                { label: 'Dimensions', key: (r) => (r.fabricWidthInch && r.fabricLengthInch) ? `${r.fabricWidthInch}" x ${r.fabricLengthInch}"` : '-' }
+            ]
+        },
+        {
+            title: 'Requirements & Remarks',
+            fields: [
+                { label: 'Description', key: 'description', span: 2 },
+                { label: 'Remarks', key: 'remarks', span: 2 }
+            ]
+        },
+        {
+            title: 'Follow-up Logs',
+            renderCustom: (record) => {
+                const logs = record.followUps || [];
+                return logs.length > 0 ? (
+                    <div className="space-y-3">
+                        {logs.map((log, index) => (
+                            <div key={index} className="p-3 border border-border rounded-md bg-card-bg">
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className="font-bold text-xs text-primary">{log.communicationType || log.type || 'Follow-up'}</span>
+                                    <span className="text-xs text-text-muted">{log.date ? new Date(log.date).toLocaleDateString() : '-'}</span>
+                                </div>
+                                <p className="text-xs text-text-main mt-1 whitespace-pre-wrap">{log.notes}</p>
+                                {log.nextFollowUpDate && (
+                                    <div className="mt-2 text-[10px] text-text-muted flex items-center gap-1 font-mono">
+                                        <span>Next Action:</span>
+                                        <span className="font-bold">{new Date(log.nextFollowUpDate).toLocaleDateString()}</span>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <p className="text-xs text-text-muted italic">No follow-ups recorded.</p>
+                );
+            }
+        },
+        {
+            title: 'Attachments & Uploads',
+            renderCustom: (record) => {
+                const files = record.poAttachments || record.attachments || [];
+                if (!files || files.length === 0) return null;
+                return <AttachmentsViewer files={files} />;
+            }
+        },
+        {
+            title: 'System Audit',
+            fields: [
+                { label: 'Created On', key: 'createdAt', type: 'date' },
+                { label: 'Last Updated', key: 'updatedAt', type: 'date' }
+            ]
+        }
+    ],
 
     customers: [
         {
@@ -515,7 +603,7 @@ const MASTER_SCHEMAS = {
             title: 'Taxation & Credit Terms',
             fields: [
                 { label: 'GSTIN Number', key: 'gstin', type: 'code' },
-                { label: 'PAN Number', key: 'pan', type: 'code' },
+                { label: 'PAN Number', key: (r) => r?.panNumber || r?.pan || '', type: 'code' },
                 { label: 'Credit Limit', key: 'creditLimit', type: 'currency' },
                 { label: 'Payment Terms', key: (r) => r.paymentTerms || (r.paymentTermsDays ? `${r.paymentTermsDays} Days` : '-') }
             ]
@@ -560,7 +648,7 @@ const MASTER_SCHEMAS = {
             title: 'Taxation & Payment Terms',
             fields: [
                 { label: 'GSTIN Number', key: 'gstin', type: 'code' },
-                { label: 'PAN Number', key: 'pan', type: 'code' },
+                { label: 'PAN Number', key: (r) => r?.panNumber || r?.pan || '', type: 'code' },
                 { label: 'Payment Terms', key: (r) => r.paymentTerms || (r.paymentTermsDays ? `${r.paymentTermsDays} Days` : '-') }
             ]
         },
@@ -1189,7 +1277,7 @@ export default function DetailViewModal({
     if (!isOpen || !record) return null;
 
     const normalizedKey = (tabKey || '').toLowerCase().replace(/_/g, '-');
-    const baseSections = MASTER_SCHEMAS[normalizedKey];
+    const baseSections = MASTER_SCHEMAS[normalizedKey] || (normalizedKey === 'customer' ? MASTER_SCHEMAS.customers : null) || (normalizedKey === 'supplier' ? MASTER_SCHEMAS.suppliers : null);
     let sections;
     if (baseSections) {
         sections = baseSections;
@@ -1317,6 +1405,9 @@ export default function DetailViewModal({
                                             if (['_id', 'tenant', 'tenantId', '__v'].includes(String(f.label).toLowerCase().replace(/[^a-z0-9_]/g, ''))) return null;
 
                                             let rawVal = resolveVal(record, f.key);
+                                            if (key === 'customer' || key === 'customerRef' || String(f.label).toUpperCase() === 'CUSTOMER') {
+                                                rawVal = record?.customerRef?.name || record?.customerRef?.companyName || record?.newCustomerDetails?.company || record?.newCustomerDetails?.name || record?.customer?.companyName || record?.customer?.name || rawVal || '-';
+                                            }
                                             if (key === 'date' || String(f.label).toUpperCase() === 'DATE') {
                                                 const d = rawVal || record.date;
                                                 if (d) {

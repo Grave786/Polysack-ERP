@@ -1,14 +1,20 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
     PhoneCall, AlertTriangle, Plus, RefreshCw, ClipboardList,
     CheckCircle2, XCircle, Eye, Pencil, Trash2, AlertCircle,
-    Upload, X as XIcon, FileText, Package
+    Upload, X as XIcon, FileText, Package, ShoppingCart, Clock
 } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
 import DetailViewModal from '../components/shared/DetailViewModal';
+import CreateSalesOrderModal from '../components/sales/CreateSalesOrderModal';
+import CreateCustomerModal from '../components/shared/CreateCustomerModal';
+import LogFollowUpModal from '../components/crm/LogFollowUpModal';
+import CreateComplaintModal from '../components/crm/CreateComplaintModal';
+import LogInteractionModal from '../components/crm/LogInteractionModal';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../store/authStore';
 
 // ── Attribute type keys matching rawMaterialAttributes.constants.js ──────────
 const ATTR = {
@@ -21,7 +27,17 @@ const ATTR = {
 const TODAY = new Date().toISOString().split('T')[0];
 
 const EMPTY_ENQUIRY = {
+    customerType: 'Existing',
     customer: '',
+    customerRef: '',
+    newCustomerDetails: {
+        name: '',
+        company: '',
+        phone: '',
+        email: ''
+    },
+    status: 'Open',
+    followUps: [],
     enquiryDate: TODAY,
     productCategory: 'Print',
     printSides: 'BOTH',
@@ -40,6 +56,8 @@ const EMPTY_ENQUIRY = {
     fabricWidthInch: '',
     fabricLengthInch: '',
     totalOrderQuantity: '',
+    orderQuantity: '',
+    quantityUnit: 'Kg',
     orderConfirmed: false,
     expectedDeliveryDate: '',
     contactPerson: '',
@@ -123,9 +141,19 @@ function InlineAddOption({ attrType, onAdded }) {
 
 // ── Main Page ────────────────────────────────────────────────────────────────
 export default function CustomerCrmPage() {
+    const rawUser = useAuthStore((state) => state.user);
+    const userRole = rawUser?.role?.name || rawUser?.roleName || (typeof rawUser?.role === 'string' ? rawUser.role : '');
+    const user = useMemo(() => (rawUser ? { ...rawUser, role: userRole } : null), [rawUser, userRole]);
+
     const [activeTab, setActiveTab] = useState('enquiries');
     const [isInteractionDrawerOpen, setIsInteractionDrawerOpen] = useState(false);
+    const [editingInteraction, setEditingInteraction] = useState(null); // null = create, object = edit
+    const [isInteractionModalOpen, setIsInteractionModalOpen] = useState(false);
+    const [selectedInteraction, setSelectedInteraction] = useState(null);
     const [isComplaintDrawerOpen, setIsComplaintDrawerOpen] = useState(false);
+    const [editingComplaint, setEditingComplaint] = useState(null); // null = create, object = edit
+    const [isComplaintModalOpen, setIsComplaintModalOpen] = useState(false);
+    const [selectedComplaint, setSelectedComplaint] = useState(null);
     const [isEnquiryDrawerOpen, setIsEnquiryDrawerOpen] = useState(false);
     const [editingEnquiry, setEditingEnquiry] = useState(null); // null = create, object = edit
     const [refreshKey, setRefreshKey] = useState(0);
@@ -137,11 +165,35 @@ export default function CustomerCrmPage() {
     // View-detail modal
     const [viewingEnquiry, setViewingEnquiry] = useState(null);
 
+    // Fetch full order enquiry details when opening view modal to ensure latest followUps
+    useEffect(() => {
+        if (viewingEnquiry?._id && !viewingEnquiry.followUps) {
+            axiosInstance.get(`/crm/enquiries/${viewingEnquiry._id}`)
+                .then((res) => {
+                    if (res.data?.data) {
+                        setViewingEnquiry(res.data.data);
+                    }
+                })
+                .catch(() => {});
+        }
+    }, [viewingEnquiry?._id]);
+
     // Shared dropdown data
     const [customers, setCustomers] = useState([]);
     const [users, setUsers] = useState([]);
     const [isLoadingDropdowns, setIsLoadingDropdowns] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Fetch customers on mount
+    useEffect(() => {
+        axiosInstance.get('/customers?isActive=true&limit=200')
+            .then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    setCustomers(res.data.data);
+                }
+            })
+            .catch((err) => console.error('Failed to load customers on mount:', err));
+    }, []);
 
     // Shared RawMaterialAttribute lists
     const [attrFabricQuality, setAttrFabricQuality] = useState([]);
@@ -157,26 +209,199 @@ export default function CustomerCrmPage() {
 
     // Interaction form
     const [interactionForm, setInteractionForm] = useState({
-        customer: '', interactionType: 'CALL', subject: '',
-        date: TODAY, assignedExecutive: '', status: 'OPEN', notes: '', nextFollowUpDate: ''
+        customer: '', customerId: '', interactionType: 'CALL', subject: '',
+        date: TODAY, interactionDate: TODAY, assignedExecutive: '', status: 'OPEN', notes: '', nextFollowUpDate: ''
     });
+
+    // Pre-fill interaction form when editing
+    useEffect(() => {
+        if (editingInteraction) {
+            const custId = editingInteraction.customer?._id || editingInteraction.customer || editingInteraction.customerId || '';
+            const execId = editingInteraction.assignedExecutive?._id || editingInteraction.assignedExecutive || '';
+            setInteractionForm({
+                customer: custId,
+                customerId: custId,
+                interactionType: editingInteraction.interactionType || 'CALL',
+                interactionDate: editingInteraction.date ? new Date(editingInteraction.date).toISOString().split('T')[0] : (editingInteraction.interactionDate ? new Date(editingInteraction.interactionDate).toISOString().split('T')[0] : TODAY),
+                date: editingInteraction.date ? new Date(editingInteraction.date).toISOString().split('T')[0] : TODAY,
+                subject: editingInteraction.subject || '',
+                assignedExecutive: execId,
+                status: editingInteraction.status || 'OPEN',
+                notes: editingInteraction.notes || '',
+                nextFollowUpDate: editingInteraction.nextFollowUpDate ? new Date(editingInteraction.nextFollowUpDate).toISOString().split('T')[0] : ''
+            });
+        } else {
+            setInteractionForm({
+                customer: customers[0]?._id || '',
+                customerId: customers[0]?._id || '',
+                interactionType: 'CALL',
+                subject: '',
+                date: TODAY,
+                interactionDate: TODAY,
+                assignedExecutive: users[0]?._id || '',
+                status: 'OPEN',
+                notes: '',
+                nextFollowUpDate: ''
+            });
+        }
+    }, [editingInteraction, customers, users]);
 
     // Complaint form
     const [complaintForm, setComplaintForm] = useState({
-        customer: '', complaintType: 'QUALITY_DEFECT', description: '',
-        date: TODAY, assignedExecutive: '', status: 'OPEN', resolutionNotes: ''
+        customer: '', customerId: '', complaintType: 'QUALITY_DEFECT', description: '',
+        date: TODAY, incidentDate: TODAY, assignedExecutive: '', status: 'OPEN', resolutionNotes: ''
     });
+
+    // Pre-fill complaint form when editing
+    useEffect(() => {
+        if (editingComplaint) {
+            const custId = editingComplaint.customer?._id || editingComplaint.customer || editingComplaint.customerId || '';
+            const execId = editingComplaint.assignedExecutive?._id || editingComplaint.assignedExecutive || '';
+            setComplaintForm({
+                customer: custId,
+                customerId: custId,
+                complaintType: editingComplaint.complaintType || 'QUALITY_DEFECT',
+                date: editingComplaint.date ? new Date(editingComplaint.date).toISOString().split('T')[0] : (editingComplaint.incidentDate ? new Date(editingComplaint.incidentDate).toISOString().split('T')[0] : TODAY),
+                incidentDate: editingComplaint.incidentDate ? new Date(editingComplaint.incidentDate).toISOString().split('T')[0] : (editingComplaint.date ? new Date(editingComplaint.date).toISOString().split('T')[0] : TODAY),
+                description: editingComplaint.description || '',
+                assignedExecutive: execId,
+                status: editingComplaint.status || 'OPEN',
+                resolutionNotes: editingComplaint.resolutionNotes || ''
+            });
+        } else {
+            setComplaintForm({
+                customer: customers[0]?._id || '',
+                customerId: customers[0]?._id || '',
+                complaintType: 'QUALITY_DEFECT',
+                description: '',
+                date: TODAY,
+                incidentDate: TODAY,
+                assignedExecutive: users[0]?._id || '',
+                status: 'OPEN',
+                resolutionNotes: ''
+            });
+        }
+    }, [editingComplaint, customers, users]);
 
     // Enquiry form
     const [enquiryForm, setEnquiryForm] = useState({ ...EMPTY_ENQUIRY });
     const [isEnquiryDescManuallyEdited, setIsEnquiryDescManuallyEdited] = useState(false);
 
-    // Auto-generate descriptive summary for Order Enquiry
+    // ── Sales Order Conversion State ──────────────────────────────────────────
+    const [isSalesOrderModalOpen, setIsSalesOrderModalOpen] = useState(false);
+    const [salesOrderInitialData, setSalesOrderInitialData] = useState(null);
+    const [isCreateCustomerModalOpen, setIsCreateCustomerModalOpen] = useState(false);
+    const [customerModalInitialData, setCustomerModalInitialData] = useState(null);
+    const [pendingNslForConversion, setPendingNslForConversion] = useState(null);
+    const [convertingNslId, setConvertingNslId] = useState(null);
+
+    // ── Follow-up Modal State ────────────────────────────────────────────────
+    const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
+    const [selectedNslForFollowUp, setSelectedNslForFollowUp] = useState(null);
+
+    // ── Conversion Workflow: Generate Sales Order from NSL ─────────────────────
+    const buildSalesOrderPayloadFromNsl = useCallback((nslRecord, customerId) => {
+        const specSummary = [
+            nslRecord.nslNumber ? `NSL Ref: ${nslRecord.nslNumber}` : '',
+            nslRecord.productCategory ? `Category: ${nslRecord.productCategory}` : '',
+            nslRecord.materialQualityFabric ? `Fabric: ${nslRecord.materialQualityFabric}` : '',
+            nslRecord.fabricGrammage ? `${nslRecord.fabricGrammage} GSM` : '',
+            nslRecord.fabricWidthInch && nslRecord.fabricLengthInch ? `Size: ${nslRecord.fabricWidthInch}"x${nslRecord.fabricLengthInch}"` : '',
+            nslRecord.fabricLaminationType ? `Lamination: ${nslRecord.fabricLaminationType}` : '',
+            nslRecord.printSides && nslRecord.printSides !== 'NONE' ? `Print: ${nslRecord.printSides}` : '',
+            nslRecord.description || nslRecord.remarks || ''
+        ].filter(Boolean).join(' | ');
+
+        return {
+            nslId: nslRecord._id,
+            customer: customerId,
+            customerId: customerId,
+            notes: specSummary,
+            totalOrderQuantity: nslRecord.totalOrderQuantity || '',
+            deliveryDue: nslRecord.expectedDeliveryDate || undefined,
+            items: nslRecord.totalOrderQuantity ? [{
+                finishedGood: '',
+                quantity: String(nslRecord.totalOrderQuantity),
+                unit: 'Pcs',
+                ratePerUnit: '',
+                subtotal: 0
+            }] : [{ finishedGood: '', quantity: '', unit: 'Pcs', ratePerUnit: '', subtotal: 0 }]
+        };
+    }, []);
+
+    const handleGenerateSalesOrder = useCallback((nslRecord) => {
+        setConvertingNslId(nslRecord._id);
+        const isExisting = nslRecord.customerType === 'Existing' || Boolean(nslRecord.customerRef || nslRecord.customer);
+
+        if (isExisting) {
+            const custId = nslRecord.customerRef?._id || nslRecord.customerRef || (typeof nslRecord.customer === 'object' ? nslRecord.customer?._id : nslRecord.customer);
+            setSalesOrderInitialData(buildSalesOrderPayloadFromNsl(nslRecord, custId));
+            setIsSalesOrderModalOpen(true);
+        } else {
+            // New Prospect: Open CreateCustomerModal with prospect details pre-filled
+            setPendingNslForConversion(nslRecord);
+            setCustomerModalInitialData({
+                companyName: nslRecord.newCustomerDetails?.company || '',
+                contactPerson: nslRecord.newCustomerDetails?.name || nslRecord.contactPerson || '',
+                phone: nslRecord.newCustomerDetails?.phone || nslRecord.contactNumber || '',
+                email: nslRecord.newCustomerDetails?.email || ''
+            });
+            setIsCreateCustomerModalOpen(true);
+        }
+    }, [buildSalesOrderPayloadFromNsl]);
+
+    const handleGenerateSO = useCallback(async (row) => {
+        if (convertingNslId === row._id) return;
+        setConvertingNslId(row._id);
+        if (row.soApprovalStatus === 'Pending Approval' && user?.role === 'Tenant Admin') {
+            try {
+                await axiosInstance.patch(`/crm/enquiries/${row._id}/so-approval-status`, { status: 'Approved' });
+                setRefreshKey((k) => k + 1);
+            } catch (err) {
+                console.error('Failed to auto-approve SO status:', err);
+            }
+        }
+        handleGenerateSalesOrder(row);
+    }, [user?.role, handleGenerateSalesOrder, convertingNslId]);
+
+    const requestSOApproval = useCallback(async (id) => {
+        try {
+            const res = await axiosInstance.patch(`/crm/enquiries/${id}/so-approval-status`, { status: 'Pending Approval' });
+            if (res.data?.success) {
+                toast.success('SO approval requested successfully');
+                setRefreshKey((k) => k + 1);
+            }
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to request SO approval');
+        }
+    }, []);
+
+    // Transition from New Customer saved -> Open CreateSalesOrderModal
+    const handleCustomerCreated = useCallback((newCustomer, explicitId) => {
+        setIsCreateCustomerModalOpen(false);
+        const newCustId = explicitId || newCustomer?._id || newCustomer?.id;
+        if (newCustId && pendingNslForConversion) {
+            setConvertingNslId(pendingNslForConversion._id);
+            setSalesOrderInitialData(buildSalesOrderPayloadFromNsl(pendingNslForConversion, newCustId));
+            setPendingNslForConversion(null);
+            setIsSalesOrderModalOpen(true);
+            toast.success('Customer ready! Opening Sales Order configuration.');
+        }
+    }, [pendingNslForConversion, buildSalesOrderPayloadFromNsl]);
+
+    // Auto-generate descriptive summary for Order Enquiry / NSL
     const generateEnquiryDescription = useCallback(() => {
         const parts = [];
-        const custObj = customers.find((c) => String(c._id) === String(enquiryForm.customer));
-        if (custObj) {
-            parts.push(`Client: ${custObj.companyName || custObj.name || custObj.code}`);
+        if (enquiryForm.customerType === 'New') {
+            const prospectName = enquiryForm.newCustomerDetails?.company || enquiryForm.newCustomerDetails?.name;
+            if (prospectName) {
+                parts.push(`Prospect: ${prospectName}`);
+            }
+        } else {
+            const custObj = customers.find((c) => String(c._id) === String(enquiryForm.customer || enquiryForm.customerRef));
+            if (custObj) {
+                parts.push(`Client: ${custObj.companyName || custObj.name || custObj.code}`);
+            }
         }
         if (enquiryForm.productCategory) {
             parts.push(`Category: ${enquiryForm.productCategory}`);
@@ -219,7 +444,9 @@ export default function CustomerCrmPage() {
             }
         }
     }, [
-        enquiryForm.customer, enquiryForm.productCategory, enquiryForm.materialQualityFabric,
+        enquiryForm.customerType, enquiryForm.customer, enquiryForm.customerRef,
+        enquiryForm.newCustomerDetails?.company, enquiryForm.newCustomerDetails?.name,
+        enquiryForm.productCategory, enquiryForm.materialQualityFabric,
         enquiryForm.materialColour, enquiryForm.printingColour, enquiryForm.fabricGrammage,
         enquiryForm.fabricLaminationType, enquiryForm.fabricWidthInch, enquiryForm.fabricLengthInch,
         enquiryForm.printSides, enquiryForm.frontColours, enquiryForm.backColours,
@@ -335,71 +562,129 @@ export default function CustomerCrmPage() {
     // ── Submit Interaction ────────────────────────────────────────────────────
     const handleSubmitInteraction = async (e) => {
         e.preventDefault();
-        if (!interactionForm.customer || !interactionForm.subject.trim()) {
+        const targetCust = interactionForm.customer || interactionForm.customerId;
+        if (!targetCust || !interactionForm.subject.trim()) {
             toast.error('Please select a Customer and enter a Subject');
             return;
         }
         try {
             setIsSubmitting(true);
-            const res = await axiosInstance.post('/crm/interactions', {
-                customer: interactionForm.customer,
+            const payload = {
+                customer: targetCust,
                 interactionType: interactionForm.interactionType,
                 subject: interactionForm.subject.trim(),
-                date: interactionForm.date || new Date(),
+                date: interactionForm.date || interactionForm.interactionDate || new Date(),
                 assignedExecutive: interactionForm.assignedExecutive || undefined,
                 status: interactionForm.status,
                 notes: interactionForm.notes.trim(),
                 nextFollowUpDate: interactionForm.nextFollowUpDate || undefined
-            });
+            };
+
+            let res;
+            if (editingInteraction) {
+                res = await axiosInstance.put(`/crm/interactions/${editingInteraction._id}`, payload);
+            } else {
+                res = await axiosInstance.post('/crm/interactions', payload);
+            }
+
             if (res.data?.success) {
-                toast.success('Customer interaction logged successfully!');
+                toast.success(editingInteraction ? 'Customer interaction updated!' : 'Customer interaction logged successfully!');
                 setIsInteractionDrawerOpen(false);
-                setInteractionForm({ customer: customers[0]?._id || '', interactionType: 'CALL', subject: '', date: TODAY, assignedExecutive: users[0]?._id || '', status: 'OPEN', notes: '', nextFollowUpDate: '' });
+                setEditingInteraction(null);
+                setInteractionForm({ customer: customers[0]?._id || '', customerId: customers[0]?._id || '', interactionType: 'CALL', subject: '', date: TODAY, interactionDate: TODAY, assignedExecutive: users[0]?._id || '', status: 'OPEN', notes: '', nextFollowUpDate: '' });
                 setRefreshKey((p) => p + 1);
             }
         } catch (err) {
-            toast.error(err.response?.data?.message || 'Failed to log customer interaction');
+            toast.error(err.response?.data?.message || 'Failed to save customer interaction');
         } finally {
             setIsSubmitting(false);
+        }
+    };
+
+    const handleEditInteraction = (record) => {
+        setSelectedInteraction(record);
+        setIsInteractionModalOpen(true);
+    };
+
+    const handleDeleteInteraction = async (record) => {
+        if (!record?._id) return;
+        try {
+            await axiosInstance.delete(`/crm/interactions/${record._id}`);
+            toast.success('Interaction deleted successfully');
+            setRefreshKey((p) => p + 1);
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to delete interaction');
         }
     };
 
     // ── Submit Complaint ──────────────────────────────────────────────────────
     const handleSubmitComplaint = async (e) => {
         e.preventDefault();
-        if (!complaintForm.customer || !complaintForm.description.trim()) {
+        const targetCust = complaintForm.customer || complaintForm.customerId;
+        if (!targetCust || !complaintForm.description.trim()) {
             toast.error('Please select a Customer and provide a Description');
             return;
         }
         try {
             setIsSubmitting(true);
-            const res = await axiosInstance.post('/crm/complaints', {
-                customer: complaintForm.customer,
+            const payload = {
+                customer: targetCust,
+                customerId: targetCust,
                 complaintType: complaintForm.complaintType,
                 description: complaintForm.description.trim(),
-                date: complaintForm.date || new Date(),
+                date: complaintForm.date || complaintForm.incidentDate || new Date(),
+                incidentDate: complaintForm.date || complaintForm.incidentDate || new Date(),
                 assignedExecutive: complaintForm.assignedExecutive || undefined,
                 status: complaintForm.status,
-                resolutionNotes: complaintForm.resolutionNotes.trim()
-            });
+                resolutionNotes: complaintForm.resolutionNotes ? complaintForm.resolutionNotes.trim() : ''
+            };
+
+            let res;
+            if (editingComplaint) {
+                res = await axiosInstance.put(`/crm/complaints/${editingComplaint._id}`, payload);
+            } else {
+                res = await axiosInstance.post('/crm/complaints', payload);
+            }
+
             if (res.data?.success) {
-                toast.success(`Complaint ticket '${res.data.data?.ticketNumber || 'COMP-TICKET'}' filed successfully!`);
+                toast.success(editingComplaint ? 'Complaint ticket updated!' : `Complaint ticket '${res.data.data?.ticketNumber || 'COMP-TICKET'}' filed successfully!`);
                 setIsComplaintDrawerOpen(false);
-                setComplaintForm({ customer: customers[0]?._id || '', complaintType: 'QUALITY_DEFECT', description: '', date: TODAY, assignedExecutive: users[0]?._id || '', status: 'OPEN', resolutionNotes: '' });
+                setEditingComplaint(null);
+                setComplaintForm({ customer: customers[0]?._id || '', customerId: customers[0]?._id || '', complaintType: 'QUALITY_DEFECT', description: '', date: TODAY, incidentDate: TODAY, assignedExecutive: users[0]?._id || '', status: 'OPEN', resolutionNotes: '' });
                 setRefreshKey((p) => p + 1);
             }
         } catch (err) {
-            toast.error(err.response?.data?.message || 'Failed to file complaint ticket');
+            toast.error(err.response?.data?.message || 'Failed to save complaint ticket');
         } finally {
             setIsSubmitting(false);
+        }
+    };
+
+    const handleEditComplaint = (record) => {
+        setSelectedComplaint(record);
+        setIsComplaintModalOpen(true);
+    };
+
+    const handleDeleteComplaint = async (record) => {
+        if (!record?._id) return;
+        try {
+            await axiosInstance.delete(`/crm/complaints/${record._id}`);
+            toast.success('Complaint ticket deleted successfully');
+            setRefreshKey((p) => p + 1);
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to delete complaint');
         }
     };
 
     // ── Submit / Update Enquiry ───────────────────────────────────────────────
     const handleSubmitEnquiry = async (e) => {
         e.preventDefault();
-        if (!enquiryForm.customer) {
+        if (enquiryForm.customerType === 'Existing' && !enquiryForm.customer && !enquiryForm.customerRef) {
             toast.error('Please select a Customer');
+            return;
+        }
+        if (enquiryForm.customerType === 'New' && !enquiryForm.newCustomerDetails?.company?.trim()) {
+            toast.error('Please enter Prospect / Company Name');
             return;
         }
         if (!enquiryForm.productCategory) {
@@ -411,8 +696,22 @@ export default function CustomerCrmPage() {
             return;
         }
 
+        const effectiveCustomer = enquiryForm.customerType === 'Existing'
+            ? (enquiryForm.customer || enquiryForm.customerRef || null)
+            : null;
+
         const payload = {
-            customer: enquiryForm.customer,
+            customerType: enquiryForm.customerType || 'Existing',
+            customerRef: effectiveCustomer,
+            customer: effectiveCustomer,
+            newCustomerDetails: enquiryForm.customerType === 'New' ? {
+                name: (enquiryForm.newCustomerDetails?.name || enquiryForm.contactPerson || '').trim(),
+                company: (enquiryForm.newCustomerDetails?.company || '').trim(),
+                phone: (enquiryForm.newCustomerDetails?.phone || enquiryForm.contactNumber || '').trim(),
+                email: (enquiryForm.newCustomerDetails?.email || '').trim()
+            } : undefined,
+            status: enquiryForm.status || 'Open',
+            followUps: enquiryForm.followUps || [],
             enquiryDate: enquiryForm.enquiryDate || TODAY,
             productCategory: enquiryForm.productCategory,
             printSpec: {
@@ -441,11 +740,13 @@ export default function CustomerCrmPage() {
             fabricAverage: enquiryForm.fabricAverage.trim(),
             fabricWidthInch: enquiryForm.fabricWidthInch !== '' ? Number(enquiryForm.fabricWidthInch) : null,
             fabricLengthInch: enquiryForm.fabricLengthInch !== '' ? Number(enquiryForm.fabricLengthInch) : null,
-            totalOrderQuantity: enquiryForm.totalOrderQuantity !== '' ? Number(enquiryForm.totalOrderQuantity) : null,
+            totalOrderQuantity: enquiryForm.totalOrderQuantity !== '' ? Number(enquiryForm.totalOrderQuantity) : (enquiryForm.orderQuantity !== '' ? Number(enquiryForm.orderQuantity) : null),
+            orderQuantity: enquiryForm.orderQuantity !== '' ? Number(enquiryForm.orderQuantity) : (enquiryForm.totalOrderQuantity !== '' ? Number(enquiryForm.totalOrderQuantity) : null),
+            quantityUnit: enquiryForm.quantityUnit || 'Kg',
             orderConfirmed: enquiryForm.orderConfirmed,
             expectedDeliveryDate: enquiryForm.orderConfirmed ? enquiryForm.expectedDeliveryDate : '',
-            contactPerson: enquiryForm.contactPerson.trim(),
-            contactNumber: enquiryForm.contactNumber.trim(),
+            contactPerson: (enquiryForm.customerType === 'New' ? (enquiryForm.newCustomerDetails?.name || enquiryForm.contactPerson) : enquiryForm.contactPerson).trim(),
+            contactNumber: (enquiryForm.customerType === 'New' ? (enquiryForm.newCustomerDetails?.phone || enquiryForm.contactNumber) : enquiryForm.contactNumber).trim(),
             contactDesignation: enquiryForm.contactDesignation.trim(),
             description: enquiryForm.description ? enquiryForm.description.trim() : '',
             remarks: enquiryForm.description ? enquiryForm.description.trim() : '',
@@ -461,10 +762,14 @@ export default function CustomerCrmPage() {
                 res = await axiosInstance.post('/crm/enquiries', payload);
             }
             if (res.data?.success) {
-                toast.success(editingEnquiry ? 'Order enquiry updated!' : 'Order enquiry logged!');
+                toast.success(editingEnquiry ? 'Sales lead updated!' : 'Sales lead logged!');
                 setIsEnquiryDrawerOpen(false);
                 setEditingEnquiry(null);
-                setEnquiryForm({ ...EMPTY_ENQUIRY, customer: customers[0]?._id || '' });
+                setEnquiryForm({
+                    ...EMPTY_ENQUIRY,
+                    customer: customers[0]?._id || '',
+                    customerRef: customers[0]?._id || ''
+                });
                 setIsEnquiryDescManuallyEdited(false);
                 setRefreshKey((p) => p + 1);
             }
@@ -499,8 +804,20 @@ export default function CustomerCrmPage() {
     const handleEditEnquiry = (row) => {
         setEditingEnquiry(row);
         const existingDesc = row.description || row.remarks || '';
+        const cType = row.customerType || (row.customer || row.customerRef ? 'Existing' : 'New');
+        const custId = row.customerRef?._id || row.customerRef || (typeof row.customer === 'object' ? row.customer._id : row.customer) || '';
         setEnquiryForm({
-            customer: typeof row.customer === 'object' ? row.customer._id : row.customer,
+            customerType: cType,
+            customerRef: custId,
+            customer: custId,
+            newCustomerDetails: {
+                name: row.newCustomerDetails?.name || row.contactPerson || '',
+                company: row.newCustomerDetails?.company || '',
+                phone: row.newCustomerDetails?.phone || row.contactNumber || '',
+                email: row.newCustomerDetails?.email || ''
+            },
+            status: row.status || 'Open',
+            followUps: row.followUps || [],
             enquiryDate: row.enquiryDate ? row.enquiryDate.split('T')[0] : TODAY,
             productCategory: row.productCategory || 'Print',
             printSides: row.printSides || row.printSpec?.printSides || 'BOTH',
@@ -518,7 +835,9 @@ export default function CustomerCrmPage() {
             fabricAverage: row.fabricAverage || '',
             fabricWidthInch: row.fabricWidthInch ?? '',
             fabricLengthInch: row.fabricLengthInch ?? '',
-            totalOrderQuantity: row.totalOrderQuantity ?? '',
+            totalOrderQuantity: row.totalOrderQuantity ?? row.orderQuantity ?? '',
+            orderQuantity: row.orderQuantity ?? row.totalOrderQuantity ?? '',
+            quantityUnit: row.quantityUnit || 'Kg',
             orderConfirmed: row.orderConfirmed || false,
             expectedDeliveryDate: row.expectedDeliveryDate ? row.expectedDeliveryDate.split('T')[0] : '',
             contactPerson: row.contactPerson || '',
@@ -590,6 +909,32 @@ export default function CustomerCrmPage() {
                     </div>
                 );
             }
+        },
+        {
+            header: 'ACTIONS',
+            render: (row) => (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                        type="button"
+                        title="Edit Interaction"
+                        onClick={() => {
+                            setSelectedInteraction(row);
+                            setIsInteractionModalOpen(true);
+                        }}
+                        className="p-1.5 text-text-muted hover:text-primary rounded-md hover:bg-app-bg transition-colors cursor-pointer"
+                    >
+                        <Pencil size={13} />
+                    </button>
+                    <button
+                        type="button"
+                        title="Delete Interaction"
+                        onClick={() => handleDeleteInteraction(row)}
+                        className="p-1.5 text-text-muted hover:text-rose-600 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
+                    >
+                        <Trash2 size={13} />
+                    </button>
+                </div>
+            )
         }
     ];
 
@@ -602,14 +947,46 @@ export default function CustomerCrmPage() {
         {
             header: 'STATUS',
             render: (row) => {
-                const st = (row.status || 'OPEN').toUpperCase();
-                const ok = st === 'RESOLVED' || st === 'CLOSED';
+                const raw = row.status || 'Open Ticket';
+                const st = raw.toUpperCase();
+                const ok = st.includes('RESOLVED') || st.includes('CLOSED');
+                const investigating = st.includes('INVESTIGAT');
+                const badgeClass = ok 
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+                    : (investigating ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-rose-50 text-rose-800 border-rose-200');
+                const dotClass = ok ? 'bg-emerald-500' : (investigating ? 'bg-amber-500' : 'bg-rose-500 animate-pulse');
                 return (
-                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border ${ok ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-rose-50 text-rose-800 border-rose-200'}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-rose-500 animate-pulse'}`} /><span>{ok ? 'Resolved' : 'Open Ticket'}</span>
+                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border ${badgeClass}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} /><span>{raw}</span>
                     </div>
                 );
             }
+        },
+        {
+            header: 'ACTIONS',
+            render: (row) => (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                        type="button"
+                        title="Edit Complaint"
+                        onClick={() => {
+                            setSelectedComplaint(row);
+                            setIsComplaintModalOpen(true);
+                        }}
+                        className="p-1.5 text-text-muted hover:text-primary rounded-md hover:bg-app-bg transition-colors cursor-pointer"
+                    >
+                        <Pencil size={13} />
+                    </button>
+                    <button
+                        type="button"
+                        title="Delete Complaint"
+                        onClick={() => handleDeleteComplaint(row)}
+                        className="p-1.5 text-text-muted hover:text-rose-600 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
+                    >
+                        <Trash2 size={13} />
+                    </button>
+                </div>
+            )
         }
     ];
 
@@ -617,11 +994,20 @@ export default function CustomerCrmPage() {
         {
             header: 'CUSTOMER',
             render: (row) => {
-                const c = typeof row.customer === 'object' ? row.customer : null;
+                const isNew = !row.customerRef || !row.customer || row.customerType === 'New';
+                const c = typeof row.customer === 'object' ? row.customer : (typeof row.customerRef === 'object' ? row.customerRef : null);
+                const displayName = isNew
+                    ? (row.newCustomerDetails?.company || row.newCustomerDetails?.name || 'New Prospect')
+                    : (c?.companyName || c?.name || '-');
+
                 return (
                     <div className="font-sans leading-tight">
-                        <div className="font-extrabold text-text-main text-xs">{c?.companyName || '-'}</div>
-                        {c?.code && <div className="text-[10px] font-mono text-text-muted">{c.code}</div>}
+                        <div className="font-extrabold text-text-main text-xs">{displayName}</div>
+                        {row.nslNumber ? (
+                            <div className="text-[10px] font-mono text-primary font-bold">{row.nslNumber}</div>
+                        ) : (
+                            c?.code && <div className="text-[10px] font-mono text-text-muted">{c.code}</div>
+                        )}
                     </div>
                 );
             },
@@ -677,64 +1063,127 @@ export default function CustomerCrmPage() {
             )
         },
         {
-            header: 'CONFIRMED',
-            render: (row) => row.orderConfirmed
-                ? (
-                    <div className="flex flex-col items-start gap-0.5">
-                        <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                            <CheckCircle2 size={10} /> Yes
+            header: 'STATUS',
+            render: (row) => {
+                const isConfirmed = row.status === 'Confirmed' || row.orderConfirmed;
+                if (isConfirmed) {
+                    return (
+                        <div className="flex flex-col items-start gap-0.5">
+                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                <CheckCircle2 size={10} /> Confirmed
+                            </div>
+                            {row.expectedDeliveryDate && (
+                                <span className="text-[10px] font-mono text-text-muted">
+                                    {new Date(row.expectedDeliveryDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                </span>
+                            )}
                         </div>
-                        {row.expectedDeliveryDate && (
-                            <span className="text-[10px] font-mono text-text-muted">
-                                {new Date(row.expectedDeliveryDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                            </span>
-                        )}
-                    </div>
-                ) : (
+                    );
+                }
+                if (row.status === 'Lost') {
+                    return (
+                        <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                            <XCircle size={10} /> Lost
+                        </div>
+                    );
+                }
+                return (
                     <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
-                        <XCircle size={10} /> Pending
+                        <Clock size={10} /> {row.status || 'Open'}
                     </div>
-                )
+                );
+            }
         },
         {
             header: 'ACTIONS',
-            render: (row) => (
-                <div className="flex items-center gap-1">
-                    <button
-                        type="button"
-                        title="View Details"
-                        onClick={() => setViewingEnquiry(row)}
-                        className="p-1.5 text-text-muted hover:text-sky-600 rounded-md hover:bg-sky-50 transition-colors cursor-pointer"
-                    >
-                        <Eye size={13} />
-                    </button>
-                    <button
-                        type="button"
-                        title="Edit"
-                        onClick={() => handleEditEnquiry(row)}
-                        className="p-1.5 text-text-muted hover:text-primary rounded-md hover:bg-app-bg transition-colors cursor-pointer"
-                    >
-                        <Pencil size={13} />
-                    </button>
-                    <button
-                        type="button"
-                        title="Delete"
-                        onClick={() => handleDeleteEnquiry(row)}
-                        className="p-1.5 text-text-muted hover:text-rose-600 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
-                    >
-                        <Trash2 size={13} />
-                    </button>
-                </div>
-            )
+            render: (row) => {
+                return (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        {/* If enquiry status is Converted, SO Created, Closed - Won, or Confirmed */}
+                        {['Converted', 'SO Created', 'Closed - Won', 'Confirmed'].includes(row.status) ? (
+                            <button 
+                                disabled 
+                                className="flex items-center gap-1 bg-gray-400 text-white px-2 py-1 rounded text-[10px] font-bold uppercase cursor-not-allowed"
+                            >
+                                SO Generated
+                            </button>
+                        ) : row.soApprovalStatus === 'Approved' || user?.role === 'Tenant Admin' ? (
+                            <button 
+                                onClick={() => handleGenerateSO(row)} 
+                                disabled={convertingNslId === row._id}
+                                className="flex items-center gap-1 bg-green-500 text-white px-2 py-1 rounded text-[10px] font-bold uppercase hover:bg-green-600 transition-colors disabled:opacity-50"
+                            >
+                                {row.soApprovalStatus === 'Pending Approval' && user?.role === 'Tenant Admin' ? 'Approve & Gen SO' : 'Generate SO'}
+                            </button>
+                        ) : row.soApprovalStatus === 'Pending Approval' ? (
+                            <button disabled className="flex items-center gap-1 bg-gray-400 text-white px-2 py-1 rounded text-[10px] font-bold uppercase cursor-not-allowed">
+                                Approval Pending
+                            </button>
+                        ) : (
+                            <button 
+                                onClick={() => requestSOApproval(row._id)} 
+                                className="flex items-center gap-1 bg-yellow-500 text-white px-2 py-1 rounded text-[10px] font-bold uppercase hover:bg-yellow-600 transition-colors"
+                            >
+                                Request SO Approval
+                            </button>
+                        )}
+                        {!['Converted', 'SO Created', 'Closed - Won', 'Confirmed'].includes(row.status) && (
+                            <button
+                                type="button"
+                                title="Log Follow-up"
+                                onClick={() => {
+                                    setSelectedNslForFollowUp(row);
+                                    setIsFollowUpModalOpen(true);
+                                }}
+                                className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded text-[11px] font-bold flex items-center gap-1 transition-all shadow-2xs cursor-pointer whitespace-nowrap"
+                            >
+                                <PhoneCall size={12} />
+                                <span>Log Follow-up</span>
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            title="View Details"
+                            onClick={() => setViewingEnquiry(row)}
+                            className="p-1.5 text-text-muted hover:text-sky-600 rounded-md hover:bg-sky-50 transition-colors cursor-pointer"
+                        >
+                            <Eye size={13} />
+                        </button>
+                        <button
+                            type="button"
+                            title="Edit"
+                            onClick={() => handleEditEnquiry(row)}
+                            className="p-1.5 text-text-muted hover:text-primary rounded-md hover:bg-app-bg transition-colors cursor-pointer"
+                        >
+                            <Pencil size={13} />
+                        </button>
+                        <button
+                            type="button"
+                            title="Delete"
+                            onClick={() => handleDeleteEnquiry(row)}
+                            className="p-1.5 text-text-muted hover:text-rose-600 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
+                        >
+                            <Trash2 size={13} />
+                        </button>
+                    </div>
+                );
+            }
         }
     ];
 
     // ── Tab definitions — Order Enquiries is first/default ───────────────────
-    const tabs = [
-        { key: 'enquiries', label: `Order Enquiries (${enquiryCount})`, resourcePath: '/crm/enquiries', columns: enquiryColumns },
-        { key: 'follow-ups', label: `Follow-up Logs (${interactionCount})`, resourcePath: '/crm/interactions', columns: followUpColumns },
-        { key: 'complaints', label: `Quality & Delivery Complaints (${complaintCount})`, resourcePath: '/crm/complaints', columns: complaintColumns }
-    ];
+    const tabs = useMemo(() => [
+        { key: 'enquiries', label: 'Order Enquiries', resourcePath: '/crm/enquiries', columns: enquiryColumns, availableStatuses: ['Open', 'Confirmed', 'Lost'], defaultStatus: 'All Statuses' },
+        { 
+            key: 'follow-ups', 
+            label: 'Follow-up Logs', 
+            resourcePath: '/crm/interactions', 
+            columns: followUpColumns,
+            availableStatuses: ['OPEN', 'IN_PROGRESS', 'CLOSED'],
+            defaultStatus: 'All Statuses'
+        },
+        { key: 'complaints', label: 'Quality & Delivery Complaints', resourcePath: '/crm/complaints', columns: complaintColumns, availableStatuses: ['Open Ticket', 'Under Investigation', 'Resolved / CAPA Issued', 'Closed'], defaultStatus: 'All Statuses' }
+    ], []);
 
     // ── Header action button ──────────────────────────────────────────────────
     const headerButton = (
@@ -742,7 +1191,7 @@ export default function CustomerCrmPage() {
             {activeTab === 'complaints' ? (
                 <button
                     type="button"
-                    onClick={() => setIsComplaintDrawerOpen(true)}
+                    onClick={() => { setSelectedComplaint(null); setEditingComplaint(null); setIsComplaintModalOpen(true); }}
                     className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
                 >
                     <AlertTriangle size={15} /><span>+ File Complaint Ticket</span>
@@ -753,12 +1202,12 @@ export default function CustomerCrmPage() {
                     onClick={() => { setEditingEnquiry(null); setEnquiryForm({ ...EMPTY_ENQUIRY }); setIsEnquiryDrawerOpen(true); }}
                     className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
                 >
-                    <ClipboardList size={15} /><span>+ Log Order Enquiry</span>
+                    <ClipboardList size={15} /><span>+ New Sales Lead (NSL)</span>
                 </button>
             ) : (
                 <button
                     type="button"
-                    onClick={() => setIsInteractionDrawerOpen(true)}
+                    onClick={() => { setSelectedInteraction(null); setEditingInteraction(null); setIsInteractionModalOpen(true); }}
                     className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
                 >
                     <PhoneCall size={15} /><span>+ Log Customer Interaction</span>
@@ -787,9 +1236,9 @@ export default function CustomerCrmPage() {
             {/* ─── Drawer 1: Log Customer Interaction ────────────────────────── */}
             <SlideOverPanel
                 isOpen={isInteractionDrawerOpen}
-                onClose={() => setIsInteractionDrawerOpen(false)}
-                title="Log Customer Interaction & Follow-up"
-                subtitle="Record phone call, meeting notes, sales follow-up and assign sales representative"
+                onClose={() => { setIsInteractionDrawerOpen(false); setEditingInteraction(null); }}
+                title={editingInteraction ? "Edit Customer Interaction & Follow-up" : "Log Customer Interaction & Follow-up"}
+                subtitle={editingInteraction ? "Modify existing communication log, notes or status" : "Record phone call, meeting notes, sales follow-up and assign sales representative"}
             >
                 <form onSubmit={handleSubmitInteraction} className="space-y-4 font-sans text-xs">
                     {isLoadingDropdowns ? (
@@ -800,7 +1249,7 @@ export default function CustomerCrmPage() {
                         <>
                             <div>
                                 <label className={lbl}>Select Customer Master *</label>
-                                <select required value={interactionForm.customer} onChange={(e) => setInteractionForm({ ...interactionForm, customer: e.target.value })} className={sel}>
+                                <select required value={interactionForm.customer || interactionForm.customerId} onChange={(e) => setInteractionForm({ ...interactionForm, customer: e.target.value, customerId: e.target.value })} className={sel}>
                                     {customers.map((c) => <option key={c._id} value={c._id}>{c.code || 'CUST'} - {c.companyName || c.name}</option>)}
                                 </select>
                             </div>
@@ -851,9 +1300,9 @@ export default function CustomerCrmPage() {
                             </div>
 
                             <div className="pt-3 border-t border-border flex justify-end gap-3">
-                                <button type="button" onClick={() => setIsInteractionDrawerOpen(false)} className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs cursor-pointer">Cancel</button>
+                                <button type="button" onClick={() => { setIsInteractionDrawerOpen(false); setEditingInteraction(null); }} className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs cursor-pointer">Cancel</button>
                                 <button type="submit" disabled={isSubmitting} className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50">
-                                    <PhoneCall size={15} /><span>{isSubmitting ? 'Saving...' : 'Save Interaction Log'}</span>
+                                    <PhoneCall size={15} /><span>{isSubmitting ? 'Saving...' : (editingInteraction ? 'Update Interaction' : 'Save Interaction Log')}</span>
                                 </button>
                             </div>
                         </>
@@ -864,9 +1313,9 @@ export default function CustomerCrmPage() {
             {/* ─── Drawer 2: File Complaint Ticket ───────────────────────────── */}
             <SlideOverPanel
                 isOpen={isComplaintDrawerOpen}
-                onClose={() => setIsComplaintDrawerOpen(false)}
-                title="File Quality & Delivery Complaint"
-                subtitle="Escalate customer defect complaints, bag bursting, or delivery delay tickets"
+                onClose={() => { setIsComplaintDrawerOpen(false); setEditingComplaint(null); }}
+                title={editingComplaint ? "Edit Quality & Delivery Complaint" : "File Quality & Delivery Complaint"}
+                subtitle={editingComplaint ? "Modify complaint ticket details, incident date or assigned executive" : "Escalate customer defect complaints, bag bursting, or delivery delay tickets"}
             >
                 <form onSubmit={handleSubmitComplaint} className="space-y-4 font-sans text-xs">
                     {isLoadingDropdowns ? (
@@ -877,7 +1326,7 @@ export default function CustomerCrmPage() {
                         <>
                             <div>
                                 <label className={lbl}>Customer Master *</label>
-                                <select required value={complaintForm.customer} onChange={(e) => setComplaintForm({ ...complaintForm, customer: e.target.value })} className={sel}>
+                                <select required value={complaintForm.customer || complaintForm.customerId} onChange={(e) => setComplaintForm({ ...complaintForm, customer: e.target.value, customerId: e.target.value })} className={sel}>
                                     {customers.map((c) => <option key={c._id} value={c._id}>{c.code || 'CUST'} - {c.companyName || c.name}</option>)}
                                 </select>
                             </div>
@@ -923,9 +1372,9 @@ export default function CustomerCrmPage() {
                             </div>
 
                             <div className="pt-3 border-t border-border flex justify-end gap-3">
-                                <button type="button" onClick={() => setIsComplaintDrawerOpen(false)} className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs cursor-pointer">Cancel</button>
+                                <button type="button" onClick={() => { setIsComplaintDrawerOpen(false); setEditingComplaint(null); }} className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs cursor-pointer">Cancel</button>
                                 <button type="submit" disabled={isSubmitting} className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50">
-                                    <AlertTriangle size={15} /><span>{isSubmitting ? 'Filing Ticket...' : 'File Complaint Ticket'}</span>
+                                    <AlertTriangle size={15} /><span>{isSubmitting ? 'Saving...' : (editingComplaint ? 'Update Ticket' : 'File Complaint Ticket')}</span>
                                 </button>
                             </div>
                         </>
@@ -933,12 +1382,12 @@ export default function CustomerCrmPage() {
                 </form>
             </SlideOverPanel>
 
-            {/* ─── Drawer 3: Log / Edit Order Enquiry ────────────────────────── */}
+            {/* ─── Drawer 3: Log / Edit Order Enquiry / NSL ─────────────────── */}
             <SlideOverPanel
                 isOpen={isEnquiryDrawerOpen}
                 onClose={() => { setIsEnquiryDrawerOpen(false); setEditingEnquiry(null); }}
-                title={editingEnquiry ? 'Edit Order Enquiry' : 'Log New Order Enquiry'}
-                subtitle="Capture customer job-order specifications — tied to Customer Master"
+                title={editingEnquiry ? 'Edit Sales Lead (NSL)' : 'New Sales Lead (NSL)'}
+                subtitle="Capture prospect details, specifications, and follow-ups."
                 widthClass="w-full max-w-full sm:max-w-2xl"
             >
                 <form onSubmit={handleSubmitEnquiry} className="space-y-5 font-sans text-xs">
@@ -950,42 +1399,140 @@ export default function CustomerCrmPage() {
                         <>
                             {/* ── Section: Customer & Date ──────────────────────────── */}
                             <div className="p-4 bg-app-bg rounded-lg border border-border space-y-3">
-                                <p className="text-[10px] font-extrabold uppercase tracking-widest text-text-muted">Customer & Enquiry Info</p>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                    <div>
-                                        <label className={lbl}>Customer *</label>
-                                        <select
-                                            required
-                                            value={enquiryForm.customer}
-                                            onChange={(e) => handleEnquiryCustomerChange(e.target.value)}
-                                            className={sel}
-                                        >
-                                            <option value="">— Select Customer —</option>
-                                            {customers.map((c) => (
-                                                <option key={c._id} value={c._id}>{c.code || 'CUST'} — {c.companyName || c.name}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className={lbl}>Enquiry Date</label>
-                                        <input type="date" value={enquiryForm.enquiryDate} onChange={(e) => setEnquiryForm((p) => ({ ...p, enquiryDate: e.target.value }))} className={inp} />
+                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                    <p className="text-[10px] font-extrabold uppercase tracking-widest text-text-muted">Customer & Enquiry Info</p>
+
+                                    {/* Toggle: Existing Customer vs New Prospect */}
+                                    <div className="flex items-center gap-3 bg-card-bg border border-border px-3 py-1 rounded-lg shadow-2xs">
+                                        <label className="flex items-center gap-1.5 cursor-pointer text-xs font-semibold text-text-main">
+                                            <input
+                                                type="radio"
+                                                name="customerType"
+                                                value="Existing"
+                                                checked={enquiryForm.customerType === 'Existing'}
+                                                onChange={() => setEnquiryForm((p) => ({ ...p, customerType: 'Existing' }))}
+                                                className="accent-primary cursor-pointer"
+                                            />
+                                            <span>Existing Customer</span>
+                                        </label>
+                                        <label className="flex items-center gap-1.5 cursor-pointer text-xs font-semibold text-text-main">
+                                            <input
+                                                type="radio"
+                                                name="customerType"
+                                                value="New"
+                                                checked={enquiryForm.customerType === 'New'}
+                                                onChange={() => setEnquiryForm((p) => ({ ...p, customerType: 'New', customer: '', customerRef: '' }))}
+                                                className="accent-primary cursor-pointer"
+                                            />
+                                            <span>New Prospect</span>
+                                        </label>
                                     </div>
                                 </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                    <div>
-                                        <label className={lbl}>Contact Person</label>
-                                        <input type="text" placeholder="Auto-filled or override" value={enquiryForm.contactPerson} onChange={(e) => setEnquiryForm((p) => ({ ...p, contactPerson: e.target.value }))} className={inp} />
-                                    </div>
-                                    <div>
-                                        <label className={lbl}>Contact Number</label>
-                                        <input type="text" placeholder="+91 98765 43210" value={enquiryForm.contactNumber} onChange={(e) => setEnquiryForm((p) => ({ ...p, contactNumber: e.target.value }))} className={inp} />
-                                    </div>
-                                    <div>
-                                        <label className={lbl}>Designation</label>
-                                        <input type="text" placeholder="e.g. Purchase Manager" value={enquiryForm.contactDesignation} onChange={(e) => setEnquiryForm((p) => ({ ...p, contactDesignation: e.target.value }))} className={inp} />
-                                    </div>
-                                </div>
+                                {enquiryForm.customerType === 'Existing' ? (
+                                    <>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <div>
+                                                <label className={lbl}>Customer *</label>
+                                                <select
+                                                    required
+                                                    value={enquiryForm.customer || enquiryForm.customerRef || ''}
+                                                    onChange={(e) => handleEnquiryCustomerChange(e.target.value)}
+                                                    className={sel}
+                                                >
+                                                    <option value="">— Select Customer —</option>
+                                                    {customers.map((c) => (
+                                                        <option key={c._id} value={c._id}>{c.code || 'CUST'} — {c.companyName || c.name}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className={lbl}>Enquiry Date</label>
+                                                <input type="date" value={enquiryForm.enquiryDate} onChange={(e) => setEnquiryForm((p) => ({ ...p, enquiryDate: e.target.value }))} className={inp} />
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                            <div>
+                                                <label className={lbl}>Contact Person</label>
+                                                <input type="text" placeholder="Auto-filled or override" value={enquiryForm.contactPerson} onChange={(e) => setEnquiryForm((p) => ({ ...p, contactPerson: e.target.value }))} className={inp} />
+                                            </div>
+                                            <div>
+                                                <label className={lbl}>Contact Number</label>
+                                                <input type="text" placeholder="+91 98765 43210" value={enquiryForm.contactNumber} onChange={(e) => setEnquiryForm((p) => ({ ...p, contactNumber: e.target.value }))} className={inp} />
+                                            </div>
+                                            <div>
+                                                <label className={lbl}>Designation</label>
+                                                <input type="text" placeholder="e.g. Purchase Manager" value={enquiryForm.contactDesignation} onChange={(e) => setEnquiryForm((p) => ({ ...p, contactDesignation: e.target.value }))} className={inp} />
+                                            </div>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <div>
+                                                <label className={lbl}>Prospect / Company Name *</label>
+                                                <input
+                                                    type="text"
+                                                    required
+                                                    placeholder="e.g. Acme Polymers Ltd"
+                                                    value={enquiryForm.newCustomerDetails?.company || ''}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        setEnquiryForm((p) => ({
+                                                            ...p,
+                                                            newCustomerDetails: { ...(p.newCustomerDetails || {}), company: val }
+                                                        }));
+                                                    }}
+                                                    className={inp}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className={lbl}>Enquiry Date</label>
+                                                <input type="date" value={enquiryForm.enquiryDate} onChange={(e) => setEnquiryForm((p) => ({ ...p, enquiryDate: e.target.value }))} className={inp} />
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <div>
+                                                <label className={lbl}>Contact Person *</label>
+                                                <input
+                                                    type="text"
+                                                    required
+                                                    placeholder="e.g. Rajesh Kumar"
+                                                    value={enquiryForm.newCustomerDetails?.name || enquiryForm.contactPerson || ''}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        setEnquiryForm((p) => ({
+                                                            ...p,
+                                                            contactPerson: val,
+                                                            newCustomerDetails: { ...(p.newCustomerDetails || {}), name: val }
+                                                        }));
+                                                    }}
+                                                    className={inp}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className={lbl}>Contact Number *</label>
+                                                <input
+                                                    type="text"
+                                                    required
+                                                    placeholder="+91 98765 43210"
+                                                    value={enquiryForm.newCustomerDetails?.phone || enquiryForm.contactNumber || ''}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        setEnquiryForm((p) => ({
+                                                            ...p,
+                                                            contactNumber: val,
+                                                            newCustomerDetails: { ...(p.newCustomerDetails || {}), phone: val }
+                                                        }));
+                                                    }}
+                                                    className={inp}
+                                                />
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                             </div>
 
                             {/* ── Section: Product Specification ──────────────────────── */}
@@ -1029,9 +1576,38 @@ export default function CustomerCrmPage() {
                                                         min="1"
                                                         max="8"
                                                         value={enquiryForm.frontColours}
-                                                        onChange={(e) => setEnquiryForm((p) => ({ ...p, frontColours: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
+                                                        onChange={(e) => {
+                                                            const newQty = parseInt(e.target.value, 10) || 0;
+                                                            const currentColors = enquiryForm.frontColorsList || [];
+                                                            const updatedColors = Array.from({ length: newQty }, (_, i) => currentColors[i] || '');
+                                                            setEnquiryForm((p) => ({
+                                                                ...p,
+                                                                frontColours: newQty,
+                                                                frontColorsQty: newQty,
+                                                                frontColorsList: updatedColors
+                                                            }));
+                                                        }}
                                                         className={inp}
                                                     />
+                                                </div>
+                                            )}
+
+                                            {enquiryForm.frontColorsList?.length > 0 && (
+                                                <div className="col-span-full flex flex-col gap-2 mt-1">
+                                                    {enquiryForm.frontColorsList.map((color, index) => (
+                                                        <input
+                                                            key={`front-${index}`}
+                                                            type="text"
+                                                            placeholder={`Front Colour ${index + 1} (e.g. Red)`}
+                                                            value={color}
+                                                            onChange={(e) => {
+                                                                const newColors = [...enquiryForm.frontColorsList];
+                                                                newColors[index] = e.target.value;
+                                                                setEnquiryForm((p) => ({ ...p, frontColorsList: newColors }));
+                                                            }}
+                                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                                        />
+                                                    ))}
                                                 </div>
                                             )}
 
@@ -1043,9 +1619,38 @@ export default function CustomerCrmPage() {
                                                         min="1"
                                                         max="8"
                                                         value={enquiryForm.backColours}
-                                                        onChange={(e) => setEnquiryForm((p) => ({ ...p, backColours: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
+                                                        onChange={(e) => {
+                                                            const newQty = parseInt(e.target.value, 10) || 0;
+                                                            const currentColors = enquiryForm.backColorsList || [];
+                                                            const updatedColors = Array.from({ length: newQty }, (_, i) => currentColors[i] || '');
+                                                            setEnquiryForm((p) => ({
+                                                                ...p,
+                                                                backColours: newQty,
+                                                                backColorsQty: newQty,
+                                                                backColorsList: updatedColors
+                                                            }));
+                                                        }}
                                                         className={inp}
                                                     />
+                                                </div>
+                                            )}
+
+                                            {enquiryForm.backColorsList?.length > 0 && (
+                                                <div className="col-span-full flex flex-col gap-2 mt-1">
+                                                    {enquiryForm.backColorsList.map((color, index) => (
+                                                        <input
+                                                            key={`back-${index}`}
+                                                            type="text"
+                                                            placeholder={`Back Colour ${index + 1} (e.g. Blue)`}
+                                                            value={color}
+                                                            onChange={(e) => {
+                                                                const newColors = [...enquiryForm.backColorsList];
+                                                                newColors[index] = e.target.value;
+                                                                setEnquiryForm((p) => ({ ...p, backColorsList: newColors }));
+                                                            }}
+                                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                                        />
+                                                    ))}
                                                 </div>
                                             )}
                                         </div>
@@ -1088,14 +1693,6 @@ export default function CustomerCrmPage() {
                                         <InlineAddOption attrType={ATTR.colour} onAdded={(item) => setAttrColour((p) => [...p, item].sort((a, b) => a.name.localeCompare(b.name)))} />
                                     </div>
 
-                                    {/* Printing Colour */}
-                                    <div>
-                                        <label className={lbl}>Printing Colour</label>
-                                        <select value={enquiryForm.printingColour} onChange={(e) => setEnquiryForm((p) => ({ ...p, printingColour: e.target.value }))} className={sel}>
-                                            <option value="">— Select —</option>
-                                            {attrColour.map((a) => <option key={a._id} value={a.name}>{a.name}</option>)}
-                                        </select>
-                                    </div>
 
                                     {/* Fabric Grammage */}
                                     <div>
@@ -1137,8 +1734,26 @@ export default function CustomerCrmPage() {
                                 <p className="text-[10px] font-extrabold uppercase tracking-widest text-text-muted">Order Quantity & Confirmation</p>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                     <div>
-                                        <label className={lbl}>Total Order Quantity (Kgs / Pcs)</label>
-                                        <input type="number" min="0" placeholder="e.g. 10000" value={enquiryForm.totalOrderQuantity} onChange={(e) => setEnquiryForm((p) => ({ ...p, totalOrderQuantity: e.target.value }))} className={inp} />
+                                        <label className={lbl}>TOTAL ORDER QUANTITY *</label>
+                                        <div className="flex gap-2">
+                                            <input 
+                                                type="number" 
+                                                placeholder="e.g. 10000" 
+                                                value={enquiryForm.orderQuantity || ''} 
+                                                onChange={(e) => setEnquiryForm((p) => ({ ...p, orderQuantity: e.target.value }))} 
+                                                className="flex-1 border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary" 
+                                            />
+                                            <select 
+                                                value={enquiryForm.quantityUnit || 'Kg'} 
+                                                onChange={(e) => setEnquiryForm((p) => ({ ...p, quantityUnit: e.target.value }))} 
+                                                className="w-24 shrink-0 border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                            >
+                                                <option value="Kg">Kg</option>
+                                                <option value="Pcs">Pcs</option>
+                                                <option value="Bag">Bag</option>
+                                                <option value="Roll">Roll</option>
+                                            </select>
+                                        </div>
                                     </div>
                                     <div>
                                         <label className={lbl}>Order Confirmed?</label>
@@ -1313,6 +1928,88 @@ export default function CustomerCrmPage() {
                 record={viewingEnquiry}
                 tabKey="enquiries"
                 tabLabel="Order Enquiry"
+            />
+
+            {/* ─── Create Customer Modal (New Prospect conversion) ───────────── */}
+            <CreateCustomerModal
+                isOpen={isCreateCustomerModalOpen}
+                onClose={() => {
+                    setIsCreateCustomerModalOpen(false);
+                    setPendingNslForConversion(null);
+                }}
+                onSuccess={handleCustomerCreated}
+                initialData={customerModalInitialData}
+            />
+
+            {/* ─── Create Sales Order Modal (NSL conversion) ─────────────────── */}
+            <CreateSalesOrderModal
+                isOpen={isSalesOrderModalOpen}
+                onClose={() => {
+                    setIsSalesOrderModalOpen(false);
+                    setSalesOrderInitialData(null);
+                    setConvertingNslId(null);
+                }}
+                onSuccess={async () => {
+                    const targetNslId = convertingNslId || salesOrderInitialData?.nslId;
+                    if (targetNslId) {
+                        try {
+                            await axiosInstance.put(`/crm/enquiries/${targetNslId}`, {
+                                status: 'Converted',
+                                orderConfirmed: true
+                            });
+                        } catch (err) {
+                            console.error('Failed to auto-update enquiry status:', err);
+                        }
+                    }
+                    setIsSalesOrderModalOpen(false);
+                    setSalesOrderInitialData(null);
+                    setConvertingNslId(null);
+                    setRefreshKey((p) => p + 1);
+                    toast.success('Sales Order generated successfully from NSL!');
+                }}
+                initialData={salesOrderInitialData}
+            />
+
+            {/* ─── Log Follow-up Modal ────────────────────────────────────────── */}
+            <LogFollowUpModal
+                isOpen={isFollowUpModalOpen}
+                onClose={() => {
+                    setIsFollowUpModalOpen(false);
+                    setSelectedNslForFollowUp(null);
+                }}
+                nslData={selectedNslForFollowUp}
+                onSuccess={() => {
+                    setRefreshKey((p) => p + 1);
+                }}
+            />
+
+            {/* ─── File / Edit Complaint Modal ─────────────────────────────── */}
+            <CreateComplaintModal
+                isOpen={isComplaintModalOpen}
+                onClose={() => {
+                    setIsComplaintModalOpen(false);
+                    setSelectedComplaint(null);
+                }}
+                editData={selectedComplaint}
+                customers={customers}
+                users={users}
+                onSuccess={() => {
+                    setRefreshKey((p) => p + 1);
+                }}
+            />
+            {/* ─── Log Customer Interaction Modal ─────────────────────────────── */}
+            <LogInteractionModal
+                isOpen={isInteractionModalOpen}
+                onClose={() => {
+                    setIsInteractionModalOpen(false);
+                    setSelectedInteraction(null);
+                }}
+                editData={selectedInteraction}
+                customers={customers}
+                users={users}
+                onSuccess={() => {
+                    setRefreshKey((p) => p + 1);
+                }}
             />
         </>
     );

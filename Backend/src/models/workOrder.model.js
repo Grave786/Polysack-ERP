@@ -138,7 +138,11 @@ const JobOrderDetailsSchema = new mongoose.Schema({
             default: 'NONE'
         },
         frontColours: { type: Number, default: 0, min: 0 },
-        backColours: { type: Number, default: 0, min: 0 }
+        backColours: { type: Number, default: 0, min: 0 },
+        frontColorsQty: { type: Number, default: 0, min: 0 },
+        backColorsQty: { type: Number, default: 0, min: 0 },
+        frontColorsList: [{ type: String, trim: true }],
+        backColorsList: [{ type: String, trim: true }]
     },
     printSides: {
         type: String,
@@ -147,6 +151,10 @@ const JobOrderDetailsSchema = new mongoose.Schema({
     },
     frontColours: { type: Number, default: 0, min: 0 },
     backColours: { type: Number, default: 0, min: 0 },
+    frontColorsQty: { type: Number, default: 0, min: 0 },
+    backColorsQty: { type: Number, default: 0, min: 0 },
+    frontColorsList: [{ type: String, trim: true }],
+    backColorsList: [{ type: String, trim: true }],
     jobDescriptionPrintColours: {
         type: String,
         trim: true,
@@ -168,11 +176,6 @@ const JobOrderDetailsSchema = new mongoose.Schema({
         default: ''
     },
     materialColour: {
-        type: String,
-        trim: true,
-        default: ''
-    },
-    printingColour: {
         type: String,
         trim: true,
         default: ''
@@ -242,7 +245,11 @@ const JobOrderDetailsSchema = new mongoose.Schema({
         type: String,
         trim: true,
         default: ''
-    }
+    },
+    assignedOperators: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Employee'
+    }]
 }, { _id: false });
 
 const WorkOrderSchema = new mongoose.Schema({
@@ -313,6 +320,10 @@ const WorkOrderSchema = new mongoose.Schema({
         ref: 'Machine',
         default: null
     },
+    assignedOperators: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Employee'
+    }],
     stages: {
         type: [WorkOrderStageSchema],
         validate: {

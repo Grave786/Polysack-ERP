@@ -15,8 +15,18 @@ const calculateAttendanceMetrics = (checkIn, checkOut, shiftDoc, statusOverride)
         return { hoursWorked: 0, overtimeHours: 0, status: 'ABSENT' };
     }
 
+    if (statusOverride === 'On Duty' || statusOverride === 'ON_DUTY') {
+        const stdHours = shiftDoc?.standardHours || 8;
+        return { hoursWorked: stdHours, overtimeHours: 0, status: 'On Duty' };
+    }
+
+    if (statusOverride === 'Short Leave' || statusOverride === 'SHORT_LEAVE') {
+        const stdHours = shiftDoc?.standardHours || 8;
+        return { hoursWorked: Number((stdHours / 2).toFixed(2)), overtimeHours: 0, status: 'Short Leave' };
+    }
+
     if (!checkIn) {
-        return { hoursWorked: 0, overtimeHours: 0, status: 'ABSENT' };
+        return { hoursWorked: 0, overtimeHours: 0, status: statusOverride || 'ABSENT' };
     }
 
     if (checkIn && !checkOut) {

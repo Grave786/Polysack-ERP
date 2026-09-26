@@ -157,7 +157,7 @@ const getSuppliers = async (req, res) => {
         const skip = (pageNum - 1) * limitNum;
 
         const [suppliers, total] = await Promise.all([
-            Supplier.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
+            Supplier.find(filter).sort({ code: 1 }).skip(skip).limit(limitNum),
             Supplier.countDocuments(filter)
         ]);
 
@@ -211,7 +211,7 @@ const exportSuppliers = async (req, res) => {
             ];
         }
 
-        const suppliers = await Supplier.find(filter).sort({ name: 1 });
+        const suppliers = await Supplier.find(filter).sort({ code: 1 });
 
         const fields = [
             { label: 'Supplier Code', key: 'code' },

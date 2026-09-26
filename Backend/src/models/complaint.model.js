@@ -58,11 +58,8 @@ const ComplaintSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        default: 'OPEN',
-        enum: {
-            values: ['OPEN', 'UNDER_INVESTIGATION', 'RESOLVED', 'REJECTED'],
-            message: '{VALUE} is not a valid complaint status.'
-        }
+        default: 'Open Ticket',
+        enum: ['Open Ticket', 'Under Investigation', 'Resolved / CAPA Issued', 'Closed']
     },
     resolutionNotes: {
         type: String,

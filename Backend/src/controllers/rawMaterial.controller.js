@@ -237,7 +237,7 @@ const getRawMaterials = async (req, res) => {
                 .populate('preferredSupplier', 'name companyName contactPerson phone')
                 .populate('defaultLocation', 'name code type')
                 .populate('warehouseLocation', 'name code type')
-                .sort({ name: 1 })
+                .sort({ code: 1 })
                 .skip(skip)
                 .limit(limitNum),
             RawMaterial.countDocuments(filter)
@@ -298,7 +298,7 @@ const exportRawMaterials = async (req, res) => {
         const items = await RawMaterial.find(filter)
             .populate('category', 'name')
             .populate('uom', 'name symbol')
-            .sort({ name: 1 });
+            .sort({ code: 1 });
 
         const fields = [
             { label: 'Item Code', key: 'code' },

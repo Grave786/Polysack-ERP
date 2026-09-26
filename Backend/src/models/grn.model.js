@@ -14,6 +14,14 @@ const GrnItemSchema = new mongoose.Schema({
     batchNumber: {
         type: String,
         trim: true
+    },
+    receivedRolls: {
+        type: Number,
+        default: 0
+    },
+    fabricAverage: {
+        type: Number,
+        default: null
     }
 }, { _id: false });
 
@@ -46,6 +54,10 @@ const RollSpecificationSchema = new mongoose.Schema({
         default: null,
         min: [0.01, 'Net Weight must be at least 0.01 Kg'],
         max: [10000, 'Net Weight cannot exceed 10000 Kg']
+    },
+    fabricAverage: {
+        type: Number,
+        default: null
     },
     totalQuantityKg: {
         type: Number,

@@ -315,8 +315,12 @@ const createWorkOrder = async (req, res) => {
             priority: priority || 'MEDIUM',
             status: 'IN_PROGRESS',
             assignedMachine: assignedMachine || null,
+            assignedOperators: Array.isArray(req.body.assignedOperators) ? req.body.assignedOperators.filter(Boolean) : (Array.isArray(rawJobDetails.assignedOperators) ? rawJobDetails.assignedOperators.filter(Boolean) : []),
             stages,
-            jobOrderDetails,
+            jobOrderDetails: {
+                ...jobOrderDetails,
+                assignedOperators: Array.isArray(req.body.assignedOperators) ? req.body.assignedOperators.filter(Boolean) : (Array.isArray(rawJobDetails.assignedOperators) ? rawJobDetails.assignedOperators.filter(Boolean) : [])
+            },
             inks: Array.isArray(req.body.inks) ? req.body.inks.filter(Boolean) : (Array.isArray(req.body.inksRequired) ? req.body.inksRequired : []),
             isActive: true
         }], sessionOption);

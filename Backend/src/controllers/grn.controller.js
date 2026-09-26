@@ -180,7 +180,9 @@ const createGRN = async (req, res) => {
             cleanedItems.push({
                 rawMaterial: rawMaterialId,
                 receivedQuantity: numQty,
-                batchNumber: grnItem.batchNumber ? String(grnItem.batchNumber).trim() : undefined
+                batchNumber: grnItem.batchNumber ? String(grnItem.batchNumber).trim() : undefined,
+                receivedRolls: (grnItem.receivedRolls !== undefined && grnItem.receivedRolls !== '' && grnItem.receivedRolls !== null) ? Number(grnItem.receivedRolls) : 0,
+                fabricAverage: (grnItem.fabricAverage !== undefined && grnItem.fabricAverage !== '' && grnItem.fabricAverage !== null) ? Number(grnItem.fabricAverage) : null
             });
         }
 
@@ -192,6 +194,7 @@ const createGRN = async (req, res) => {
             width: r.width !== undefined && r.width !== '' && r.width !== null ? Number(r.width) : null,
             grossWeight: r.grossWeight !== undefined && r.grossWeight !== '' && r.grossWeight !== null ? Number(r.grossWeight) : null,
             netWeight: r.netWeight !== undefined && r.netWeight !== '' && r.netWeight !== null ? Number(r.netWeight) : null,
+            fabricAverage: r.fabricAverage !== undefined && r.fabricAverage !== '' && r.fabricAverage !== null ? Number(r.fabricAverage) : null,
             totalQuantityKg: (r.totalQuantityKg !== undefined && r.totalQuantityKg !== '' && r.totalQuantityKg !== null)
                 ? Number(r.totalQuantityKg)
                 : ((r.qtyKgs !== undefined && r.qtyKgs !== '' && r.qtyKgs !== null) ? Number(r.qtyKgs) : null),

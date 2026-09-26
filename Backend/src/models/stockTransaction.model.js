@@ -76,6 +76,14 @@ const StockTransactionSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    receivedRolls: {
+        type: Number,
+        default: 0
+    },
+    fabricAverage: {
+        type: Number,
+        default: null
+    },
     notes: {
         type: String,
         trim: true

@@ -68,7 +68,9 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                                 alreadyReceivedQuantity: alreadyRecv,
                                 remainingAllowed: remaining,
                                 receivedQuantity: remaining,
-                                batchNumber: ''
+                                batchNumber: '',
+                                receivedRolls: '',
+                                fabricAverage: ''
                             };
                         })
                     );
@@ -134,7 +136,9 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                 validItems.push({
                     rawMaterial: item.rawMaterial,
                     receivedQuantity: numRecv,
-                    batchNumber: item.batchNumber.trim() || undefined
+                    batchNumber: item.batchNumber?.trim() || undefined,
+                    receivedRolls: item.receivedRolls ? Number(item.receivedRolls) : undefined,
+                    fabricAverage: item.fabricAverage ? Number(item.fabricAverage) : undefined
                 });
             }
         }
@@ -147,12 +151,11 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
         const selectedPoItem = grnItems[0] || activePo?.items?.[0];
 
         const validRolls = [];
-        // Validate Packing Slip & Roll Specifications - Mandatory ONLY for Roll unit
-        if (selectedPoItem?.unit === 'Roll') {
-            if (!inwardRolls || inwardRolls.length === 0) {
-                toast.error('At least one Roll Specification is required for Roll items. Please fill in the packing slip roll details.');
-                return;
-            }
+        // Validate Packing Slip & Roll Specifications - Mandatory for all items
+        if (!inwardRolls || inwardRolls.length === 0) {
+            toast.error('At least one Roll Specification is required. Please fill in the packing slip roll details.');
+            return;
+        }
         for (let rIdx = 0; rIdx < inwardRolls.length; rIdx++) {
             const r = inwardRolls[rIdx];
             const rollNumberVal = (r.rollNumber || r.rollNo || '').trim();
@@ -188,6 +191,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                 width: r.width !== '' && r.width !== null && r.width !== undefined ? Number(r.width) : null,
                 grossWeight: r.grossWeight !== '' && r.grossWeight !== null && r.grossWeight !== undefined ? Number(r.grossWeight) : null,
                 netWeight: r.netWeight !== '' && r.netWeight !== null && r.netWeight !== undefined ? Number(r.netWeight) : null,
+                fabricAverage: r.fabricAverage !== '' && r.fabricAverage !== null && r.fabricAverage !== undefined ? Number(r.fabricAverage) : null,
                 totalQuantityKg: kgVal,
                 qtyKgs: kgVal,
                 totalQuantityPcs: pcsVal,
@@ -195,10 +199,9 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
             });
         }
 
-            if (validRolls.length === 0) {
-                toast.error('Please enter at least one roll with a valid Roll Number.');
-                return;
-            }
+        if (validRolls.length === 0) {
+            toast.error('Please enter at least one roll with a valid Roll Number.');
+            return;
         }
 
         try {
@@ -333,31 +336,44 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                                         />
                                     </div>
                                 </div>
+
+                                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">No. of Rolls Received</label>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            placeholder="e.g. 15"
+                                            value={item.receivedRolls || ''}
+                                            onChange={(e) => handleItemChange(idx, 'receivedRolls', e.target.value)}
+                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">Fabric Average</label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            placeholder="e.g. 120.5"
+                                            value={item.fabricAverage || ''}
+                                            onChange={(e) => handleItemChange(idx, 'fabricAverage', e.target.value)}
+                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                        />
+                                    </div>
+                                </div>
                             </div>
                         ))}
                     </div>
                 </div>
 
-                {/* Packing Slip & Roll Specifications vs Bulk Quantity Form */}
-                {selectedPoItem?.unit === 'Roll' ? (
-                    <PackingSlipRollsSection
-                        rolls={rolls}
-                        onChange={setRolls}
-                        title="Packing Slip & Roll Specifications"
-                        subtitle="Record multiple rolls inwarded with this purchase"
-                        required={true}
-                    />
-                ) : (
-                    <div className="bg-app-bg border border-border rounded-lg p-3 space-y-1">
-                        <div className="flex items-center gap-2 text-text-main font-bold text-xs">
-                            <CheckCircle2 size={15} className="text-emerald-600" />
-                            <span>Bulk Material Receipt ({selectedPoItem?.unit || 'Kg'})</span>
-                        </div>
-                        <p className="text-[11px] text-text-muted">
-                            Standard bulk inward: Direct quantity receipt in {selectedPoItem?.unit || 'Kg'} without individual roll tracking.
-                        </p>
-                    </div>
-                )}
+                {/* Packing Slip & Roll Specifications */}
+                <PackingSlipRollsSection
+                    rolls={rolls}
+                    onChange={setRolls}
+                    title="Packing Slip & Roll Specifications"
+                    subtitle="Record multiple rolls inwarded with this purchase"
+                    required={true}
+                />
 
                 {/* Inward Notes */}
                 <div>

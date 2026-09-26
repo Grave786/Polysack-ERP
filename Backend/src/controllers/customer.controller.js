@@ -30,6 +30,8 @@ const createCustomer = async (req, res) => {
             city,
             state,
             gstin,
+            panNumber,
+            paymentTerms,
             creditLimit,
             status,
             isActive
@@ -47,20 +49,26 @@ const createCustomer = async (req, res) => {
         const formattedCompanyName = String(companyName).trim();
         const formattedGstin = gstin && gstin.trim() ? gstin.trim().toUpperCase() : undefined;
 
+        // Check if a customer with the same companyName (case-insensitive) exists
+        const escapedCompanyName = formattedCompanyName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const existingCompany = await Customer.findOne({
+            companyName: { $regex: new RegExp(`^${escapedCompanyName}$`, 'i') },
+            tenant: tenantId
+        });
+        if (existingCompany) {
+            return res.status(200).json({
+                success: true,
+                data: existingCompany,
+                message: 'Existing customer used'
+            });
+        }
+
         // 2. Duplicate checks per tenant
         const existingCode = await Customer.findOne({ code: formattedCode, tenant: tenantId });
         if (existingCode) {
             return res.status(400).json({
                 success: false,
                 message: `A customer with code '${formattedCode}' already exists in your organization.`
-            });
-        }
-
-        const existingCompany = await Customer.findOne({ companyName: formattedCompanyName, tenant: tenantId });
-        if (existingCompany) {
-            return res.status(400).json({
-                success: false,
-                message: `A customer with company name '${formattedCompanyName}' already exists in your organization.`
             });
         }
 
@@ -85,6 +93,8 @@ const createCustomer = async (req, res) => {
             city,
             state,
             gstin: formattedGstin,
+            panNumber: panNumber ? String(panNumber).trim().toUpperCase() : undefined,
+            paymentTerms: paymentTerms ? String(paymentTerms).trim() : undefined,
             creditLimit: creditLimit !== undefined ? Number(creditLimit) : 0,
             outstandingAmount: 0, // Read-only, starts at 0
             status: status || 'LEAD',
@@ -100,6 +110,20 @@ const createCustomer = async (req, res) => {
             data: customer
         });
     } catch (error) {
+        if (error.code === 11000) {
+            const escapedCompanyName = String(req.body?.companyName || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const existingCustomer = await Customer.findOne({
+                companyName: { $regex: new RegExp(`^${escapedCompanyName}$`, 'i') },
+                tenant: req.user?.tenant
+            });
+            if (existingCustomer) {
+                return res.status(200).json({
+                    success: true,
+                    data: existingCustomer,
+                    message: 'Existing customer used'
+                });
+            }
+        }
         if (error.name === 'ValidationError') {
             return res.status(400).json({
                 success: false,
@@ -194,7 +218,7 @@ const getCustomers = async (req, res) => {
         const skip = (pageNum - 1) * limitNum;
 
         const [customers, total] = await Promise.all([
-            Customer.find(filter).sort({ companyName: 1 }).skip(skip).limit(limitNum),
+            Customer.find(filter).sort({ code: 1 }).skip(skip).limit(limitNum),
             Customer.countDocuments(filter)
         ]);
 
@@ -266,7 +290,7 @@ const exportCustomers = async (req, res) => {
             ];
         }
 
-        const customers = await Customer.find(filter).sort({ companyName: 1 });
+        const customers = await Customer.find(filter).sort({ code: 1 });
 
         const fields = [
             { label: 'Customer Code', key: 'code' },
@@ -368,6 +392,8 @@ const updateCustomer = async (req, res) => {
             city,
             state,
             gstin,
+            panNumber,
+            paymentTerms,
             creditLimit,
             status,
             isActive
@@ -431,6 +457,8 @@ const updateCustomer = async (req, res) => {
         if (address !== undefined) customer.address = address;
         if (city !== undefined) customer.city = city;
         if (state !== undefined) customer.state = state;
+        if (panNumber !== undefined) customer.panNumber = panNumber ? String(panNumber).trim().toUpperCase() : '';
+        if (paymentTerms !== undefined) customer.paymentTerms = paymentTerms ? String(paymentTerms).trim() : '';
         if (creditLimit !== undefined) customer.creditLimit = Number(creditLimit);
         if (status) customer.status = status;
         if (isActive !== undefined) customer.isActive = isActive;

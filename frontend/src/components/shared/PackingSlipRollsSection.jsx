@@ -11,6 +11,7 @@ export const createEmptyRoll = (index = 1) => ({
     width: '',
     grossWeight: '',
     netWeight: '',
+    fabricAverage: '',
     qtyKgs: '',
     totalQuantityKg: '',
     qtyPcs: '',
@@ -58,6 +59,7 @@ export default function PackingSlipRollsSection({
                 width: selectedRoll.width != null ? selectedRoll.width : roll.width,
                 grossWeight: selectedRoll.grossWeight != null ? selectedRoll.grossWeight : roll.grossWeight,
                 netWeight: selectedRoll.netWeight != null ? selectedRoll.netWeight : roll.netWeight,
+                fabricAverage: selectedRoll.fabricAverage != null ? selectedRoll.fabricAverage : roll.fabricAverage,
                 totalQuantityKg: selectedRoll.totalQuantityKg != null ? selectedRoll.totalQuantityKg : roll.totalQuantityKg,
                 totalQuantityPcs: selectedRoll.totalQuantityPcs != null ? selectedRoll.totalQuantityPcs : roll.totalQuantityPcs
             };
@@ -329,7 +331,7 @@ export default function PackingSlipRollsSection({
                                     </div>
 
                                     {/* Total Quantity in Pcs */}
-                                    <div className="col-span-2 sm:col-span-2">
+                                    <div className="col-span-1 sm:col-span-1">
                                         <label className="block text-[10px] font-bold uppercase tracking-wide text-text-main mb-0.5">
                                             Qty (Pcs)
                                         </label>
@@ -341,6 +343,21 @@ export default function PackingSlipRollsSection({
                                             value={(roll.totalQuantityPcs !== undefined && roll.totalQuantityPcs !== null && roll.totalQuantityPcs !== '') ? roll.totalQuantityPcs : (roll.qtyPcs ?? '')}
                                             onChange={(e) => handleRollChange(idx, 'qtyPcs', e.target.value)}
                                             className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary"
+                                        />
+                                    </div>
+
+                                    {/* Fabric Average */}
+                                    <div className="col-span-1 sm:col-span-1">
+                                        <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">
+                                            Fabric Average
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            placeholder="e.g. 120.5"
+                                            value={roll.fabricAverage || ''}
+                                            onChange={(e) => handleRollChange(idx, 'fabricAverage', e.target.value)}
+                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
                                         />
                                     </div>
                                 </div>

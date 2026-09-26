@@ -61,6 +61,16 @@ export default function ProductionPage() {
             label: 'Active Work Orders',
             icon: Layers,
             resourcePath: '/work-orders',
+            exportMapper: (data) => data.map(row => ({
+                'WORK ORDER #': row.workOrderNumber || row.code || '',
+                'CUSTOMER / CLIENT': row.customer?.companyName || row.customerName || '',
+                'WORK TITLE': row.finishedGood?.productName || row.workTitle || '',
+                'TARGET BAGS': row.targetQuantity || row.targetBags || 0,
+                'COMPLETED BAGS': row.completedQuantity || row.completedBags || 0,
+                'STAGE PROGRESS': row.currentStage || '',
+                'MACHINE': row.machine?.machineName || row.machineAllocation?.machineName || '',
+                'STATUS': row.status || ''
+            })),
             columns: [
                 {
                     header: 'WORK ORDER #',

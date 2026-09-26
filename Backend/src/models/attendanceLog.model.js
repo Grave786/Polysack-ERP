@@ -45,7 +45,7 @@ const AttendanceLogSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['PRESENT', 'ABSENT', 'ON_LEAVE', 'HALF_DAY', 'INCOMPLETE'],
+        enum: ['PRESENT', 'ABSENT', 'ON_LEAVE', 'HALF_DAY', 'INCOMPLETE', 'On Duty', 'Short Leave', 'ON_DUTY', 'SHORT_LEAVE'],
         default: 'PRESENT'
     },
     remarks: {

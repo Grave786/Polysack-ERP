@@ -363,6 +363,7 @@ export default function TabbedResourcePage({
     description,
     tabs = [],
     onAddClick = null,
+    onEdit = null,
     headerActions = null,
     tabBarActions = null,
     activeTabKey: controlledActiveTabKey,
@@ -608,7 +609,18 @@ export default function TabbedResourcePage({
         updateItem,
         deleteItem,
         bulkDeleteItems
-    } = useResourceApi(isTabPlaceholder ? null : activeTab?.resourcePath, undefined, customerExtraParams);
+    } = useResourceApi(
+        isTabPlaceholder ? null : activeTab?.resourcePath,
+        activeTab?.defaultStatus ? { status: activeTab.defaultStatus } : undefined,
+        customerExtraParams
+    );
+
+    // Sync status filter if active tab declares a specific defaultStatus
+    useEffect(() => {
+        if (activeTab?.defaultStatus) {
+            setStatusFilter(activeTab.defaultStatus);
+        }
+    }, [activeTabKey, activeTab?.defaultStatus, setStatusFilter]);
 
     // Keep tab count badge updated when pagination total changes for active tab
     useEffect(() => {
@@ -1375,17 +1387,9 @@ export default function TabbedResourcePage({
             toast.loading('Generating CSV export...', { id: 'csv-export' });
 
             let csvBlob;
-            try {
-                const response = await axiosInstance.get(`${activeTab.resourcePath}/export`, {
-                    params: {
-                        search,
-                        status: (statusFilter && statusFilter !== 'All Statuses' && statusFilter !== 'All' && statusFilter !== 'ALL') ? statusFilter : undefined
-                    },
-                    responseType: 'blob'
-                });
-                csvBlob = new Blob([response.data], { type: 'text/csv' });
-            } catch {
-                // Fallback: Fetch data records and generate CSV client-side
+            const isWorkOrdersTab = activeTabKey === 'work-orders' || activeTab?.key === 'work-orders';
+
+            if (isWorkOrdersTab || typeof activeTab?.exportMapper === 'function') {
                 const listRes = await axiosInstance.get(activeTab.resourcePath, {
                     params: {
                         limit: 500,
@@ -1395,30 +1399,81 @@ export default function TabbedResourcePage({
                 });
 
                 if (listRes.data?.success && Array.isArray(listRes.data.data) && listRes.data.data.length > 0) {
-                    const records = listRes.data.data;
-                    const headers = activeTab?.columns
-                        ? activeTab.columns.map((c) => typeof c.header === 'string' ? c.header : c.accessor || 'FIELD')
-                        : Object.keys(records[0]).filter((k) => typeof records[0][k] !== 'object');
+                    const data = listRes.data.data;
+                    const exportData = typeof activeTab?.exportMapper === 'function'
+                        ? activeTab.exportMapper(data)
+                        : data.map(row => ({
+                            'WORK ORDER #': row.workOrderNumber || row.code || '',
+                            'CUSTOMER / CLIENT': row.customer?.companyName || row.customerName || '',
+                            'WORK TITLE': row.finishedGood?.productName || row.workTitle || '',
+                            'TARGET BAGS': row.targetQuantity || row.targetBags || 0,
+                            'COMPLETED BAGS': row.completedQuantity || row.completedBags || 0,
+                            'STAGE PROGRESS': row.currentStage || '',
+                            'MACHINE': row.machine?.machineName || row.machineAllocation?.machineName || '',
+                            'STATUS': row.status || ''
+                        }));
 
+                    const headers = Object.keys(exportData[0]);
                     const csvRows = [headers.join(',')];
 
-                    records.forEach((row) => {
-                        const rowVals = activeTab?.columns
-                            ? activeTab.columns.map((c) => {
-                                let val = '';
-                                if (c.accessor) val = row[c.accessor];
-                                else if (c.render && typeof c.render === 'function') val = row.name || row.code || row.poNumber || '';
-                                if (val === undefined || val === null) val = '';
-                                return `"${String(val).replace(/"/g, '""')}"`;
-                            })
-                            : headers.map((h) => `"${String(row[h] || '').replace(/"/g, '""')}"`);
-
+                    exportData.forEach((row) => {
+                        const rowVals = headers.map((h) => `"${String(row[h] !== undefined && row[h] !== null ? row[h] : '').replace(/"/g, '""')}"`);
                         csvRows.push(rowVals.join(','));
                     });
 
                     csvBlob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
                 } else {
                     throw new Error('No data available to export');
+                }
+            } else {
+                try {
+                    const response = await axiosInstance.get(`${activeTab.resourcePath}/export`, {
+                        params: {
+                            search,
+                            status: (statusFilter && statusFilter !== 'All Statuses' && statusFilter !== 'All' && statusFilter !== 'ALL') ? statusFilter : undefined
+                        },
+                        responseType: 'blob'
+                    });
+                    csvBlob = new Blob([response.data], { type: 'text/csv' });
+                } catch {
+                    // Fallback: Fetch data records and generate CSV client-side
+                    const listRes = await axiosInstance.get(activeTab.resourcePath, {
+                        params: {
+                            limit: 500,
+                            search,
+                            status: (statusFilter && statusFilter !== 'All Statuses' && statusFilter !== 'All' && statusFilter !== 'ALL') ? statusFilter : undefined
+                        }
+                    });
+
+                    if (listRes.data?.success && Array.isArray(listRes.data.data) && listRes.data.data.length > 0) {
+                        const records = listRes.data.data;
+                        const validColumns = (activeTab?.columns || []).filter(
+                            (c) => String(c.header || '').toUpperCase() !== 'ACTIONS'
+                        );
+                        const headers = validColumns.length > 0
+                            ? validColumns.map((c) => typeof c.header === 'string' ? c.header : c.accessor || 'FIELD')
+                            : Object.keys(records[0]).filter((k) => typeof records[0][k] !== 'object');
+
+                        const csvRows = [headers.join(',')];
+
+                        records.forEach((row) => {
+                            const rowVals = validColumns.length > 0
+                                ? validColumns.map((c) => {
+                                    let val = '';
+                                    if (c.accessor) val = row[c.accessor];
+                                    else if (c.render && typeof c.render === 'function') val = row.name || row.code || row.poNumber || '';
+                                    if (val === undefined || val === null) val = '';
+                                    return `"${String(val).replace(/"/g, '""')}"`;
+                                })
+                                : headers.map((h) => `"${String(row[h] || '').replace(/"/g, '""')}"`);
+
+                            csvRows.push(rowVals.join(','));
+                        });
+
+                        csvBlob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                    } else {
+                        throw new Error('No data available to export');
+                    }
                 }
             }
 
@@ -1463,6 +1518,15 @@ export default function TabbedResourcePage({
         }
 
         const key = activeTabKey?.toLowerCase() || '';
+        if (key === 'customers' || key === 'customer') {
+            if (formData.panNumber) {
+                payload.panNumber = String(formData.panNumber).trim().toUpperCase();
+            }
+            if (formData.paymentTerms) {
+                payload.paymentTerms = String(formData.paymentTerms).trim();
+            }
+        }
+
         if (key === 'machines' || key === 'machine') {
             payload.code = (formData.code || formData.machineCode || currentCode || '').toUpperCase();
             payload.name = formData.name || '';
@@ -1695,6 +1759,14 @@ export default function TabbedResourcePage({
     })();
 
     const handleEditRow = (row) => {
+        if (activeTab?.onEdit) {
+            activeTab.onEdit(row);
+            return;
+        }
+        if (onEdit) {
+            onEdit(row, activeTabKey);
+            return;
+        }
         if (!isCurrentTabEditable) return;
         setEditingItem(row);
         const codeVal = row.code || row.customerCode || row.supplierCode || row.employeeCode || row.machineCode || row.itemCode || row.shiftCode || '';
@@ -2071,6 +2143,39 @@ export default function TabbedResourcePage({
                                 <option value="LEAD">Lead</option>
                                 <option value="ACTIVE_CUSTOMER">Active Customer</option>
                                 <option value="INACTIVE">Inactive</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                PAN Number
+                            </label>
+                            <input
+                                type="text"
+                                placeholder="e.g. ABCDE1234F"
+                                value={formData.panNumber || ''}
+                                onChange={(e) => handleInputChange('panNumber', e.target.value.toUpperCase())}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans uppercase"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                Payment Terms
+                            </label>
+                            <select
+                                value={formData.paymentTerms || ''}
+                                onChange={(e) => handleInputChange('paymentTerms', e.target.value)}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
+                            >
+                                <option value="">-- Select Terms --</option>
+                                <option value="Advance">Advance</option>
+                                <option value="Net 15">Net 15 Days</option>
+                                <option value="Net 30">Net 30 Days</option>
+                                <option value="Net 45">Net 45 Days</option>
+                                <option value="Net 60">Net 60 Days</option>
                             </select>
                         </div>
                     </div>
@@ -3354,13 +3459,16 @@ export default function TabbedResourcePage({
 
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Fabric GSM
+                                Bag Weight (Gms)
                             </label>
                             <input
                                 type="number"
-                                placeholder="75"
-                                value={formData.fabricGSM || formData.gsm || ''}
-                                onChange={(e) => handleInputChange('fabricGSM', e.target.value)}
+                                placeholder="e.g. 75"
+                                value={formData.bagWeightGms || formData.tareWeightGram || ''}
+                                onChange={(e) => {
+                                    handleInputChange('bagWeightGms', e.target.value);
+                                    handleInputChange('tareWeightGram', e.target.value);
+                                }}
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                             />
                         </div>
@@ -3455,13 +3563,17 @@ export default function TabbedResourcePage({
                                             placeholder="1"
                                             value={formData.frontColours || ''}
                                             onChange={(e) => {
-                                                const f = Math.max(0, parseInt(e.target.value, 10) || 0);
-                                                handleInputChange('frontColours', f);
+                                                const newQty = parseInt(e.target.value, 10) || 0;
+                                                const currentColors = formData.frontColorsList || [];
+                                                const updatedColors = Array.from({ length: newQty }, (_, i) => currentColors[i] || '');
+                                                handleInputChange('frontColours', newQty);
+                                                handleInputChange('frontColorsQty', newQty);
+                                                handleInputChange('frontColorsList', updatedColors);
                                                 const b = formData.backColours || 0;
                                                 const sides = formData.printSides;
-                                                handleInputChange('printSpec', { printSides: sides, frontColours: f, backColours: b });
+                                                handleInputChange('printSpec', { printSides: sides, frontColours: newQty, backColours: b, frontColorsList: updatedColors, backColorsList: formData.backColorsList || [] });
                                                 const base = formData.materialColour || 'Milky White';
-                                                const specStr = formatPrintSpecString(sides, f, b);
+                                                const specStr = formatPrintSpecString(sides, newQty, b);
                                                 handleInputChange('colorAndPrint', base ? `${base} (${specStr})` : specStr);
                                             }}
                                             className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold"
@@ -3481,19 +3593,60 @@ export default function TabbedResourcePage({
                                             placeholder="1"
                                             value={formData.backColours || ''}
                                             onChange={(e) => {
-                                                const b = Math.max(0, parseInt(e.target.value, 10) || 0);
-                                                handleInputChange('backColours', b);
+                                                const newQty = parseInt(e.target.value, 10) || 0;
+                                                const currentColors = formData.backColorsList || [];
+                                                const updatedColors = Array.from({ length: newQty }, (_, i) => currentColors[i] || '');
+                                                handleInputChange('backColours', newQty);
+                                                handleInputChange('backColorsQty', newQty);
+                                                handleInputChange('backColorsList', updatedColors);
                                                 const f = formData.frontColours || 0;
                                                 const sides = formData.printSides;
-                                                handleInputChange('printSpec', { printSides: sides, frontColours: f, backColours: b });
+                                                handleInputChange('printSpec', { printSides: sides, frontColours: f, backColours: newQty, frontColorsList: formData.frontColorsList || [], backColorsList: updatedColors });
                                                 const base = formData.materialColour || 'Milky White';
-                                                const specStr = formatPrintSpecString(sides, f, b);
+                                                const specStr = formatPrintSpecString(sides, f, newQty);
                                                 handleInputChange('colorAndPrint', base ? `${base} (${specStr})` : specStr);
                                             }}
                                             className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono font-bold"
                                         />
                                     </div>
                                 )}
+                            </div>
+                        )}
+
+                        {(formData.frontColorsList?.length > 0 || formData.backColorsList?.length > 0) && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3">
+                                <div className="flex flex-col gap-2">
+                                    {formData.frontColorsList?.map((color, index) => (
+                                        <input
+                                            key={`fg-front-${index}`}
+                                            type="text"
+                                            placeholder={`Front Colour ${index + 1}`}
+                                            value={color}
+                                            onChange={(e) => {
+                                                const newColors = [...formData.frontColorsList];
+                                                newColors[index] = e.target.value;
+                                                handleInputChange('frontColorsList', newColors);
+                                            }}
+                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                        />
+                                    ))}
+                                </div>
+                                <div className="flex flex-col gap-2">
+                                    {formData.backColorsList?.map((color, index) => (
+                                        <input
+                                            key={`fg-back-${index}`}
+                                            type="text"
+                                            placeholder={`Back Colour ${index + 1}`}
+                                            value={color}
+                                            onChange={(e) => {
+                                                const newColors = [...formData.backColorsList];
+                                                newColors[index] = e.target.value;
+                                                handleInputChange('backColorsList', newColors);
+                                            }}
+                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                        />
+                                    ))}
+                                </div>
                             </div>
                         )}
                     </div>
@@ -4746,7 +4899,7 @@ export default function TabbedResourcePage({
                 record={detailModal.record}
                 tabKey={detailModal.tabKey}
                 tabLabel={activeTabLabel}
-                onEdit={isCurrentTabEditable ? (rec) => handleEditRow(rec) : null}
+                onEdit={activeTab?.onEdit ? (rec) => activeTab.onEdit(rec) : (onEdit ? (rec) => onEdit(rec, activeTabKey) : (isCurrentTabEditable ? (rec) => handleEditRow(rec) : null))}
             />
         </div>
     );

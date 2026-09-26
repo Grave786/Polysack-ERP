@@ -12,6 +12,9 @@ export default function AttendancePage() {
 
     // Drawers State
     const [isPunchDrawerOpen, setIsPunchDrawerOpen] = useState(false);
+    const [isManualPunchModalOpen, setIsManualPunchModalOpen] = useState(false);
+    const [selectedAttendance, setSelectedAttendance] = useState(null);
+    const [selectedShift, setSelectedShift] = useState(null);
     const [isShiftDrawerOpen, setIsShiftDrawerOpen] = useState(false);
     const [isRosterDrawerOpen, setIsRosterDrawerOpen] = useState(false);
 
@@ -121,7 +124,7 @@ export default function AttendancePage() {
 
     // Fetch Employees & Shifts for Drawers
     useEffect(() => {
-        if (isPunchDrawerOpen || isRosterDrawerOpen) {
+        if (isPunchDrawerOpen || isManualPunchModalOpen || isRosterDrawerOpen || (isShiftModalOpen && activeTabKey === 'roster')) {
             setIsLoadingOptions(true);
             Promise.all([
                 axiosInstance.get('/employees?limit=100'),
@@ -157,7 +160,95 @@ export default function AttendancePage() {
                     setIsLoadingOptions(false);
                 });
         }
-    }, [isPunchDrawerOpen, isRosterDrawerOpen]);
+    }, [isPunchDrawerOpen, isManualPunchModalOpen, isRosterDrawerOpen, isShiftModalOpen, activeTabKey]);
+
+    // Populate punch form when an existing attendance record is selected for editing
+    useEffect(() => {
+        if (selectedAttendance) {
+            const empId = typeof selectedAttendance.employee === 'object' ? selectedAttendance.employee?._id : selectedAttendance.employee;
+            const shiftId = typeof selectedAttendance.shift === 'object' ? selectedAttendance.shift?._id : selectedAttendance.shift;
+
+            let dateStr = new Date().toISOString().split('T')[0];
+            if (selectedAttendance.date) {
+                try {
+                    dateStr = new Date(selectedAttendance.date).toISOString().split('T')[0];
+                } catch {
+                    dateStr = selectedAttendance.date;
+                }
+            }
+
+            const formatTimeInput = (val, fallback = '06:00') => {
+                if (!val) return fallback;
+                try {
+                    const d = new Date(val);
+                    if (isNaN(d.getTime())) return fallback;
+                    const h = String(d.getHours()).padStart(2, '0');
+                    const m = String(d.getMinutes()).padStart(2, '0');
+                    return `${h}:${m}`;
+                } catch {
+                    return fallback;
+                }
+            };
+
+            setPunchForm({
+                _id: selectedAttendance._id,
+                employee: empId || '',
+                shift: shiftId || '',
+                date: dateStr,
+                checkInTime: formatTimeInput(selectedAttendance.checkIn, '06:00'),
+                checkOutTime: formatTimeInput(selectedAttendance.checkOut, '14:00'),
+                status: selectedAttendance.status || 'PRESENT',
+                remarks: selectedAttendance.remarks || ''
+            });
+        }
+    }, [selectedAttendance]);
+
+    // Populate roster form when an existing shift roster record is selected for editing
+    useEffect(() => {
+        if (selectedShift) {
+            const empId = typeof selectedShift.employee === 'object' ? selectedShift.employee?._id : selectedShift.employee;
+            const shiftId = typeof selectedShift.shift === 'object' ? selectedShift.shift?._id : selectedShift.shift;
+
+            let startDateStr = new Date().toISOString().split('T')[0];
+            if (selectedShift.startDate) {
+                try {
+                    startDateStr = new Date(selectedShift.startDate).toISOString().split('T')[0];
+                } catch {
+                    startDateStr = selectedShift.startDate;
+                }
+            }
+
+            let endDateStr = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            if (selectedShift.endDate) {
+                try {
+                    endDateStr = new Date(selectedShift.endDate).toISOString().split('T')[0];
+                } catch {
+                    endDateStr = selectedShift.endDate;
+                }
+            }
+
+            setRosterForm({
+                _id: selectedShift._id,
+                selectedEmployeeIds: empId ? [empId] : (Array.isArray(selectedShift.employees) ? selectedShift.employees.map(e => typeof e === 'object' ? e._id : e) : []),
+                shift: shiftId || '',
+                startDate: startDateStr,
+                endDate: endDateStr,
+                overtimeRule: selectedShift.overtimeRule || 'REQUIRES_APPROVAL'
+            });
+            setIsRosterDrawerOpen(true);
+        }
+    }, [selectedShift]);
+
+    const handleEditAttendance = (record) => {
+        setSelectedAttendance(record);
+        setIsManualPunchModalOpen(true);
+        setIsPunchDrawerOpen(true);
+    };
+
+    const handleEditRoster = (record) => {
+        setSelectedShift(record);
+        setIsShiftModalOpen(true);
+    };
 
     // Submit Manual Attendance Punch
     const handleSubmitManualPunch = async (e) => {
@@ -189,6 +280,8 @@ export default function AttendancePage() {
             if (res.data?.success) {
                 toast.success('Attendance punch logged successfully!');
                 setIsPunchDrawerOpen(false);
+                setIsManualPunchModalOpen(false);
+                setSelectedAttendance(null);
                 setRefreshKey((prev) => prev + 1);
             }
         } catch (err) {
@@ -223,6 +316,8 @@ export default function AttendancePage() {
             if (res.data?.success) {
                 toast.success(`Shift Roster assigned to ${rosterForm.selectedEmployeeIds.length} employee(s)!`);
                 setIsRosterDrawerOpen(false);
+                setIsShiftModalOpen(false);
+                setSelectedShift(null);
                 setRefreshKey((prev) => prev + 1);
             }
         } catch (err) {
@@ -378,16 +473,34 @@ export default function AttendancePage() {
         {
             header: 'ATTENDANCE STATUS',
             render: (row) => {
-                const st = (row.status || 'PRESENT').toUpperCase();
+                const raw = row.status || 'PRESENT';
+                const st = String(raw).toUpperCase();
                 const isPresent = st === 'PRESENT';
 
+                let label = raw;
+                if (st === 'PRESENT') label = 'Present';
+                else if (st === 'HALF_DAY') label = 'Half Day';
+                else if (st === 'ON_LEAVE') label = 'On Leave';
+                else if (st === 'ABSENT') label = 'Absent';
+                else if (st === 'ON DUTY' || st === 'ON_DUTY') label = 'On Duty';
+                else if (st === 'SHORT LEAVE' || st === 'SHORT_LEAVE') label = 'Short Leave';
+
+                const badgeClass = isPresent
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : (st.includes('DUTY') ? 'bg-blue-50 text-blue-800 border-blue-200'
+                    : (st.includes('SHORT') || st.includes('HALF') ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-slate-100 text-slate-700 border-slate-200'));
+
+                const dotClass = isPresent
+                    ? 'bg-emerald-500'
+                    : (st.includes('DUTY') ? 'bg-blue-500'
+                    : (st.includes('SHORT') || st.includes('HALF') ? 'bg-amber-500'
+                    : 'bg-slate-400'));
+
                 return (
-                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border ${isPresent
-                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                        : 'bg-slate-100 text-slate-700 border-slate-200'
-                        }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${isPresent ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-                        <span>{isPresent ? 'Present' : 'On Leave'}</span>
+                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border ${badgeClass}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+                        <span>{label}</span>
                     </div>
                 );
             }
@@ -488,14 +601,23 @@ export default function AttendancePage() {
             label: 'Biometric Gate Logs',
             icon: Fingerprint,
             resourcePath: '/attendance',
-            columns: biometricColumns
+            columns: biometricColumns,
+            onEdit: (record) => {
+                setSelectedAttendance(record);
+                setIsManualPunchModalOpen(true);
+                setIsPunchDrawerOpen(true);
+            }
         },
         {
             key: 'roster',
             label: 'Shift Roster & Overtime',
             icon: CalendarDays,
             resourcePath: '/rosters',
-            columns: rosterColumns
+            columns: rosterColumns,
+            onEdit: (record) => {
+                setSelectedShift(record);
+                setIsShiftModalOpen(true);
+            }
         }
     ];
 
@@ -530,7 +652,20 @@ export default function AttendancePage() {
             return (
                 <button
                     type="button"
-                    onClick={() => setIsPunchDrawerOpen(true)}
+                    onClick={() => {
+                        setSelectedAttendance(null);
+                        setPunchForm({
+                            employee: employees[0]?._id || '',
+                            shift: shifts[0]?._id || '',
+                            date: new Date().toISOString().split('T')[0],
+                            checkInTime: '06:00',
+                            checkOutTime: '14:00',
+                            status: 'PRESENT',
+                            remarks: ''
+                        });
+                        setIsPunchDrawerOpen(true);
+                        setIsManualPunchModalOpen(true);
+                    }}
                     className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
                 >
                     <Fingerprint size={16} />
@@ -564,15 +699,29 @@ export default function AttendancePage() {
                 tabs={tabs}
                 activeTabKey={activeTabKey}
                 onTabChange={(key) => setActiveTabKey(key)}
+                onEdit={(record) => {
+                    if (activeTabKey === 'attendance') {
+                        setSelectedAttendance(record);
+                        setIsManualPunchModalOpen(true);
+                        setIsPunchDrawerOpen(true);
+                    } else if (activeTabKey === 'roster') {
+                        setSelectedShift(record);
+                        setIsShiftModalOpen(true);
+                    }
+                }}
                 headerActions={renderDynamicHeaderAction()}
             />
 
             {/* Drawer 1: Manual Attendance Punch */}
             <SlideOverPanel
-                isOpen={isPunchDrawerOpen}
-                onClose={() => setIsPunchDrawerOpen(false)}
-                title="Manual Punch & Attendance Log"
-                subtitle="Record gate punch timestamp, shift assignment, and overtime for plant workforce"
+                isOpen={isPunchDrawerOpen || isManualPunchModalOpen}
+                onClose={() => {
+                    setIsPunchDrawerOpen(false);
+                    setIsManualPunchModalOpen(false);
+                    setSelectedAttendance(null);
+                }}
+                title={selectedAttendance ? "Edit Attendance Log / Manual Punch" : "Manual Punch & Attendance Log"}
+                subtitle={selectedAttendance ? "Modify gate punch timestamp, shift assignment, and status" : "Record gate punch timestamp, shift assignment, and overtime for plant workforce"}
             >
                 <form onSubmit={handleSubmitManualPunch} className="space-y-4 font-sans text-xs">
                     {isLoadingOptions ? (
@@ -673,6 +822,8 @@ export default function AttendancePage() {
                                     <option value="HALF_DAY">Half Day</option>
                                     <option value="ON_LEAVE">On Leave</option>
                                     <option value="ABSENT">Absent</option>
+                                    <option value="On Duty">On Duty</option>
+                                    <option value="Short Leave">Short Leave</option>
                                 </select>
                             </div>
 
@@ -692,7 +843,11 @@ export default function AttendancePage() {
                             <div className="pt-3 border-t border-border flex justify-end gap-3">
                                 <button
                                     type="button"
-                                    onClick={() => setIsPunchDrawerOpen(false)}
+                                    onClick={() => {
+                                        setIsPunchDrawerOpen(false);
+                                        setIsManualPunchModalOpen(false);
+                                        setSelectedAttendance(null);
+                                    }}
                                     className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs transition-colors cursor-pointer"
                                 >
                                     Cancel
@@ -713,10 +868,14 @@ export default function AttendancePage() {
 
             {/* Drawer 2: Assign Shift Roster */}
             <SlideOverPanel
-                isOpen={isRosterDrawerOpen}
-                onClose={() => setIsRosterDrawerOpen(false)}
-                title="Assign Shift Roster & Overtime Rules"
-                subtitle="Assign plant workers to rotational shift schedules, effective period & overtime limits"
+                isOpen={isRosterDrawerOpen || (isShiftModalOpen && activeTabKey === 'roster')}
+                onClose={() => {
+                    setIsRosterDrawerOpen(false);
+                    setIsShiftModalOpen(false);
+                    setSelectedShift(null);
+                }}
+                title={selectedShift ? "Edit Shift Roster & Overtime Rules" : "Assign Shift Roster & Overtime Rules"}
+                subtitle={selectedShift ? "Modify employee shift schedule, effective period & overtime limits" : "Assign plant workers to rotational shift schedules, effective period & overtime limits"}
             >
                 <form onSubmit={handleSubmitRoster} className="space-y-4 font-sans text-xs">
                     {isLoadingOptions ? (
@@ -817,7 +976,11 @@ export default function AttendancePage() {
                             <div className="pt-3 border-t border-border flex justify-end gap-3">
                                 <button
                                     type="button"
-                                    onClick={() => setIsRosterDrawerOpen(false)}
+                                    onClick={() => {
+                                        setIsRosterDrawerOpen(false);
+                                        setIsShiftModalOpen(false);
+                                        setSelectedShift(null);
+                                    }}
                                     className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs transition-colors cursor-pointer"
                                 >
                                     Cancel
@@ -837,7 +1000,7 @@ export default function AttendancePage() {
             </SlideOverPanel>
 
             {/* Create Standard Shift Modal Overlay */}
-            {isShiftModalOpen && (
+            {isShiftModalOpen && activeTabKey !== 'roster' && (
                 <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150 font-sans">
                     <div
                         className="fixed inset-0"

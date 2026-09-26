@@ -26,7 +26,9 @@ const {
     getOrderEnquiries,
     getOrderEnquiryById,
     updateOrderEnquiry,
-    deleteOrderEnquiry
+    deleteOrderEnquiry,
+    addFollowUp,
+    updateSOApprovalStatus
 } = require('../controllers/crm.controller');
 const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
 
@@ -171,6 +173,29 @@ router.get('/enquiries/:id', authenticate, checkPermission('SALES', 'READ'), get
  * @access  Private (SALES:UPDATE)
  */
 router.put('/enquiries/:id', authenticate, checkPermission('SALES', 'UPDATE'), updateOrderEnquiry);
+
+/**
+ * @route   POST /api/crm/enquiries/:id/follow-ups
+ * @desc    Add Follow-up to Order Enquiry
+ * @access  Private (SALES:UPDATE)
+ */
+router.post('/enquiries/:id/follow-ups', authenticate, checkPermission('SALES', 'UPDATE'), addFollowUp);
+router.post('/enquiries/:id/follow-up', authenticate, checkPermission('SALES', 'UPDATE'), addFollowUp);
+router.post('/:id/follow-up', authenticate, checkPermission('SALES', 'UPDATE'), addFollowUp);
+router.post('/:id/follow-ups', authenticate, checkPermission('SALES', 'UPDATE'), addFollowUp);
+
+/**
+ * @route   PATCH /api/crm/enquiries/:id/so-approval-status
+ * @route   PUT /api/crm/enquiries/:id/so-approval-status
+ * @desc    Update SO Approval Status for Order Enquiry
+ * @access  Private (SALES:UPDATE)
+ */
+router.patch('/enquiries/:id/so-approval-status', authenticate, checkPermission('SALES', 'UPDATE'), updateSOApprovalStatus);
+router.put('/enquiries/:id/so-approval-status', authenticate, checkPermission('SALES', 'UPDATE'), updateSOApprovalStatus);
+router.patch('/:id/so-approval-status', authenticate, checkPermission('SALES', 'UPDATE'), updateSOApprovalStatus);
+router.put('/:id/so-approval-status', authenticate, checkPermission('SALES', 'UPDATE'), updateSOApprovalStatus);
+router.patch('/enquiries/:id/approval', authenticate, checkPermission('SALES', 'UPDATE'), updateSOApprovalStatus);
+router.put('/enquiries/:id/approval', authenticate, checkPermission('SALES', 'UPDATE'), updateSOApprovalStatus);
 
 /**
  * @route   DELETE /api/crm/enquiries/:id

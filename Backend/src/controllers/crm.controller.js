@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const CustomerInteraction = require('../models/customerInteraction.model');
 const Complaint = require('../models/complaint.model');
 const OrderEnquiry = require('../models/orderEnquiry.model');
+const Enquiry = OrderEnquiry;
 const Customer = require('../models/customer.model');
 const User = require('../models/user.model');
 const SalesOrder = require('../models/salesOrder.model');
@@ -56,32 +57,48 @@ const createInteraction = async (req, res) => {
 
         const {
             customer,
+            customerId,
             date,
             interactionType,
             subject,
             notes,
             assignedExecutive,
             status,
-            nextFollowUpDate
+            nextFollowUpDate,
+            enquiryId,
+            referenceId,
+            customerName
         } = req.body;
 
-        if (!customer || !interactionType || !subject) {
+        const targetCustomer = customer || customerId;
+        const refId = enquiryId || referenceId;
+
+        if (!targetCustomer && !refId && !customerName) {
             return res.status(400).json({
                 success: false,
-                message: 'Please provide customer ObjectId, interactionType, and subject.'
+                message: 'Please provide customer ObjectId, customerName, or enquiry reference.'
             });
         }
 
-        const customerDoc = await Customer.findOne({ _id: customer, tenant: tenantId, isActive: true });
-        if (!customerDoc) {
-            return res.status(400).json({
-                success: false,
-                message: 'Customer not found or is inactive.'
-            });
+        let resolvedCustomer = null;
+        if (targetCustomer && mongoose.Types.ObjectId.isValid(targetCustomer)) {
+            const customerDoc = await Customer.findOne({ _id: targetCustomer, ...(tenantId && { tenant: tenantId }) });
+            if (customerDoc) resolvedCustomer = customerDoc._id;
+        }
+
+        let resolvedName = customerName || undefined;
+        if (!resolvedCustomer && refId && mongoose.Types.ObjectId.isValid(refId)) {
+            const enq = await OrderEnquiry.findById(refId);
+            if (enq) {
+                resolvedCustomer = enq.customerRef || enq.customer || null;
+                if (!resolvedCustomer) {
+                    resolvedName = enq.newCustomerDetails?.company || enq.newCustomerDetails?.name;
+                }
+            }
         }
 
         if (assignedExecutive) {
-            const execDoc = await User.findOne({ _id: assignedExecutive, tenant: tenantId, isActive: true });
+            const execDoc = await User.findOne({ _id: assignedExecutive, ...(tenantId && { tenant: tenantId }), isActive: true });
             if (!execDoc) {
                 return res.status(400).json({
                     success: false,
@@ -92,13 +109,16 @@ const createInteraction = async (req, res) => {
 
         const interaction = new CustomerInteraction({
             tenant: tenantId,
-            customer,
+            customer: resolvedCustomer,
+            customerName: resolvedName,
+            enquiryId: refId || null,
+            referenceId: refId || null,
             date: date ? new Date(date) : new Date(),
-            interactionType: normalizeEnum(interactionType, 'CALL'),
-            subject: subject.trim(),
+            interactionType: interactionType || 'Phone Call',
+            subject: (subject || `Follow-up: ${refId || 'Lead'}`).trim(),
             notes: notes ? notes.trim() : undefined,
             assignedExecutive: assignedExecutive || req.user._id || req.user.id,
-            status: normalizeEnum(status, 'OPEN'),
+            status: status || 'OPEN',
             nextFollowUpDate: nextFollowUpDate ? new Date(nextFollowUpDate) : null,
             isActive: true
         });
@@ -146,11 +166,24 @@ const getInteractions = async (req, res) => {
         }
 
         const { customer, status, interactionType, assignedExecutive, startDate, endDate, search, page = 1, limit = 20 } = req.query;
-        const filter = { tenant: tenantId, isActive: true };
+        const filter = { isActive: { $ne: false } };
+        if (tenantId) filter.tenant = tenantId;
 
         if (customer) filter.customer = customer;
-        if (status) filter.status = status;
-        if (interactionType) filter.interactionType = interactionType;
+        if (status && status !== 'All' && status !== 'ALL' && status !== 'All Statuses' && status !== 'undefined') {
+            if (status.includes('Open') || status === 'OPEN') {
+                filter.status = 'OPEN';
+            } else if (status.includes('Closed') || status.includes('Resolved') || status === 'CLOSED') {
+                filter.status = 'CLOSED';
+            } else if (status.includes('Pending') || status.includes('Progress') || status === 'IN_PROGRESS') {
+                filter.status = 'IN_PROGRESS';
+            } else {
+                filter.status = status;
+            }
+        }
+        if (interactionType && interactionType !== 'All' && interactionType !== 'All Types' && interactionType !== 'undefined') {
+            filter.interactionType = interactionType;
+        }
         if (assignedExecutive) filter.assignedExecutive = assignedExecutive;
 
         if (startDate || endDate) {
@@ -178,7 +211,7 @@ const getInteractions = async (req, res) => {
             CustomerInteraction.find(filter)
                 .populate('customer', 'companyName code contactPerson phone email')
                 .populate('assignedExecutive', 'name email role')
-                .sort({ date: -1 })
+                .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum),
             CustomerInteraction.countDocuments(filter)
@@ -320,58 +353,23 @@ const getInteractionById = async (req, res) => {
  */
 const updateInteraction = async (req, res) => {
     try {
-        const tenantId = req.user?.tenant;
-        if (!tenantId) {
-            return res.status(403).json({
-                success: false,
-                message: 'Tenant context is missing or invalid. Please log in again.'
-            });
-        }
-
         delete req.body.tenant;
 
-        const interaction = await CustomerInteraction.findOne({ _id: req.params.id, tenant: tenantId });
+
+        const interaction = await CustomerInteraction.findByIdAndUpdate(
+            req.params.id,
+            { $set: req.body },
+            { new: true, runValidators: true }
+        )
+        .populate('customer', 'companyName code contactPerson phone email')
+        .populate('assignedExecutive', 'name email role');
+
         if (!interaction) {
             return res.status(404).json({
                 success: false,
                 message: 'Interaction not found.'
             });
         }
-
-        const {
-            date,
-            interactionType,
-            subject,
-            notes,
-            assignedExecutive,
-            status,
-            nextFollowUpDate
-        } = req.body;
-
-        if (date) interaction.date = new Date(date);
-        if (interactionType) interaction.interactionType = interactionType;
-        if (subject) interaction.subject = subject.trim();
-        if (notes !== undefined) interaction.notes = notes ? notes.trim() : '';
-        if (status) interaction.status = status;
-        if (nextFollowUpDate !== undefined) interaction.nextFollowUpDate = nextFollowUpDate ? new Date(nextFollowUpDate) : null;
-
-        if (assignedExecutive) {
-            const execDoc = await User.findOne({ _id: assignedExecutive, tenant: tenantId, isActive: true });
-            if (!execDoc) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Assigned Executive user not found.'
-                });
-            }
-            interaction.assignedExecutive = assignedExecutive;
-        }
-
-        await interaction.save();
-
-        await interaction.populate([
-            { path: 'customer', select: 'companyName code contactPerson phone email' },
-            { path: 'assignedExecutive', select: 'name email role' }
-        ]);
 
         return res.status(200).json({
             success: true,
@@ -394,30 +392,19 @@ const updateInteraction = async (req, res) => {
 };
 
 /**
- * @desc    Soft Delete Customer Interaction
+ * @desc    Delete Customer Interaction
  * @route   DELETE /api/crm/interactions/:id
  * @access  Private (SALES:DELETE permission)
  */
 const deleteInteraction = async (req, res) => {
     try {
-        const tenantId = req.user?.tenant;
-        if (!tenantId) {
-            return res.status(403).json({
-                success: false,
-                message: 'Tenant context is missing or invalid. Please log in again.'
-            });
-        }
-
-        const interaction = await CustomerInteraction.findOne({ _id: req.params.id, tenant: tenantId });
+        const interaction = await CustomerInteraction.findByIdAndDelete(req.params.id);
         if (!interaction) {
             return res.status(404).json({
                 success: false,
                 message: 'Interaction not found.'
             });
         }
-
-        interaction.isActive = false;
-        await interaction.save();
 
         return res.status(200).json({
             success: true,
@@ -530,9 +517,9 @@ const createComplaint = async (req, res) => {
             complaintType: normalizeEnum(complaintType, 'QUALITY_DEFECT'),
             description: description.trim(),
             assignedExecutive: assignedExecutive || req.user._id || req.user.id,
-            status: normalizeEnum(status, 'OPEN'),
+            status: status || 'Open Ticket',
             resolutionNotes: resolutionNotes ? resolutionNotes.trim() : undefined,
-            resolvedAt: status === 'RESOLVED' ? new Date() : null,
+            resolvedAt: (status === 'Resolved / CAPA Issued' || status === 'RESOLVED') ? new Date() : null,
             isActive: true
         });
 
@@ -584,7 +571,9 @@ const getComplaints = async (req, res) => {
         const filter = { tenant: tenantId, isActive: true };
 
         if (customer) filter.customer = customer;
-        if (status) filter.status = status;
+        if (status && !['All', 'ALL', 'All Statuses', 'undefined', 'Active'].includes(status)) {
+            filter.status = status;
+        }
         if (complaintType) filter.complaintType = complaintType;
         if (assignedExecutive) filter.assignedExecutive = assignedExecutive;
 
@@ -668,7 +657,9 @@ const exportComplaintsCsv = async (req, res) => {
         const filter = { tenant: tenantId, isActive: true };
 
         if (customer) filter.customer = customer;
-        if (status) filter.status = status;
+        if (status && !['All', 'ALL', 'All Statuses', 'undefined', 'Active'].includes(status)) {
+            filter.status = status;
+        }
         if (complaintType) filter.complaintType = complaintType;
         if (assignedExecutive) filter.assignedExecutive = assignedExecutive;
 
@@ -812,7 +803,7 @@ const updateComplaint = async (req, res) => {
 
         if (status) {
             complaint.status = status;
-            if (status === 'RESOLVED' && !complaint.resolvedAt) {
+            if ((status === 'Resolved / CAPA Issued' || status === 'RESOLVED') && !complaint.resolvedAt) {
                 complaint.resolvedAt = new Date();
             }
         }
@@ -909,15 +900,18 @@ const createOrderEnquiry = async (req, res) => {
         }
         delete req.body.tenant;
 
-        const { customer, orderConfirmed, expectedDeliveryDate, poAttachments } = req.body;
+        const { customer, customerRef, customerType, orderConfirmed, expectedDeliveryDate, poAttachments } = req.body;
+        const targetCustomer = customerRef || customer;
 
-        if (!customer) {
-            return res.status(400).json({ success: false, message: 'Customer reference is required.' });
-        }
+        if (customerType !== 'New') {
+            if (!targetCustomer) {
+                return res.status(400).json({ success: false, message: 'Customer reference is required for existing customers.' });
+            }
 
-        const customerDoc = await Customer.findOne({ _id: customer, tenant: tenantId, isActive: true });
-        if (!customerDoc) {
-            return res.status(400).json({ success: false, message: 'Customer not found or is inactive.' });
+            const customerDoc = await Customer.findOne({ _id: targetCustomer, tenant: tenantId, isActive: true });
+            if (!customerDoc) {
+                return res.status(400).json({ success: false, message: 'Customer not found or is inactive.' });
+            }
         }
 
         // Validate expected delivery date only when order is confirmed
@@ -935,15 +929,36 @@ const createOrderEnquiry = async (req, res) => {
             return res.status(400).json({ success: false, message: 'A maximum of 5 PO attachments are allowed.' });
         }
 
+        const currentYear = new Date().getFullYear();
+        // Sort by nslNumber descending to get the highest sequence, regardless of creation date
+        const lastEnquiry = await OrderEnquiry.findOne({ 
+            nslNumber: { $regex: `^NSL-${currentYear}-` } 
+        }).sort({ nslNumber: -1 });
+        
+        let nextSeq = 1;
+        if (lastEnquiry && lastEnquiry.nslNumber) {
+            const parts = lastEnquiry.nslNumber.split('-');
+            if (parts.length === 3) {
+                const lastSeq = parseInt(parts[2], 10);
+                if (!isNaN(lastSeq)) nextSeq = lastSeq + 1;
+            }
+        }
+        req.body.nslNumber = `NSL-${currentYear}-${nextSeq.toString().padStart(4, '0')}`;
+
         const enquiry = new OrderEnquiry({
             tenant: tenantId,
             ...req.body,
+            nslNumber: req.body.nslNumber,
+            customer: targetCustomer || undefined,
+            customerRef: targetCustomer || undefined,
             enquiryDate: req.body.enquiryDate ? new Date(req.body.enquiryDate) : new Date(),
             expectedDeliveryDate: (orderConfirmed && expectedDeliveryDate) ? new Date(expectedDeliveryDate) : null
         });
 
         await enquiry.save();
-        await enquiry.populate('customer', 'companyName code contactPerson phone email');
+        if (enquiry.customer) {
+            await enquiry.populate('customer', 'companyName code contactPerson phone email');
+        }
 
         return res.status(201).json({ success: true, message: 'Order enquiry logged successfully.', data: enquiry });
     } catch (error) {
@@ -990,6 +1005,7 @@ const getOrderEnquiries = async (req, res) => {
         const [enquiries, total] = await Promise.all([
             OrderEnquiry.find(filter)
                 .populate('customer', 'companyName code contactPerson phone email')
+                .populate('customerRef', 'companyName code contactPerson phone email')
                 .sort({ enquiryDate: -1 })
                 .skip(skip)
                 .limit(limitNum),
@@ -1021,7 +1037,8 @@ const getOrderEnquiryById = async (req, res) => {
         }
 
         const enquiry = await OrderEnquiry.findOne({ _id: req.params.id, tenant: tenantId })
-            .populate('customer', 'companyName code contactPerson phone email');
+            .populate('customer', 'companyName code contactPerson phone email')
+            .populate('customerRef', 'companyName code contactPerson phone email');
 
         if (!enquiry) {
             return res.status(404).json({ success: false, message: 'Order enquiry not found.' });
@@ -1070,12 +1087,13 @@ const updateOrderEnquiry = async (req, res) => {
         }
 
         const allowedFields = [
+            'nslNumber', 'customerType', 'customerRef', 'newCustomerDetails', 'status', 'followUps',
             'customer', 'enquiryDate', 'contactPerson', 'contactNumber', 'contactDesignation',
             'productCategory', 'printSpec', 'printSides', 'frontColours', 'backColours',
             'jobDescriptionPrintColours', 'jobDescriptionPrintSide',
             'jobDescriptionPrintSideOther', 'materialQualityFabric', 'fabricLaminationType',
             'materialColour', 'printingColour', 'fabricGrammage', 'bagWeightGms',
-            'fabricAverage', 'fabricWidthInch', 'fabricLengthInch', 'totalOrderQuantity',
+            'fabricAverage', 'fabricWidthInch', 'fabricLengthInch', 'totalOrderQuantity', 'orderQuantity', 'quantityUnit',
             'orderConfirmed', 'expectedDeliveryDate', 'poAttachments', 'description', 'remarks'
         ];
         for (const field of allowedFields) {
@@ -1127,6 +1145,70 @@ const deleteOrderEnquiry = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Add follow-up to an Order Enquiry (creates standalone CustomerInteraction)
+ * @route   POST /api/crm/enquiries/:id/follow-ups
+ * @access  Private (SALES:UPDATE)
+ */
+const addFollowUp = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        const enquiry = await OrderEnquiry.findById(req.params.id);
+        if (!enquiry) {
+            return res.status(404).json({ success: false, message: 'Order enquiry not found.' });
+        }
+
+        const { date, communicationType, type, notes, nextFollowUpDate, status } = req.body;
+        const commType = communicationType || type || 'Phone Call';
+
+        const interaction = new CustomerInteraction({
+            tenant: tenantId || enquiry.tenant,
+            customer: enquiry.customerRef || enquiry.customer || null,
+            customerName: enquiry.newCustomerDetails?.company || enquiry.newCustomerDetails?.name || undefined,
+            enquiryId: enquiry._id,
+            referenceId: enquiry._id,
+            date: date ? new Date(date) : new Date(),
+            interactionType: commType || 'Phone Call',
+            subject: `Follow-up: ${enquiry.nslNumber || 'Enquiry'}`,
+            notes: notes || '',
+            status: status || 'OPEN',
+            assignedExecutive: req.user?._id || req.user?.id || undefined,
+            nextFollowUpDate: nextFollowUpDate ? new Date(nextFollowUpDate) : null,
+            isActive: true
+        });
+
+        await interaction.save();
+
+        return res.status(201).json({
+            success: true,
+            message: 'Follow-up logged successfully as interaction.',
+            data: interaction
+        });
+    } catch (error) {
+        console.error('Error in addFollowUp:', error);
+        return res.status(500).json({ success: false, message: 'Failed to add follow-up.', error: error.message });
+    }
+};
+
+/**
+ * @desc    Update SO Approval Status for Order Enquiry
+ * @route   PUT/PATCH /api/crm/enquiries/:id/so-approval-status
+ * @access  Private (SALES:UPDATE permission)
+ */
+const updateSOApprovalStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+        const updatedEnquiry = await Enquiry.findByIdAndUpdate(id, { soApprovalStatus: status }, { new: true });
+        // If you have a notification service, trigger it here: sendNotificationToAdmin('SO Approval Requested', ...)
+        res.status(200).json({ success: true, data: updatedEnquiry });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.updateSOApprovalStatus = updateSOApprovalStatus;
+
 module.exports = {
     // Interactions
     createInteraction,
@@ -1149,5 +1231,7 @@ module.exports = {
     getOrderEnquiries,
     getOrderEnquiryById,
     updateOrderEnquiry,
-    deleteOrderEnquiry
+    deleteOrderEnquiry,
+    addFollowUp,
+    updateSOApprovalStatus
 };

@@ -80,6 +80,11 @@ const FinishedGoodSchema = new mongoose.Schema({
         min: 0,
         default: 0
     },
+    bagWeightGms: {
+        type: Number,
+        min: 0,
+        default: 0
+    },
     pendingQCStock: {
         type: Number,
         default: 0,
@@ -107,7 +112,11 @@ const FinishedGoodSchema = new mongoose.Schema({
             default: 'NONE'
         },
         frontColours: { type: Number, default: 0, min: 0 },
-        backColours: { type: Number, default: 0, min: 0 }
+        backColours: { type: Number, default: 0, min: 0 },
+        frontColorsQty: { type: Number, default: 0, min: 0 },
+        backColorsQty: { type: Number, default: 0, min: 0 },
+        frontColorsList: [{ type: String, trim: true }],
+        backColorsList: [{ type: String, trim: true }]
     },
     printSides: {
         type: String,
@@ -116,6 +125,10 @@ const FinishedGoodSchema = new mongoose.Schema({
     },
     frontColours: { type: Number, default: 0, min: 0 },
     backColours: { type: Number, default: 0, min: 0 },
+    frontColorsQty: { type: Number, default: 0, min: 0 },
+    backColorsQty: { type: Number, default: 0, min: 0 },
+    frontColorsList: [{ type: String, trim: true }],
+    backColorsList: [{ type: String, trim: true }],
     warehouseLocation: {
         type: String,
         trim: true,

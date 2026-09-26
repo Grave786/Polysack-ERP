@@ -2,6 +2,7 @@ const SalesOrder = require('../models/salesOrder.model');
 const Customer = require('../models/customer.model');
 const Location = require('../models/location.model');
 const FinishedGood = require('../models/finishedGood.model');
+const OrderEnquiry = require('../models/orderEnquiry.model');
 
 /**
  * Helper function to auto-generate unique SO number per tenant & year
@@ -170,6 +171,10 @@ const createSalesOrder = async (req, res) => {
         });
 
         await salesOrder.save();
+
+        if (req.body.nslId || req.body.enquiryId) {
+            await OrderEnquiry.findByIdAndUpdate(req.body.nslId || req.body.enquiryId, { status: 'Confirmed' });
+        }
 
         await salesOrder.populate([
             { path: 'customer', select: 'companyName code contactPerson phone' },
