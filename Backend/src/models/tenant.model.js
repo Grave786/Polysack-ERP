@@ -34,6 +34,11 @@ const TenantSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    gstFilingFrequency: {
+        type: String,
+        enum: ['Monthly', 'Quarterly'],
+        default: 'Monthly'
+    },
     registeredAddress: {
         line1: { type: String, trim: true },
         line2: { type: String, trim: true },

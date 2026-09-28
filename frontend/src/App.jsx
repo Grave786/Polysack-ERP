@@ -22,6 +22,7 @@ import AdministrationPage from './pages/AdministrationPage';
 import UserManagementPage from './pages/UserManagementPage';
 import RolesManagementPage from './pages/RolesManagementPage';
 import ProfilePage from './pages/ProfilePage';
+import ApprovalsPage from './pages/ApprovalsPage';
 import Forbidden403Page from './pages/Forbidden403Page';
 import LandingPage from './pages/LandingPage';
 
@@ -94,9 +95,7 @@ export default function App() {
             <Route element={<ProtectedRoute />}>
                 <Route path="/403" element={<Forbidden403Page />} />
                 <Route element={<DashboardLayout />}>
-                    <Route element={<ProtectedRoute requiredModule="DASHBOARD" />}>
-                        <Route path="/dashboard" element={<DashboardPage />} />
-                    </Route>
+                    <Route path="/dashboard" element={<DashboardPage />} />
                     <Route path="/profile" element={<ProfilePage />} />
 
                     {/* Module-specific Protected Routes */}
@@ -144,8 +143,15 @@ export default function App() {
                         <Route path="/analytics" element={<AnalyticsPage />} />
                     </Route>
 
-                    <Route element={<ProtectedRoute requiredModule="USERS" />}>
+                    <Route element={<ProtectedRoute requireTenantAdmin />}>
+                        <Route path="/approvals" element={<ApprovalsPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="COMPANY_SETTINGS" />}>
                         <Route path="/administration" element={<AdministrationPage />} />
+                    </Route>
+
+                    <Route element={<ProtectedRoute requiredModule="USERS" />}>
                         <Route path="/administration/tenants" element={<AdministrationPage />} />
                         <Route path="/administration/users" element={<TenantUsersRoute />} />
                         <Route path="/users" element={<TenantUsersRoute />} />

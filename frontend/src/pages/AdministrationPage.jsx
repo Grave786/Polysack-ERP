@@ -76,7 +76,8 @@ export default function AdministrationPage() {
         pan: '',
         contactEmail: '',
         contactPhone: '',
-        registeredAddress: { line1: '', line2: '', city: '', pincode: '' }
+        registeredAddress: { line1: '', line2: '', city: '', pincode: '' },
+        gstFilingFrequency: 'Monthly'
     });
 
     const derivedStateCode = formData.gstin && formData.gstin.length >= 2 ? formData.gstin.substring(0, 2) : '';
@@ -120,6 +121,7 @@ export default function AdministrationPage() {
                                 city: profile.registeredAddress?.city || '',
                                 pincode: profile.registeredAddress?.pincode || ''
                             },
+                            gstFilingFrequency: profile.gstFilingFrequency || 'Monthly',
                             productionSettings: {
                                 activeStartingStage: profile.productionSettings?.activeStartingStage || 'FLEXO_PRINTING'
                             }
@@ -330,7 +332,8 @@ export default function AdministrationPage() {
                 contactEmail: formData.contactEmail.trim(),
                 contactPhone: formData.contactPhone.trim(),
                 registeredAddress: formData.registeredAddress,
-                productionSettings: formData.productionSettings
+                productionSettings: formData.productionSettings,
+                gstFilingFrequency: formData.gstFilingFrequency || 'Monthly'
             };
 
             const res = await axiosInstance.put('/admin/company-profile', payload);
@@ -965,8 +968,8 @@ export default function AdministrationPage() {
                     </div>
                 </div>
 
-                {/* Grid 2: State Name, Contact Email, Contact Phone */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                {/* Grid 2: State Name, Contact Email, Contact Phone, GST Filing Frequency */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-xs">
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                             State Name *
@@ -1006,6 +1009,20 @@ export default function AdministrationPage() {
                             onChange={(e) => setFormData({ ...formData, contactPhone: e.target.value })}
                             className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-primary"
                         />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            GST Filing Frequency
+                        </label>
+                        <select
+                            value={formData.gstFilingFrequency || 'Monthly'}
+                            onChange={(e) => setFormData({ ...formData, gstFilingFrequency: e.target.value })}
+                            className="w-full border border-border rounded-md p-2.5 bg-app-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                        >
+                            <option value="Monthly">Monthly</option>
+                            <option value="Quarterly">Quarterly</option>
+                        </select>
                     </div>
                 </div>
 

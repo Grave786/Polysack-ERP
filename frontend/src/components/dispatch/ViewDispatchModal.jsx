@@ -17,7 +17,7 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
     const invObj = typeof dispatch.invoice === 'object' ? dispatch.invoice : null;
     const soNum = isPos ? (invObj?.invoiceNumber || 'POS Invoice') : (soObj?.soNumber || dispatch.soNumber || '-');
     const custObj = typeof soObj?.customer === 'object' ? soObj.customer : (typeof invObj?.customer === 'object' ? invObj.customer : null);
-    const customerName = custObj?.companyName || invObj?.walkInCustomer?.name || dispatch.customerName || 'Retail Customer';
+    const customerName = custObj?.companyName || invObj?.walkInCustomer?.name || dispatch.customerName || '-';
 
     const status = (dispatch.deliveryStatus || 'IN_TRANSIT').toUpperCase();
     const isDelivered = status === 'DELIVERED';

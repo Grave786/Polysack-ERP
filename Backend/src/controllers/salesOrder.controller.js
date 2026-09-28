@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const SalesOrder = require('../models/salesOrder.model');
 const Customer = require('../models/customer.model');
 const Location = require('../models/location.model');
@@ -65,6 +66,74 @@ const createSalesOrder = async (req, res) => {
                 success: false,
                 message: 'Please provide customer, deliveryDue date, and at least one item.'
             });
+        }
+
+        // 1b. Check if linked NSL exists, is Pending Approval, Rejected, or already Confirmed
+        let linkedEnquiry = null;
+        let cancelledSo = null;
+        const linkedNslId = req.body.nslId || req.body.enquiryId;
+        if (linkedNslId) {
+            const isObjectId = mongoose.Types.ObjectId.isValid(linkedNslId);
+            linkedEnquiry = await OrderEnquiry.findOne({
+                tenant: tenantId,
+                $or: [
+                    ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(linkedNslId) }] : []),
+                    { nslNumber: String(linkedNslId).trim() }
+                ]
+            });
+            if (linkedEnquiry) {
+                const isPending = linkedEnquiry.status === 'Pending Approval' || linkedEnquiry.soApprovalStatus === 'Pending Approval';
+                const isRejected = linkedEnquiry.status === 'Rejected' || linkedEnquiry.soApprovalStatus === 'Rejected';
+                if (isPending) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'NSL is waiting for Tenant Admin approval'
+                    });
+                }
+                if (isRejected) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'NSL was rejected'
+                    });
+                }
+
+                // Check if an active (non-cancelled) Sales Order already exists for this enquiry
+                const existingActiveSo = await SalesOrder.findOne({
+                    tenant: tenantId,
+                    isActive: true,
+                    status: { $ne: 'CANCELLED' },
+                    $or: [
+                        { sourceEnquiry: linkedEnquiry._id },
+                        ...(linkedEnquiry.salesOrder ? [{ _id: linkedEnquiry.salesOrder }] : []),
+                        ...(linkedEnquiry.nslNumber ? [{ notes: { $regex: linkedEnquiry.nslNumber } }] : [])
+                    ]
+                });
+                if (existingActiveSo) {
+                    return res.status(409).json({
+                        success: false,
+                        message: 'Sales Order already generated for this enquiry'
+                    });
+                }
+
+                // Check if the enquiry had a previous cancelled SO (so generating again is allowed)
+                cancelledSo = await SalesOrder.findOne({
+                    tenant: tenantId,
+                    status: 'CANCELLED',
+                    $or: [
+                        { sourceEnquiry: linkedEnquiry._id },
+                        ...(linkedEnquiry.salesOrder ? [{ _id: linkedEnquiry.salesOrder }] : []),
+                        ...(linkedEnquiry.nslNumber ? [{ notes: { $regex: linkedEnquiry.nslNumber } }] : [])
+                    ]
+                });
+
+                if ((linkedEnquiry.status === 'Confirmed' || linkedEnquiry.orderConfirmed) && !cancelledSo) {
+                    return res.status(409).json({
+                        success: false,
+                        message: 'Sales Order already generated for this enquiry'
+                    });
+                }
+                // Legacy NSLs (no approval status field) and Approved NSLs are allowed to proceed
+            }
         }
 
         const todayStr = (() => {
@@ -153,6 +222,42 @@ const createSalesOrder = async (req, res) => {
             });
         }
 
+        let claimedEnquiryId = null;
+        let prevEnquiryStatus = null;
+        let prevEnquiryConfirmed = false;
+
+        if (linkedEnquiry) {
+            prevEnquiryStatus = linkedEnquiry.status;
+            prevEnquiryConfirmed = linkedEnquiry.orderConfirmed;
+
+            // Atomic conditional update to block race conditions (double clicks / parallel tabs)
+            const claimed = await OrderEnquiry.findOneAndUpdate(
+                {
+                    _id: linkedEnquiry._id,
+                    tenant: tenantId,
+                    $or: [
+                        { orderConfirmed: { $ne: true }, status: { $ne: 'Confirmed' } },
+                        ...(cancelledSo ? [{ _id: linkedEnquiry._id }] : [])
+                    ]
+                },
+                {
+                    $set: {
+                        status: 'Confirmed',
+                        orderConfirmed: true
+                    }
+                },
+                { new: true }
+            );
+
+            if (!claimed) {
+                return res.status(409).json({
+                    success: false,
+                    message: 'Sales Order already generated for this enquiry'
+                });
+            }
+            claimedEnquiryId = linkedEnquiry._id;
+        }
+
         const soNumber = await generateSoNumber(tenantId);
         const initialStatus = (status === 'CONFIRMED') ? 'CONFIRMED' : 'DRAFT';
 
@@ -167,13 +272,20 @@ const createSalesOrder = async (req, res) => {
             status: initialStatus,
             dispatchLocation: dispatchLocation || null,
             notes,
+            sourceEnquiry: linkedEnquiry ? linkedEnquiry._id : null,
+            nslNumber: linkedEnquiry ? (linkedEnquiry.nslNumber || '') : '',
             isActive: true
         });
 
         await salesOrder.save();
 
-        if (req.body.nslId || req.body.enquiryId) {
-            await OrderEnquiry.findByIdAndUpdate(req.body.nslId || req.body.enquiryId, { status: 'Confirmed' });
+        if (linkedEnquiry) {
+            await OrderEnquiry.findByIdAndUpdate(linkedEnquiry._id, {
+                status: 'Confirmed',
+                orderConfirmed: true,
+                salesOrder: salesOrder._id,
+                salesOrderNo: salesOrder.soNumber
+            });
         }
 
         await salesOrder.populate([
@@ -189,6 +301,13 @@ const createSalesOrder = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in createSalesOrder:', error);
+
+        if (claimedEnquiryId) {
+            await OrderEnquiry.updateOne(
+                { _id: claimedEnquiryId, salesOrder: null },
+                { $set: { status: prevEnquiryStatus, orderConfirmed: prevEnquiryConfirmed } }
+            ).catch(() => {});
+        }
 
         if (error.name === 'CastError') {
             return res.status(400).json({
@@ -556,6 +675,17 @@ const updateStatus = async (req, res) => {
                 });
             }
             salesOrder.status = 'CANCELLED';
+            await OrderEnquiry.updateMany(
+                {
+                    tenant: tenantId,
+                    $or: [
+                        ...(salesOrder.sourceEnquiry ? [{ _id: salesOrder.sourceEnquiry }] : []),
+                        { salesOrder: salesOrder._id },
+                        { salesOrderNo: salesOrder.soNumber }
+                    ]
+                },
+                { $set: { orderConfirmed: false, status: 'Approved', salesOrder: null, salesOrderNo: '' } }
+            );
         } else if (status === 'CONFIRMED' || status === 'READY_FOR_DISPATCH' || status === 'DRAFT') {
             salesOrder.status = status;
         } else {
@@ -622,6 +752,20 @@ const deleteSalesOrder = async (req, res) => {
 
         salesOrder.isActive = false;
         await salesOrder.save();
+
+        if (salesOrder.status === 'CANCELLED' || salesOrder.status === 'DRAFT') {
+            await OrderEnquiry.updateMany(
+                {
+                    tenant: tenantId,
+                    $or: [
+                        ...(salesOrder.sourceEnquiry ? [{ _id: salesOrder.sourceEnquiry }] : []),
+                        { salesOrder: salesOrder._id },
+                        { salesOrderNo: salesOrder.soNumber }
+                    ]
+                },
+                { $set: { orderConfirmed: false, status: 'Approved', salesOrder: null, salesOrderNo: '' } }
+            );
+        }
 
         return res.status(200).json({
             success: true,

@@ -1,5 +1,6 @@
 const Notification = require('../models/notification.model');
 const { syncLowStockNotifications } = require('../services/notification.service');
+const { isTenantAdmin } = require('../middlewares/rbac.middleware');
 
 /**
  * @desc    Get all notifications for the tenant (with on-the-fly sync of low-stock & pending POs)
@@ -20,8 +21,9 @@ const getNotifications = async (req, res) => {
         }
 
         const { type, isRead, limit = 50 } = req.query;
+        const isAdmin = await isTenantAdmin(req.user);
 
-        // Auto-sync unalerted low stock raw materials and pending POs
+        // Auto-sync unalerted low stock raw materials
         await syncLowStockNotifications(tenantId);
 
         const filter = { tenant: tenantId };
@@ -30,14 +32,21 @@ const getNotifications = async (req, res) => {
             filter.isRead = isRead === 'true' || isRead === true;
         }
 
+        // Non Tenant Admin users must never receive approval-related notifications (Requirement 3)
+        if (!isAdmin) {
+            filter.module = { $ne: 'APPROVALS' };
+            filter.type = { $nin: ['APPROVAL_REQUEST', 'APPROVAL_REMINDER', 'PO_APPROVAL', 'APPROVAL_DECISION'] };
+        }
+
         const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+        const unreadFilter = { ...filter, isRead: false };
 
         const [notifications, unreadCount] = await Promise.all([
             Notification.find(filter)
                 .sort({ isRead: 1, createdAt: -1 })
                 .limit(limitNum)
                 .lean(),
-            Notification.countDocuments({ tenant: tenantId, isRead: false })
+            Notification.countDocuments(unreadFilter)
         ]);
 
         return res.status(200).json({
@@ -71,10 +80,18 @@ const getUnreadCount = async (req, res) => {
             });
         }
 
-        const unreadCount = await Notification.countDocuments({
+        const isAdmin = await isTenantAdmin(req.user);
+        const countFilter = {
             tenant: tenantId,
             isRead: false
-        });
+        };
+
+        if (!isAdmin) {
+            countFilter.module = { $ne: 'APPROVALS' };
+            countFilter.type = { $nin: ['APPROVAL_REQUEST', 'APPROVAL_REMINDER', 'PO_APPROVAL', 'APPROVAL_DECISION'] };
+        }
+
+        const unreadCount = await Notification.countDocuments(countFilter);
 
         return res.status(200).json({
             success: true,

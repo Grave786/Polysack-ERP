@@ -16,60 +16,60 @@ router.use(checkTenantModule('HR'));
 /**
  * @route   POST /api/shifts
  * @desc    Create a new Shift
- * @access  Private (MASTER_DATA:CREATE)
+ * @access  Private (HR:CREATE)
  */
-router.post('/', authenticate, checkPermission('MASTER_DATA', 'CREATE'), createShift);
+router.post('/', authenticate, checkPermission('HR', 'CREATE'), createShift);
 
 /**
  * @route   POST /api/shifts/seed-default
  * @desc    Seed standard shifts (Shift A, Shift B, Night Shift)
- * @access  Private (MASTER_DATA:CREATE)
+ * @access  Private (HR:CREATE)
  */
-router.post('/seed-default', authenticate, checkPermission('MASTER_DATA', 'CREATE'), seedDefaultShifts);
+router.post('/seed-default', authenticate, checkPermission('HR', 'CREATE'), seedDefaultShifts);
 
 /**
  * @route   GET /api/shifts
  * @desc    Get all Shifts for current tenant
- * @access  Private (Authenticated users)
+ * @access  Private (HR:READ)
  */
-router.get('/', authenticate, getShifts);
+router.get('/', authenticate, checkPermission('HR', 'READ'), getShifts);
 
 /**
  * @route   GET /api/shifts/:id
  * @desc    Get Shift by ID
- * @access  Private (Authenticated users)
+ * @access  Private (HR:READ)
  */
-router.get('/:id', authenticate, getShiftById);
+router.get('/:id', authenticate, checkPermission('HR', 'READ'), getShiftById);
 
 /**
  * @route   PUT /api/shifts/:id
  * @desc    Update Shift by ID
- * @access  Private (MASTER_DATA:UPDATE)
+ * @access  Private (HR:UPDATE)
  */
-router.put('/:id', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), updateShift);
+router.put('/:id', authenticate, checkPermission('HR', 'UPDATE'), updateShift);
 
 /**
  * @route   PATCH /api/shifts/:id
  * @desc    Update Shift by ID (Partial)
- * @access  Private (MASTER_DATA:UPDATE)
+ * @access  Private (HR:UPDATE)
  */
-router.patch('/:id', authenticate, checkPermission('MASTER_DATA', 'UPDATE'), updateShift);
+router.patch('/:id', authenticate, checkPermission('HR', 'UPDATE'), updateShift);
 
 /**
  * @route   DELETE /api/shifts/:id
  * @desc    Soft delete Shift
- * @access  Private (MASTER_DATA:DELETE)
+ * @access  Private (HR:DELETE)
  */
 const Shift = require('../models/shift.model');
 const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
 
-router.delete('/:id', authenticate, checkPermission('MASTER_DATA', 'DELETE'), deleteShift);
+router.delete('/:id', authenticate, checkPermission('HR', 'DELETE'), deleteShift);
 
 /**
  * @route   POST /api/shifts/bulk-delete
  * @desc    Bulk soft delete Shifts
- * @access  Private (MASTER_DATA:DELETE)
+ * @access  Private (HR:DELETE)
  */
-router.post('/bulk-delete', authenticate, checkPermission('MASTER_DATA', 'DELETE'), createBulkDeleteHandler(Shift, { resourceName: 'Shifts' }));
+router.post('/bulk-delete', authenticate, checkPermission('HR', 'DELETE'), createBulkDeleteHandler(Shift, { resourceName: 'Shifts' }));
 
 module.exports = router;

@@ -194,6 +194,19 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
             return;
         }
 
+        if (initialData?.isPendingApproval || initialData?.nslStatus === 'Pending Approval') {
+            toast.error('NSL is waiting for Tenant Admin approval');
+            return;
+        }
+        if (initialData?.isRejected || initialData?.nslStatus === 'Rejected') {
+            toast.error('NSL was rejected');
+            return;
+        }
+        if (initialData?.isConfirmed || initialData?.orderConfirmed || initialData?.nslStatus === 'Confirmed') {
+            toast.error('Sales Order already generated for this enquiry');
+            return;
+        }
+
         try {
             setIsSubmitting(true);
 
@@ -282,6 +295,24 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
 
     const selectedCustomerObj = customers.find((c) => c._id === customerId);
 
+    const isNslConfirmed = Boolean(
+        initialData?.isConfirmed ||
+        initialData?.orderConfirmed ||
+        initialData?.nslStatus === 'Confirmed'
+    );
+    const isNslBlocked = Boolean(
+        initialData?.isPendingApproval ||
+        initialData?.nslStatus === 'Pending Approval' ||
+        initialData?.isRejected ||
+        initialData?.nslStatus === 'Rejected' ||
+        isNslConfirmed
+    );
+    const nslBlockedTooltip = isNslConfirmed
+        ? 'Sales Order already generated for this enquiry'
+        : (initialData?.isPendingApproval || initialData?.nslStatus === 'Pending Approval')
+            ? 'NSL is waiting for Tenant Admin approval'
+            : 'NSL was rejected';
+
     const footerButtons = (
         <div className="flex items-center justify-between w-full">
             <div className="text-xs font-mono font-bold text-text-main">
@@ -295,15 +326,21 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                 >
                     Cancel
                 </button>
-                <button
-                    type="submit"
-                    form="sales-order-form"
-                    disabled={!isFormValid || isSubmitting}
-                    className="px-5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
-                >
-                    <ShoppingCart size={14} />
-                    <span>{isSubmitting ? 'Saving Sales Order...' : isEditMode ? 'Update Sales Order' : 'Confirm Sales Order'}</span>
-                </button>
+                <div title={isNslBlocked ? nslBlockedTooltip : undefined}>
+                    <button
+                        type="submit"
+                        form="sales-order-form"
+                        disabled={!isFormValid || isSubmitting || isNslBlocked}
+                        className={`px-5 py-2 font-extrabold rounded-lg text-xs transition-all shadow-xs flex items-center gap-1.5 ${
+                            isNslBlocked
+                                ? 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-70'
+                                : 'bg-primary hover:bg-primary-hover text-sidebar-bg cursor-pointer disabled:opacity-50'
+                        }`}
+                    >
+                        <ShoppingCart size={14} />
+                        <span>{isSubmitting ? 'Saving Sales Order...' : isEditMode ? 'Update Sales Order' : 'Confirm Sales Order'}</span>
+                    </button>
+                </div>
             </div>
         </div>
     );

@@ -139,7 +139,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
         return acc + (qty * rate);
     }, 0);
 
-    const submitOrder = async (targetStatus = 'SENT_TO_SUPPLIER') => {
+    const submitOrder = async (targetStatus = 'PENDING_APPROVAL') => {
         if (!supplier) {
             toast.error('Please select a Supplier');
             return;
@@ -200,7 +200,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                 const poNum = res.data.data?.poNumber || editPo?.poNumber || '';
                 const actionMsg = targetStatus === 'DRAFT'
                     ? (editPo ? `Draft PO ${poNum} updated successfully!` : `Purchase Order ${poNum} saved as Draft!`)
-                    : (editPo ? `Purchase Order ${poNum} updated and issued to supplier!` : `Purchase Order ${poNum} created & issued to supplier!`);
+                    : 'Sent for Tenant Admin approval';
                 toast.success(actionMsg);
                 if (onSuccess) onSuccess();
                 onClose();
@@ -217,10 +217,10 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
         <SlideOverPanel
             isOpen={isOpen}
             onClose={onClose}
-            title={editPo ? `Edit Purchase Order (${editPo.poNumber || ''})` : "Issue New Purchase Order"}
-            subtitle={editPo ? "Modify draft purchase order details" : "Create raw material purchase order for suppliers"}
+            title={editPo ? `Edit Purchase Order (${editPo.poNumber || ''})` : "Create Purchase Order"}
+            subtitle={editPo ? "Modify draft purchase order details" : "Create purchase order for Tenant Admin approval"}
         >
-            <form onSubmit={(e) => { e.preventDefault(); submitOrder('SENT_TO_SUPPLIER'); }} className="space-y-4 font-sans text-xs">
+            <form onSubmit={(e) => { e.preventDefault(); submitOrder('PENDING_APPROVAL'); }} className="space-y-4 font-sans text-xs">
                 {/* Supplier Selection */}
                 <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
@@ -426,7 +426,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         className="px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
                         <ShoppingBag size={15} />
-                        <span>{isSubmitting ? (editPo ? 'Updating PO...' : 'Issuing PO...') : (editPo ? 'Update & Issue PO' : 'Issue Purchase Order')}</span>
+                        <span>{isSubmitting ? (editPo ? 'Updating PO...' : 'Submitting PO...') : (editPo ? 'Update & Submit for Approval' : 'Submit for Approval')}</span>
                     </button>
                 </div>
             </form>

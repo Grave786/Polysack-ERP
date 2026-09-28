@@ -10,7 +10,7 @@ const CACHE_TTL_MS = 10000;
 
 const DEFAULT_MODULES = [
     'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY',
-    'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS'
+    'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS', 'APPROVALS', 'COMPANY_SETTINGS'
 ];
 
 // Helper to normalize tenant ID input (handles strings, ObjectIds, and populated objects)
@@ -180,17 +180,19 @@ const checkPermission = (requiredModule, requiredAction) => {
                 });
             }
 
-            // Super Admin bypass check (system-level user without tenant or Super Admin email/role)
+            // Super Admin & Tenant Admin bypass check (Tenant Admin keeps access to everything)
             const userRoleName = typeof user.role === 'object' ? user.role?.name : user.role;
-            const isSuperAdmin = !user.tenant || user.email === process.env.SUPER_ADMIN_EMAIL || userRoleName === 'SUPER_ADMIN' || userRoleName === 'Super Admin';
+            const normalizedRoleName = (userRoleName || '').toLowerCase().trim();
+            const isSuperAdmin = !user.tenant || user.email === process.env.SUPER_ADMIN_EMAIL || normalizedRoleName === 'super_admin' || normalizedRoleName === 'super admin';
+            const isTenantAdminUser = !normalizedRoleName.includes('assistant') && (normalizedRoleName === 'tenant admin' || normalizedRoleName === 'admin' || (normalizedRoleName.includes('admin') && !normalizedRoleName.includes('assistant')));
 
-            if (isSuperAdmin) {
+            if (isSuperAdmin || isTenantAdminUser) {
                 req.userDetails = user;
                 return next();
             }
 
-            // 3. Platform-level Tenant Module Entitlement Check (Bypassed for core account administration: USERS, ROLES, DASHBOARD)
-            const CORE_ACCOUNT_MODULES = ['USERS', 'ROLES', 'DASHBOARD', 'ADMINISTRATION'];
+            // 3. Platform-level Tenant Module Entitlement Check (Bypassed for core account administration: USERS, ROLES, DASHBOARD, COMPANY_SETTINGS)
+            const CORE_ACCOUNT_MODULES = ['USERS', 'ROLES', 'DASHBOARD', 'ADMINISTRATION', 'APPROVALS', 'COMPANY_SETTINGS'];
             const targetModules = Array.isArray(requiredModule) ? requiredModule : [requiredModule];
             const requiresPlanEntitlement = targetModules.some((m) => !CORE_ACCOUNT_MODULES.includes(m));
 
@@ -229,9 +231,48 @@ const checkPermission = (requiredModule, requiredAction) => {
 
             // 5. Check if role has matching permission for requiredModule and requiredAction
             const permissions = user.role.permissions || [];
-            const hasPermission = permissions.some((perm) =>
-                targetModules.includes(perm.module) && perm.action === requiredAction
-            );
+            const MODULE_ALIASES = {
+                'BAG INVENTORY & STOCK MASTER': 'INVENTORY',
+                'SHOP FLOOR & WORK ORDERS': 'PRODUCTION',
+                'PURCHASE ORDERS & GRN INWARD': 'PROCUREMENT',
+                'POS BILLING & SALES ORDERS': 'SALES',
+                'PRODUCTS, RAW MATERIALS & MACHINES': 'MASTER_DATA',
+                'USER ACCOUNTS & ACCESS CONTROL': 'USERS',
+                'ROLES & PERMISSION MATRICES': 'ROLES',
+                'QUALITY CONTROL & COA CERTIFICATES': 'QUALITY',
+                'DISPATCH & DELIVERY': 'DISPATCH',
+                'ATTENDANCE & HR MANAGEMENT': 'HR',
+                'ANALYTICS & REPORTS': 'ANALYTICS',
+                'CUSTOMER CRM & COMPLAINTS': 'CRM',
+                'COMPANY SETTINGS & GST PROFILE': 'COMPANY_SETTINGS',
+            };
+            const ACTION_ALIASES = {
+                'VIEW': 'READ',
+                'EDIT': 'UPDATE',
+                'WRITE': 'UPDATE',
+                'MODIFY': 'UPDATE',
+                'REMOVE': 'DELETE'
+            };
+            const normM = (m) => {
+                if (!m) return '';
+                const c = String(m).trim().toUpperCase();
+                return MODULE_ALIASES[c] || c;
+            };
+            const normA = (a) => {
+                if (!a) return '';
+                const c = String(a).trim().toUpperCase();
+                return ACTION_ALIASES[c] || c;
+            };
+
+            const normTargetModules = targetModules.map(normM);
+            const normRequiredAction = normA(requiredAction);
+
+            const hasPermission = permissions.some((perm) => {
+                if (!perm) return false;
+                const pMod = normM(perm.module);
+                const pAct = normA(perm.action);
+                return normTargetModules.includes(pMod) && pAct === normRequiredAction;
+            });
 
             if (!hasPermission) {
                 return res.status(403).json({
@@ -280,14 +321,64 @@ const checkTenantModule = (moduleKey) => {
             next();
         } catch (error) {
             console.error('Error in checkTenantModule middleware:', error);
-            next();
+            return res.status(500).json({
+                success: false,
+                message: 'Internal server error during tenant module check.',
+                error: error.message
+            });
         }
     };
+};
+
+/**
+ * Single backend helper: Determine if a user is a Tenant Admin (or Super Admin)
+ * Identifies Tenant Admin using role name or system admin status
+ */
+const isTenantAdmin = async (user) => {
+    if (!user) return false;
+    let userDoc = user;
+    const userId = user._id || user.id || (typeof user === 'string' ? user : null);
+
+    // If user object doesn't have populated role.name, fetch it
+    if (!userDoc.role || typeof userDoc.role !== 'object' || !userDoc.role.name) {
+        if (userId) {
+            userDoc = await User.findById(userId).populate('role').lean();
+        }
+    }
+    if (!userDoc) return false;
+    const roleName = (userDoc.roleName || userDoc.role?.name || (typeof userDoc.role === 'string' ? userDoc.role : '') || '').toLowerCase().trim();
+    if (roleName.includes('assistant')) return false;
+    return roleName.includes('admin') || !userDoc.tenant;
+};
+
+/**
+ * Middleware: requireTenantAdmin
+ * Enforces that only Tenant Admin can access the route (returns 403 otherwise).
+ */
+const requireTenantAdmin = async (req, res, next) => {
+    try {
+        const isAdmin = await isTenantAdmin(req.user);
+        if (!isAdmin) {
+            return res.status(403).json({
+                success: false,
+                message: 'Forbidden: This action or module is restricted to Tenant Admin only.'
+            });
+        }
+        next();
+    } catch (err) {
+        console.error('Error in requireTenantAdmin middleware:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Internal server error verifying administrator access.'
+        });
+    }
 };
 
 module.exports = {
     authenticate,
     checkPermission,
     checkTenantModule,
-    clearTenantStatusCache
+    clearTenantStatusCache,
+    isTenantAdmin,
+    requireTenantAdmin
 };

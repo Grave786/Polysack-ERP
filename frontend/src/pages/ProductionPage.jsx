@@ -75,15 +75,18 @@ export default function ProductionPage() {
                 {
                     header: 'WORK ORDER #',
                     accessor: 'workOrderNumber',
+                    exportValue: (row) => row.workOrderNumber || row.code || '',
                     sortable: true
                 },
                 {
                     header: 'CUSTOMER / CLIENT',
+                    exportValue: (row) => row.customer?.companyName || row.customer?.name || row.customerName || '',
                     render: (row) => row.customer?.companyName || row.customer?.name || '-'
                 },
                 {
                     header: 'WORK TITLE',
                     title: 'WORK TITLE',
+                    exportValue: (row) => row.description || row.remarks || row.jobOrderDetails?.description || row.finishedGood?.name || row.workTitle || '',
                     render: (row) => {
                         const desc = row.description || row.remarks || row.jobOrderDetails?.description || row.finishedGood?.name || '-';
                         return (
@@ -96,14 +99,37 @@ export default function ProductionPage() {
                 {
                     header: 'TARGET BAGS',
                     accessor: 'targetQuantity',
+                    exportValue: (row) => row.targetQuantity || 0,
                     render: (row) => <span className="font-mono font-medium">{row.targetQuantity || 0}</span>
                 },
                 {
                     header: 'COMPLETED BAGS',
+                    exportValue: (row) => row.completedQuantity || 0,
                     render: (row) => <span className="font-extrabold text-text-main font-mono">{row.completedQuantity || 0}</span>
                 },
                 {
                     header: 'STAGE PROGRESS',
+                    exportValue: (row) => {
+                        const completedStagesCount = Array.isArray(row.stages) ? row.stages.filter((s) => s.status === 'COMPLETED').length : 0;
+                        const activeStagesCount = Array.isArray(row.stages) ? row.stages.filter((s) => s.status !== 'SKIPPED').length : 8;
+                        const allStagesDone = Array.isArray(row.stages) && activeStagesCount > 0 && row.stages.filter(s => s.status !== 'SKIPPED').every(s => s.status === 'COMPLETED');
+                        const isFullyDone = row.status === 'COMPLETED' || allStagesDone || (row.progressPercentage === 100);
+
+                        const pct = isFullyDone
+                            ? 100
+                            : row.progressPercentage !== undefined
+                                ? row.progressPercentage
+                                : Math.min(100, Math.round((completedStagesCount / Math.max(1, activeStagesCount)) * 100));
+
+                        const activeStage = Array.isArray(row.stages) ? row.stages.find((s) => s.status === 'ACTIVE') : null;
+                        const activeLabel = isFullyDone
+                            ? 'Completed'
+                            : activeStage
+                                ? (STAGE_LABELS[activeStage.stageName] || activeStage.stageName)
+                                : 'Pending';
+
+                        return `${activeLabel} (${pct}%)`;
+                    },
                     render: (row) => {
                         const completedQty = Number(row.completedQuantity || 0);
                         const targetQty = Number(row.targetQuantity || 1);
@@ -145,10 +171,12 @@ export default function ProductionPage() {
                 },
                 {
                     header: 'MACHINE',
+                    exportValue: (row) => row.assignedMachine?.code || row.assignedMachine?.name || row.machine?.machineName || row.machineAllocation?.machineName || '',
                     render: (row) => row.assignedMachine?.code || row.assignedMachine?.name || '-'
                 },
                 {
                     header: 'STATUS',
+                    exportValue: (row) => row.status || 'PENDING',
                     render: (row) => {
                         const status = row.status || 'PENDING';
                         const badgeStyle =

@@ -7,15 +7,72 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
 import { checkIsSuperAdmin } from '../utils/permissionUtils';
 
+export const MODULE_DEFINITIONS = {
+    INVENTORY: {
+        label: 'Bag Inventory & Stock Master',
+        subtitle: 'Bag Inventory & Stock Master'
+    },
+    PRODUCTION: {
+        label: 'Shop Floor & Work Orders',
+        subtitle: 'Shop Floor & Work Orders'
+    },
+    PROCUREMENT: {
+        label: 'Purchase Orders & GRN Inward',
+        subtitle: 'Purchase Orders & GRN Inward'
+    },
+    SALES: {
+        label: 'POS Billing & Sales Orders',
+        subtitle: 'POS Billing & Sales Orders'
+    },
+    MASTER_DATA: {
+        label: 'Products, Raw Materials & Machines',
+        subtitle: 'Products, Raw Materials & Machines'
+    },
+    USERS: {
+        label: 'User Accounts & Access Control',
+        subtitle: 'User Accounts & Access Control'
+    },
+    ROLES: {
+        label: 'Roles & Permission Matrices',
+        subtitle: 'Roles & Permission Matrices'
+    },
+    QUALITY: {
+        label: 'Quality Control & COA Certificates',
+        subtitle: 'Quality Control & COA Certificates'
+    },
+    DISPATCH: {
+        label: 'Dispatch & Delivery',
+        subtitle: 'Delivery Challans, Shipments & Gate Passes'
+    },
+    HR: {
+        label: 'Attendance & HR Management',
+        subtitle: 'Attendance, Shifts, Biometric Logs & Employees'
+    },
+    ANALYTICS: {
+        label: 'Analytics & Reports',
+        subtitle: 'P&L, Yield, Inventory Valuation & GST Register'
+    },
+    CRM: {
+        label: 'Customer CRM & Complaints',
+        subtitle: 'Order Enquiries, Follow-up Logs & Complaints'
+    },
+    COMPANY_SETTINGS: {
+        label: 'Company Settings & GST Profile',
+        subtitle: 'Company Profile, GST Configuration & Stage Rules'
+    }
+};
+
 const MODULE_LABELS = {
     SALES: 'POS Billing & Sales Orders',
     PRODUCTION: 'Shop Floor & Work Orders',
     INVENTORY: 'Bag Inventory & Stock Master',
     QUALITY: 'Quality Control & COA Certificates',
     PROCUREMENT: 'Purchase Orders & GRN Inward',
-    CRM: 'Customer Relations & CRM',
-    DISPATCH: 'Dispatch & Delivery Challans',
+    CRM: 'Customer CRM & Complaints',
+    DISPATCH: 'Dispatch & Delivery',
     HR: 'Attendance & HR Management',
+    ANALYTICS: 'Analytics & Reports',
+    COMPANY_SETTINGS: 'Company Settings & GST Profile',
     USERS: 'User Accounts & Access Control',
     ROLES: 'Roles & Permission Matrices',
     MASTER_DATA: 'Products, Raw Materials & Machines'
@@ -36,6 +93,7 @@ export default function RolesManagementPage() {
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [editingRoleId, setEditingRoleId] = useState(null);
     const [refreshKey, setRefreshKey] = useState(0);
+    const [deactivateModal, setDeactivateModal] = useState({ isOpen: false, roleId: null, roleName: '', mode: 'delete' });
 
     // Status filter — drives the ?status= query param sent to the API
     const [statusFilter, setStatusFilter] = useState('All Statuses');
@@ -43,7 +101,7 @@ export default function RolesManagementPage() {
     // Form State
     const [roleName, setRoleName] = useState('');
     const [roleDescription, setRoleDescription] = useState('');
-    const [selectedPermissionIds, setSelectedPermissionIds] = useState([]);
+    const [selectedPermissionKeys, setSelectedPermissionKeys] = useState([]);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Available System Permissions list from backend
@@ -56,21 +114,44 @@ export default function RolesManagementPage() {
         axiosInstance.get('/roles/permissions')
             .then((res) => {
                 if (res.data?.success && Array.isArray(res.data.data) && res.data.data.length > 0) {
-                    setSystemPermissions(res.data.data);
+                    const unique = [];
+                    const seen = new Set();
+                    res.data.data.forEach((p) => {
+                        if (!p || !p.module || !p.action) return;
+                        const key = `${p.module.trim().toUpperCase()}:${p.action.trim().toUpperCase()}`;
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            unique.push(p);
+                        }
+                    });
+                    setSystemPermissions(unique);
                 } else {
                     return axiosInstance.get('/roles/permissions-list');
                 }
             })
             .then((fallbackRes) => {
                 if (fallbackRes?.data?.success && Array.isArray(fallbackRes.data.data)) {
-                    setSystemPermissions(fallbackRes.data.data);
+                    const unique = [];
+                    const seen = new Set();
+                    fallbackRes.data.data.forEach((p) => {
+                        if (!p || !p.module || !p.action) return;
+                        const key = `${p.module.trim().toUpperCase()}:${p.action.trim().toUpperCase()}`;
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            unique.push(p);
+                        }
+                    });
+                    setSystemPermissions(unique);
                 }
             })
             .catch((err) => {
                 console.warn('Using default system permissions fallback list:', err.message);
                 const fallbackList = [];
-                const modules = ['SALES', 'PRODUCTION', 'INVENTORY', 'QUALITY', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'USERS', 'ROLES', 'MASTER_DATA'];
-                const actions = ['CREATE', 'READ', 'UPDATE', 'DELETE'];
+                const modules = [
+                    'INVENTORY', 'PRODUCTION', 'PROCUREMENT', 'SALES', 'MASTER_DATA',
+                    'USERS', 'ROLES', 'QUALITY', 'DISPATCH', 'HR', 'ANALYTICS', 'CRM', 'COMPANY_SETTINGS'
+                ];
+                const actions = ['CREATE', 'READ', 'UPDATE', 'DELETE', 'APPROVE'];
                 modules.forEach((module) => {
                     actions.forEach((action) => {
                         fallbackList.push({
@@ -91,25 +172,63 @@ export default function RolesManagementPage() {
     // Group permissions by module name
     const groupedPermissions = useMemo(() => {
         const map = {};
+        const seenInGroup = new Set();
         systemPermissions.forEach((p) => {
-            if (!map[p.module]) {
-                map[p.module] = [];
+            if (!p || !p.module || !p.action) return;
+            const mod = p.module.trim().toUpperCase();
+            const act = p.action.trim().toUpperCase();
+            const key = `${mod}:${act}`;
+            if (seenInGroup.has(key)) return;
+            seenInGroup.add(key);
+
+            if (!map[mod]) {
+                map[mod] = [];
             }
-            map[p.module].push(p);
+            map[mod].push(p);
         });
         return map;
     }, [systemPermissions]);
+
+    // Visible modules in the current matrix
+    const visibleModules = useMemo(() => {
+        return Object.keys(groupedPermissions).filter((moduleName) => {
+            if (isSuperAdmin) return true;
+            if (['USERS', 'ROLES', 'COMPANY_SETTINGS'].includes(moduleName)) return true;
+            const tenantModules = user?.tenantEnabledModules || user?.tenant?.enabledModules || [
+                'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY', 'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS', 'COMPANY_SETTINGS'
+            ];
+            return tenantModules.includes(moduleName);
+        });
+    }, [groupedPermissions, isSuperAdmin, user]);
+
+    // Distinct module:action pairs visible in the current matrix
+    const visibleMatrixKeys = useMemo(() => {
+        const keys = new Set();
+        visibleModules.forEach((mod) => {
+            const perms = groupedPermissions[mod] || [];
+            perms.forEach((p) => {
+                keys.add(`${p.module.trim().toUpperCase()}:${p.action.trim().toUpperCase()}`);
+            });
+        });
+        return keys;
+    }, [visibleModules, groupedPermissions]);
+
+    // Counter of granted permissions strictly within visible matrix
+    const grantedCount = useMemo(() => {
+        return selectedPermissionKeys.filter((k) => visibleMatrixKeys.has(k)).length;
+    }, [selectedPermissionKeys, visibleMatrixKeys]);
 
     // Handle Open Drawer for Create
     const handleOpenCreate = () => {
         setEditingRoleId(null);
         setRoleName('');
         setRoleDescription('');
-        // Default to all READ permissions checked for easy setup
-        const defaultReadPermissionIds = systemPermissions
-            .filter((p) => p.action === 'READ')
-            .map((p) => p._id);
-        setSelectedPermissionIds(defaultReadPermissionIds);
+        // Default to all READ permissions for visible modules
+        const defaultReadKeys = systemPermissions
+            .filter((p) => p.action?.trim().toUpperCase() === 'READ')
+            .map((p) => `${p.module.trim().toUpperCase()}:READ`)
+            .filter((k) => visibleMatrixKeys.has(k));
+        setSelectedPermissionKeys(defaultReadKeys);
         setIsDrawerOpen(true);
     };
 
@@ -119,24 +238,64 @@ export default function RolesManagementPage() {
         setRoleName(role.name || '');
         setRoleDescription(role.description || '');
 
-        const existingIds = (role.permissions || []).map((p) =>
-            typeof p === 'object' ? p._id : p
-        );
-        setSelectedPermissionIds(existingIds);
+        const keys = new Set();
+        (role.permissions || []).forEach((p) => {
+            if (p && typeof p === 'object' && p.module && p.action) {
+                keys.add(`${String(p.module).trim().toUpperCase()}:${String(p.action).trim().toUpperCase()}`);
+            } else if (p) {
+                const idStr = String(p._id || p);
+                const found = systemPermissions.find((sp) => String(sp._id) === idStr);
+                if (found && found.module && found.action) {
+                    keys.add(`${String(found.module).trim().toUpperCase()}:${String(found.action).trim().toUpperCase()}`);
+                }
+            }
+        });
+        setSelectedPermissionKeys(Array.from(keys));
         setIsDrawerOpen(true);
     };
 
-    // Deactivate Role (soft-delete)
-    const handleDeleteRole = async (role) => {
-        if (!window.confirm(`Deactivate role '${role.name}'?\n\nUsers currently assigned to this role keep their access until manually reassigned.`)) {
+    // Open deactivation confirmation modal
+    const handleDeleteRole = (role) => {
+        setDeactivateModal({ isOpen: true, roleId: role._id, roleName: role.name, mode: 'delete' });
+    };
+
+    // Toggle isActive status — reactivate immediately, deactivate via modal
+    const handleToggleStatus = async (role) => {
+        if (role.isActive !== false) {
+            // Deactivating — show confirmation modal
+            setDeactivateModal({ isOpen: true, roleId: role._id, roleName: role.name, mode: 'toggle' });
             return;
         }
-
+        // Reactivating — non-destructive, proceed immediately
         try {
-            const res = await axiosInstance.delete(`/roles/${role._id}`);
+            const res = await axiosInstance.patch(`/roles/${role._id}/status`);
             if (res.data?.success) {
-                toast.success(`Role '${role.name}' deactivated.`);
+                toast.success(`✅ Role '${role.name}' successfully reactivated.`);
                 setRefreshKey((prev) => prev + 1);
+            }
+        } catch (err) {
+            console.error('Error reactivating role:', err);
+            toast.error(err.response?.data?.message || 'Failed to reactivate role');
+        }
+    };
+
+    // Confirmed deactivation — called by modal Confirm button
+    const handleConfirmDeactivate = async () => {
+        const { roleId, roleName, mode } = deactivateModal;
+        setDeactivateModal({ isOpen: false, roleId: null, roleName: '', mode: 'delete' });
+        try {
+            if (mode === 'delete') {
+                const res = await axiosInstance.delete(`/roles/${roleId}`);
+                if (res.data?.success) {
+                    toast.success(`Role '${roleName}' deactivated.`);
+                    setRefreshKey((prev) => prev + 1);
+                }
+            } else {
+                const res = await axiosInstance.patch(`/roles/${roleId}/status`);
+                if (res.data?.success) {
+                    toast(`Role '${roleName}' deactivated.`, { icon: '🔴' });
+                    setRefreshKey((prev) => prev + 1);
+                }
             }
         } catch (err) {
             console.error('Error deactivating role:', err);
@@ -144,36 +303,13 @@ export default function RolesManagementPage() {
         }
     };
 
-    // Toggle isActive status — handles both reactivate and deactivate
-    const handleToggleStatus = async (role) => {
-        if (role.isActive !== false) {
-            if (!window.confirm(`Deactivate role '${role.name}'?\n\nExisting users keep their access until reassigned.`)) return;
-        }
-
-        try {
-            const res = await axiosInstance.patch(`/roles/${role._id}/status`);
-            if (res.data?.success) {
-                const isNowActive = res.data.data?.isActive;
-                if (isNowActive) {
-                    toast.success(`\u2705 Role '${role.name}' successfully reactivated.`);
-                } else {
-                    toast(`Role '${role.name}' deactivated.`, { icon: '\uD83D\uDD34' });
-                }
-                setRefreshKey((prev) => prev + 1);
-            }
-        } catch (err) {
-            console.error('Error toggling role status:', err);
-            toast.error(err.response?.data?.message || 'Failed to toggle role status');
-        }
-    };
-
-    // Permission Checkbox Toggle
-    const handleTogglePermission = (permId) => {
-        setSelectedPermissionIds((prev) => {
-            if (prev.includes(permId)) {
-                return prev.filter((id) => id !== permId);
+    // Permission Checkbox Toggle by module:action key
+    const handleTogglePermission = (permKey) => {
+        setSelectedPermissionKeys((prev) => {
+            if (prev.includes(permKey)) {
+                return prev.filter((k) => k !== permKey);
             } else {
-                return [...prev, permId];
+                return [...prev, permKey];
             }
         });
     };
@@ -181,16 +317,13 @@ export default function RolesManagementPage() {
     // Module Select All / Clear All Toggle
     const handleToggleModulePermissions = (moduleName) => {
         const modulePerms = groupedPermissions[moduleName] || [];
-        const modulePermIds = modulePerms.map((p) => p._id);
-        const allSelected = modulePermIds.every((id) => selectedPermissionIds.includes(id));
+        const moduleKeys = modulePerms.map((p) => `${p.module.trim().toUpperCase()}:${p.action.trim().toUpperCase()}`);
+        const allSelected = moduleKeys.length > 0 && moduleKeys.every((k) => selectedPermissionKeys.includes(k));
 
         if (allSelected) {
-            setSelectedPermissionIds((prev) => prev.filter((id) => !modulePermIds.includes(id)));
+            setSelectedPermissionKeys((prev) => prev.filter((k) => !moduleKeys.includes(k)));
         } else {
-            setSelectedPermissionIds((prev) => {
-                const set = new Set([...prev, ...modulePermIds]);
-                return Array.from(set);
-            });
+            setSelectedPermissionKeys((prev) => Array.from(new Set([...prev, ...moduleKeys])));
         }
     };
 
@@ -205,10 +338,24 @@ export default function RolesManagementPage() {
 
         try {
             setIsSubmitting(true);
+
+            // Convert selectedPermissionKeys to canonical permission ObjectIds
+            const canonicalIds = [];
+            selectedPermissionKeys.forEach((key) => {
+                if (visibleMatrixKeys.has(key)) {
+                    const match = systemPermissions.find(
+                        (sp) => `${sp.module.trim().toUpperCase()}:${sp.action.trim().toUpperCase()}` === key
+                    );
+                    if (match && match._id) {
+                        canonicalIds.push(match._id);
+                    }
+                }
+            });
+
             const payload = {
                 name: roleName.trim(),
                 description: roleDescription.trim(),
-                permissions: selectedPermissionIds
+                permissions: canonicalIds
             };
 
             let res;
@@ -258,7 +405,15 @@ export default function RolesManagementPage() {
         {
             header: 'ASSIGNED PERMISSIONS',
             render: (row) => {
-                const count = row.permissions?.length || 0;
+                const distinctKeys = new Set();
+                (row.permissions || []).forEach((p) => {
+                    if (p && typeof p === 'object' && p.module && p.action) {
+                        distinctKeys.add(`${String(p.module).trim().toUpperCase()}:${String(p.action).trim().toUpperCase()}`);
+                    } else if (p) {
+                        distinctKeys.add(String(p));
+                    }
+                });
+                const count = distinctKeys.size;
                 return (
                     <span className="px-2.5 py-1 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-[11px] font-extrabold">
                         {count} {count === 1 ? 'Permission' : 'Permissions'} Granted
@@ -424,7 +579,7 @@ export default function RolesManagementPage() {
                                 </h3>
                             </div>
                             <span className="text-[11px] font-mono font-bold text-primary bg-primary/10 px-2 py-0.5 rounded">
-                                {selectedPermissionIds.length} Granted
+                                {grantedCount} Granted
                             </span>
                         </div>
 
@@ -435,20 +590,10 @@ export default function RolesManagementPage() {
                             </div>
                         ) : (
                             <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
-                                {Object.keys(groupedPermissions)
-                                    .filter((moduleName) => {
-                                        if (isSuperAdmin) return true;
-                                        if (['USERS', 'ROLES'].includes(moduleName)) return true;
-                                        const tenantModules = user?.tenantEnabledModules || user?.tenant?.enabledModules || [
-                                            'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY', 'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS'
-                                        ];
-                                        return tenantModules.includes(moduleName);
-                                    })
-                                    .map((moduleName) => {
-                                    const perms = groupedPermissions[moduleName];
-                                    const modulePermIds = perms.map((p) => p._id);
-                                    const allSelected = modulePermIds.every((id) => selectedPermissionIds.includes(id));
-                                    const someSelected = modulePermIds.some((id) => selectedPermissionIds.includes(id));
+                                {visibleModules.map((moduleName) => {
+                                    const perms = groupedPermissions[moduleName] || [];
+                                    const moduleKeys = perms.map((p) => `${p.module.trim().toUpperCase()}:${p.action.trim().toUpperCase()}`);
+                                    const allSelected = moduleKeys.length > 0 && moduleKeys.every((k) => selectedPermissionKeys.includes(k));
 
                                     return (
                                         <div
@@ -457,29 +602,37 @@ export default function RolesManagementPage() {
                                         >
                                             {/* Module Row Header */}
                                             <div className="flex items-center justify-between border-b border-border pb-2">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="w-2 h-2 rounded-full bg-primary" />
-                                                    <span className="font-extrabold text-xs text-text-main uppercase tracking-wider">
-                                                        {MODULE_LABELS[moduleName] || moduleName}
-                                                    </span>
+                                                <div className="flex items-center gap-2.5">
+                                                    <span className="w-2 h-2 rounded-full bg-primary shrink-0" />
+                                                    <div>
+                                                        <span className="font-extrabold text-xs text-text-main uppercase tracking-wider block">
+                                                            {MODULE_DEFINITIONS[moduleName]?.label || MODULE_LABELS[moduleName] || moduleName}
+                                                        </span>
+                                                        {MODULE_DEFINITIONS[moduleName]?.subtitle && (
+                                                            <span className="text-[11px] text-text-muted font-normal block leading-tight">
+                                                                {MODULE_DEFINITIONS[moduleName].subtitle}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
 
                                                 <button
                                                     type="button"
                                                     onClick={() => handleToggleModulePermissions(moduleName)}
-                                                    className="text-[10px] font-bold text-primary hover:underline cursor-pointer"
+                                                    className="text-[10px] font-bold text-primary hover:underline cursor-pointer shrink-0"
                                                 >
                                                     {allSelected ? 'Clear All' : 'Select All'}
                                                 </button>
                                             </div>
 
                                             {/* Action Checkboxes Grid */}
-                                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                                                 {perms.map((p) => {
-                                                    const isChecked = selectedPermissionIds.includes(p._id);
+                                                    const permKey = `${p.module.trim().toUpperCase()}:${p.action.trim().toUpperCase()}`;
+                                                    const isChecked = selectedPermissionKeys.includes(permKey);
                                                     return (
                                                         <label
-                                                            key={p._id}
+                                                            key={p._id || permKey}
                                                             className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all select-none ${isChecked
                                                                     ? 'bg-primary/5 border-primary/40 text-text-main font-bold'
                                                                     : 'bg-app-bg border-border text-text-muted hover:border-primary/20'
@@ -488,7 +641,7 @@ export default function RolesManagementPage() {
                                                             <input
                                                                 type="checkbox"
                                                                 checked={isChecked}
-                                                                onChange={() => handleTogglePermission(p._id)}
+                                                                onChange={() => handleTogglePermission(permKey)}
                                                                 className="rounded border-border text-primary focus:ring-primary accent-primary cursor-pointer"
                                                             />
                                                             <span className="text-[11px] uppercase tracking-wider">
@@ -525,6 +678,60 @@ export default function RolesManagementPage() {
                     </div>
                 </form>
             </SlideOverPanel>
+
+            {/* Custom Role Deactivation Confirmation Modal */}
+            {deactivateModal.isOpen && (
+                <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    {/* Backdrop */}
+                    <div
+                        className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+                        onClick={() => setDeactivateModal({ isOpen: false, roleId: null, roleName: '', mode: 'delete' })}
+                    />
+
+                    {/* Modal Panel */}
+                    <div className="relative z-10 w-full max-w-md bg-card-bg border border-border rounded-2xl shadow-2xl p-6 font-sans animate-in zoom-in-95 duration-150">
+                        {/* Header */}
+                        <div className="flex items-start gap-3 mb-4">
+                            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-rose-100 border border-rose-200 flex items-center justify-center">
+                                <Lock size={18} className="text-rose-600" />
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-extrabold text-text-main">Deactivate Role?</h3>
+                                <p className="text-xs text-text-muted mt-0.5">
+                                    You are about to deactivate
+                                    <span className="font-bold text-text-main"> '{deactivateModal.roleName}'</span>.
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Warning body */}
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-5">
+                            <p className="text-xs font-semibold text-amber-800 leading-relaxed">
+                                ⚠️ Users currently assigned to this role will <span className="font-extrabold">keep their existing access</span> until they are manually reassigned to another active role.
+                            </p>
+                        </div>
+
+                        {/* Footer actions */}
+                        <div className="flex items-center justify-end gap-2.5">
+                            <button
+                                type="button"
+                                onClick={() => setDeactivateModal({ isOpen: false, roleId: null, roleName: '', mode: 'delete' })}
+                                className="px-4 py-2 border border-border rounded-lg text-xs font-semibold text-text-muted hover:text-text-main hover:bg-app-bg transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleConfirmDeactivate}
+                                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
+                            >
+                                <RotateCcw size={13} />
+                                Deactivate Role
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 }

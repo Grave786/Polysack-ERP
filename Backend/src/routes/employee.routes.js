@@ -15,67 +15,67 @@ router.use(authenticate);
 /**
  * @route   POST /api/employees
  * @desc    Create a new Employee
- * @access  Private (USERS:CREATE / MASTER_DATA:CREATE)
+ * @access  Private (HR:CREATE)
  */
-router.post('/', authenticate, checkPermission('USERS', 'CREATE'), createEmployee);
+router.post('/', authenticate, checkPermission('HR', 'CREATE'), createEmployee);
 
 /**
  * @route   GET /api/employees
  * @desc    Get all Employees for current tenant
- * @access  Private (USERS:READ / MASTER_DATA:READ)
+ * @access  Private (HR:READ)
  */
-router.get('/', authenticate, checkPermission('USERS', 'READ'), getEmployees);
+router.get('/', authenticate, checkPermission('HR', 'READ'), getEmployees);
 
 /**
  * @route   GET /api/employees/export
  * @desc    Export Employees to CSV
- * @access  Private (USERS:READ / MASTER_DATA:READ)
+ * @access  Private (HR:READ)
  */
-router.get('/export', authenticate, checkPermission('USERS', 'READ'), exportEmployeesCsv);
+router.get('/export', authenticate, checkPermission('HR', 'READ'), exportEmployeesCsv);
 
 /**
  * @route   GET /api/employees/export-csv
  * @desc    Export Employees to CSV (legacy alias)
- * @access  Private (USERS:READ / MASTER_DATA:READ)
+ * @access  Private (HR:READ)
  */
-router.get('/export-csv', authenticate, checkPermission('USERS', 'READ'), exportEmployeesCsv);
+router.get('/export-csv', authenticate, checkPermission('HR', 'READ'), exportEmployeesCsv);
 
 /**
  * @route   GET /api/employees/:id
  * @desc    Get Employee by ID
- * @access  Private (USERS:READ / MASTER_DATA:READ)
+ * @access  Private (HR:READ)
  */
-router.get('/:id', authenticate, checkPermission('USERS', 'READ'), getEmployeeById);
+router.get('/:id', authenticate, checkPermission('HR', 'READ'), getEmployeeById);
 
 /**
  * @route   PUT /api/employees/:id
  * @desc    Update Employee by ID
- * @access  Private (USERS:UPDATE / MASTER_DATA:UPDATE)
+ * @access  Private (HR:UPDATE)
  */
-router.put('/:id', authenticate, checkPermission('USERS', 'UPDATE'), updateEmployee);
+router.put('/:id', authenticate, checkPermission('HR', 'UPDATE'), updateEmployee);
 
 /**
  * @route   PATCH /api/employees/:id
  * @desc    Update Employee by ID (Partial)
- * @access  Private (USERS:UPDATE / MASTER_DATA:UPDATE)
+ * @access  Private (HR:UPDATE)
  */
-router.patch('/:id', authenticate, checkPermission('USERS', 'UPDATE'), updateEmployee);
+router.patch('/:id', authenticate, checkPermission('HR', 'UPDATE'), updateEmployee);
 
 /**
  * @route   DELETE /api/employees/:id
  * @desc    Soft delete Employee
- * @access  Private (USERS:DELETE / MASTER_DATA:DELETE)
+ * @access  Private (HR:DELETE)
  */
 const Employee = require('../models/employee.model');
 const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
 
-router.delete('/:id', authenticate, checkPermission('USERS', 'DELETE'), deleteEmployee);
+router.delete('/:id', authenticate, checkPermission('HR', 'DELETE'), deleteEmployee);
 
 /**
  * @route   POST /api/employees/bulk-delete
  * @desc    Bulk soft delete Employees
- * @access  Private (USERS:DELETE)
+ * @access  Private (HR:DELETE)
  */
-router.post('/bulk-delete', authenticate, checkPermission('USERS', 'DELETE'), createBulkDeleteHandler(Employee, { resourceName: 'Employees' }));
+router.post('/bulk-delete', authenticate, checkPermission('HR', 'DELETE'), createBulkDeleteHandler(Employee, { resourceName: 'Employees' }));
 
 module.exports = router;

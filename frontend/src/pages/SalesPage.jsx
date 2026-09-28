@@ -24,6 +24,7 @@ export default function SalesPage() {
     const salesOrderColumns = [
         {
             header: 'SO NUMBER',
+            exportValue: (row) => row.soNumber || '',
             render: (row) => (
                 <button
                     type="button"
@@ -37,6 +38,7 @@ export default function SalesPage() {
         },
         {
             header: 'CUSTOMER / BUYER',
+            exportValue: (row) => row.customer?.companyName || row.customer?.name || row.customerName || '',
             render: (row) => {
                 const custName = row.customer?.companyName || row.customerName || '-';
                 return (
@@ -49,6 +51,7 @@ export default function SalesPage() {
         },
         {
             header: 'ORDER DATE',
+            exportValue: (row) => row.orderDate || '',
             render: (row) => (
                 <span className="font-mono text-text-muted text-xs">
                     {row.orderDate ? new Date(row.orderDate).toLocaleDateString() : '-'}
@@ -57,6 +60,7 @@ export default function SalesPage() {
         },
         {
             header: 'DELIVERY DUE',
+            exportValue: (row) => row.deliveryDue || '',
             render: (row) => (
                 <span className="font-mono font-semibold text-text-main text-xs">
                     {row.deliveryDue ? new Date(row.deliveryDue).toLocaleDateString() : '-'}
@@ -65,6 +69,11 @@ export default function SalesPage() {
         },
         {
             header: 'ORDERED BAGS',
+            exportValue: (row) => {
+                return Array.isArray(row.items)
+                    ? row.items.reduce((acc, it) => acc + Number(it.quantity || 0), 0)
+                    : (row.totalQuantity || 0);
+            },
             render: (row) => {
                 const totalBags = Array.isArray(row.items)
                     ? row.items.reduce((acc, it) => acc + Number(it.quantity || 0), 0)
@@ -78,6 +87,10 @@ export default function SalesPage() {
         },
         {
             header: 'GRAND TOTAL',
+            exportValue: (row) => {
+                const subtotal = row.totalAmount !== undefined ? row.totalAmount : (row.totalValue || 0);
+                return row.grandTotal !== undefined ? row.grandTotal : Math.round(subtotal * 1.18);
+            },
             render: (row) => {
                 const subtotal = row.totalAmount !== undefined ? row.totalAmount : (row.totalValue || 0);
                 const grandTotal = Math.round(subtotal * 1.18); // 18% GST estimate
@@ -90,6 +103,7 @@ export default function SalesPage() {
         },
         {
             header: 'STATUS',
+            exportValue: (row) => row.status || 'CONFIRMED',
             render: (row) => {
                 const st = row.status || 'CONFIRMED';
                 const isConfirmed = st === 'CONFIRMED';
@@ -163,6 +177,7 @@ export default function SalesPage() {
     const invoiceColumns = [
         {
             header: 'INVOICE #',
+            exportValue: (row) => row.invoiceNumber || '',
             render: (row) => (
                 <button
                     type="button"
@@ -176,6 +191,10 @@ export default function SalesPage() {
         },
         {
             header: 'SALES ORDER REF',
+            exportValue: (row) => {
+                const soObj = typeof row.salesOrder === 'object' ? row.salesOrder : null;
+                return soObj?.soNumber || row.soNumber || '';
+            },
             render: (row) => {
                 const soObj = typeof row.salesOrder === 'object' ? row.salesOrder : null;
                 const soNum = soObj?.soNumber || row.soNumber || '-';
@@ -188,6 +207,12 @@ export default function SalesPage() {
         },
         {
             header: 'CUSTOMER',
+            exportValue: (row) => {
+                if (row.customer?.companyName) return row.customer.companyName;
+                if (row.walkInCustomer?.name) return `${row.walkInCustomer.name} (Walk-in)`;
+                if (row.customerType === 'WALK_IN') return 'Walk-in Customer';
+                return row.customerName || 'Walk-in Customer';
+            },
             render: (row) => {
                 if (row.customer?.companyName) return <span className="font-extrabold text-text-main text-xs">{row.customer.companyName}</span>;
                 if (row.walkInCustomer?.name) return <span className="font-semibold text-text-main text-xs">{row.walkInCustomer.name} <span className="text-[10px] text-text-muted font-normal">(Walk-in)</span></span>;
@@ -198,6 +223,7 @@ export default function SalesPage() {
         },
         {
             header: 'INVOICE DATE',
+            exportValue: (row) => row.invoiceDate || '',
             render: (row) => (
                 <span className="font-mono text-text-muted text-xs">
                     {row.invoiceDate ? new Date(row.invoiceDate).toLocaleDateString() : '-'}
@@ -206,6 +232,7 @@ export default function SalesPage() {
         },
         {
             header: 'GRAND TOTAL',
+            exportValue: (row) => (row.grandTotal !== undefined ? row.grandTotal : (row.totalAmount || 0)),
             render: (row) => (
                 <span className="font-mono font-extrabold text-text-main text-xs">
                     {row.grandTotal !== undefined ? `₹${row.grandTotal.toLocaleString()}` : '-'}
@@ -214,6 +241,7 @@ export default function SalesPage() {
         },
         {
             header: 'PAYMENT STATUS',
+            exportValue: (row) => row.paymentStatus || 'UNPAID',
             render: (row) => {
                 const isPaid = row.paymentStatus === 'PAID';
                 const isPartial = row.paymentStatus === 'PARTIALLY_PAID';

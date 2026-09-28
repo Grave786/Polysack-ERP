@@ -53,8 +53,14 @@ const OrderEnquirySchema = new mongoose.Schema({
 
     status: {
         type: String,
-        enum: ['Open', 'Confirmed', 'Lost'],
+        enum: ['Open', 'Confirmed', 'Lost', 'Pending Approval', 'Approved', 'Rejected'],
         default: 'Open'
+    },
+
+    approvalRemarks: {
+        type: String,
+        trim: true,
+        default: ''
     },
 
     soApprovalStatus: {
@@ -149,6 +155,16 @@ const OrderEnquirySchema = new mongoose.Schema({
     orderConfirmed: {
         type: Boolean,
         default: false
+    },
+    salesOrder: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SalesOrder',
+        default: null
+    },
+    salesOrderNo: {
+        type: String,
+        trim: true,
+        default: ''
     },
     expectedDeliveryDate: {
         type: Date,

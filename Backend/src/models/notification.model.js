@@ -9,7 +9,7 @@ const NotificationSchema = new mongoose.Schema({
     type: {
         type: String,
         required: [true, 'Notification type is required'],
-        enum: ['LOW_STOCK', 'PO_APPROVAL', 'STOCK_ALERT', 'DISPATCH_ALERT', 'SYSTEM']
+        enum: ['LOW_STOCK', 'PO_APPROVAL', 'STOCK_ALERT', 'DISPATCH_ALERT', 'SYSTEM', 'APPROVAL_REQUEST', 'APPROVAL_REMINDER', 'APPROVAL_DECISION']
     },
     title: {
         type: String,
@@ -28,7 +28,7 @@ const NotificationSchema = new mongoose.Schema({
     },
     module: {
         type: String,
-        enum: ['INVENTORY', 'PROCUREMENT', 'PRODUCTION', 'SALES', 'QUALITY', 'SYSTEM'],
+        enum: ['INVENTORY', 'PROCUREMENT', 'PRODUCTION', 'SALES', 'QUALITY', 'SYSTEM', 'APPROVALS'],
         default: 'INVENTORY'
     },
     data: {

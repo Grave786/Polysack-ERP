@@ -75,6 +75,10 @@ const CustomerSchema = new mongoose.Schema({
             message: '{VALUE} is not a valid customer status.'
         }
     },
+    sourceLeadId: {
+        type: String,
+        trim: true
+    },
     isActive: {
         type: Boolean,
         default: true
@@ -91,4 +95,119 @@ CustomerSchema.index(
     { unique: true, partialFilterExpression: { gstin: { $type: 'string' } } }
 );
 
-module.exports = mongoose.model('Customer', CustomerSchema);
+// Atomic per-tenant counter schema for customer codes
+const CustomerCounterSchema = new mongoose.Schema({
+    tenant: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        required: true,
+        unique: true
+    },
+    seq: {
+        type: Number,
+        default: 0
+    }
+}, { timestamps: true });
+
+CustomerCounterSchema.index({ tenant: 1 }, { unique: true });
+
+const CustomerCounter = mongoose.models.CustomerCounter || mongoose.model('CustomerCounter', CustomerCounterSchema);
+
+/**
+ * Shared helper: Find highest existing CUST number for tenant across ALL records (including soft-deleted).
+ */
+const getHighestExistingCustomerNumber = async (tenantObjectId) => {
+    // Explicitly query without isActive filter so soft-deleted records are included (Requirement 1a & 2)
+    const existingDocs = await mongoose.model('Customer').find(
+        { tenant: tenantObjectId, code: { $regex: /^CUST-\d+$/ } },
+        { code: 1 }
+    ).lean();
+
+    let maxNum = 0;
+    for (const doc of existingDocs) {
+        if (!doc.code) continue;
+        const match = /^CUST-(\d+)$/.exec(doc.code);
+        if (match) {
+            const val = parseInt(match[1], 10);
+            if (!isNaN(val) && val > maxNum) {
+                maxNum = val;
+            }
+        }
+    }
+    return maxNum;
+};
+
+/**
+ * Shared helper: Atomically generate sequential customer code per tenant.
+ * Format: "CUST-" + 3-digit zero-padded number (CUST-001 ... CUST-999), then CUST-1000+.
+ * Includes soft-deleted customers when checking highest code, and catches counter up if behind.
+ */
+const generateNextCustomerCode = async (tenantId) => {
+    const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
+    const maxExisting = await getHighestExistingCustomerNumber(tenantObjectId);
+
+    // Atomically ensure counter exists and is at least maxExisting
+    let counter = await CustomerCounter.findOne({ tenant: tenantObjectId });
+    if (!counter) {
+        try {
+            counter = await CustomerCounter.findOneAndUpdate(
+                { tenant: tenantObjectId },
+                { $setOnInsert: { seq: maxExisting } },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            );
+        } catch (e) {
+            counter = await CustomerCounter.findOne({ tenant: tenantObjectId });
+        }
+    } else if (counter.seq < maxExisting) {
+        // Atomic catch-up: counter is behind existing records (Requirement 2)
+        await CustomerCounter.updateOne(
+            { tenant: tenantObjectId, seq: { $lt: maxExisting } },
+            { $set: { seq: maxExisting } }
+        );
+    }
+
+    const updated = await CustomerCounter.findOneAndUpdate(
+        { tenant: tenantObjectId },
+        { $inc: { seq: 1 } },
+        { new: true, upsert: true }
+    );
+
+    let seq = updated.seq;
+    if (seq <= maxExisting) {
+        seq = maxExisting + 1;
+        await CustomerCounter.updateOne(
+            { tenant: tenantObjectId },
+            { $set: { seq } }
+        );
+    }
+
+    const formattedSeq = seq < 1000 ? String(seq).padStart(3, '0') : String(seq);
+    return `CUST-${formattedSeq}`;
+};
+
+/**
+ * Preview next customer code without incrementing sequence
+ */
+const peekNextCustomerCode = async (tenantId) => {
+    const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
+    const maxExisting = await getHighestExistingCustomerNumber(tenantObjectId);
+    const counter = await CustomerCounter.findOne({ tenant: tenantObjectId }).lean();
+
+    const currentSeq = counter ? Math.max(counter.seq, maxExisting) : maxExisting;
+    const nextNum = currentSeq + 1;
+    const formattedSeq = nextNum < 1000 ? String(nextNum).padStart(3, '0') : String(nextNum);
+    return `CUST-${formattedSeq}`;
+};
+
+const Customer = mongoose.models.Customer || mongoose.model('Customer', CustomerSchema);
+
+Customer.CustomerCounter = CustomerCounter;
+Customer.generateNextCustomerCode = generateNextCustomerCode;
+Customer.peekNextCustomerCode = peekNextCustomerCode;
+
+module.exports = Customer;
+module.exports.Customer = Customer;
+module.exports.CustomerCounter = CustomerCounter;
+module.exports.generateNextCustomerCode = generateNextCustomerCode;
+module.exports.peekNextCustomerCode = peekNextCustomerCode;
+

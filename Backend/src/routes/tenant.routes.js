@@ -13,16 +13,16 @@ router.get('/', authenticate, checkPermission('USERS', 'READ'), getTenantsList);
 /**
  * @route   GET /api/tenants/profile
  * @desc    Get active tenant profile & GST configuration
- * @access  Private
+ * @access  Private (COMPANY_SETTINGS:READ)
  */
-router.get('/profile', authenticate, getTenantProfile);
+router.get('/profile', authenticate, checkPermission('COMPANY_SETTINGS', 'READ'), getTenantProfile);
 
 /**
  * @route   PUT /api/tenants/profile
  * @desc    Update active tenant profile & GST configuration
- * @access  Private
+ * @access  Private (COMPANY_SETTINGS:UPDATE)
  */
-router.put('/profile', authenticate, updateTenantProfile);
+router.put('/profile', authenticate, checkPermission('COMPANY_SETTINGS', 'UPDATE'), updateTenantProfile);
 
 /**
  * @route   POST /api/tenants

@@ -22,12 +22,8 @@ export default function CreateCustomerModal({ isOpen, onClose, onSuccess, initia
 
     useEffect(() => {
         if (isOpen) {
-            const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-            const prefix = initialData?.companyName || initialData?.company || 'CUST';
-            const cleanPrefix = prefix.replace(/[^a-zA-Z]/g, '').slice(0, 4).toUpperCase() || 'CUST';
-
             setForm({
-                code: `${cleanPrefix}-${randomSuffix}`,
+                code: 'Loading...',
                 companyName: initialData?.companyName || initialData?.company || '',
                 contactPerson: initialData?.contactPerson || initialData?.name || '',
                 phone: initialData?.phone || '',
@@ -39,21 +35,58 @@ export default function CreateCustomerModal({ isOpen, onClose, onSuccess, initia
                 panNumber: initialData?.panNumber || '',
                 paymentTerms: initialData?.paymentTerms || ''
             });
+
+            axiosInstance.get('/customers/next-code')
+                .then((res) => {
+                    if (res.data?.data?.nextCode) {
+                        setForm((prev) => ({ ...prev, code: res.data.data.nextCode }));
+                    }
+                })
+                .catch(() => {
+                    setForm((prev) => ({ ...prev, code: '' }));
+                });
         }
     }, [isOpen, initialData]);
+
+    const isNslConfirmed = Boolean(
+        initialData?.isConfirmed ||
+        initialData?.orderConfirmed ||
+        initialData?.nslStatus === 'Confirmed' ||
+        initialData?.salesOrderNo
+    );
+    const isNslPending = Boolean(
+        initialData?.isPendingApproval ||
+        initialData?.nslStatus === 'Pending Approval' ||
+        initialData?.nslApprovalStatus === 'Pending Approval'
+    );
+    const isNslRejected = Boolean(
+        initialData?.isRejected ||
+        initialData?.nslStatus === 'Rejected' ||
+        initialData?.nslApprovalStatus === 'Rejected'
+    );
+    const isNslBlocked = Boolean(initialData?.sourceLeadId) && (isNslPending || isNslRejected || isNslConfirmed);
+    const nslBlockedTooltip = isNslConfirmed
+        ? 'Sales Order already generated for this enquiry'
+        : isNslPending
+            ? 'NSL is waiting for Tenant Admin approval'
+            : 'NSL was rejected';
 
     const handleCustomerSubmit = async (e) => {
         if (e && e.preventDefault) e.preventDefault();
         if (isSubmitting) return;
-        if (!form.code.trim() || !form.companyName.trim()) {
-            toast.error('Customer Code and Company Name are required.');
+        if (isNslBlocked) {
+            toast.error(nslBlockedTooltip);
+            return;
+        }
+        if (!form.companyName.trim()) {
+            toast.error('Company Name is required.');
             return;
         }
 
         try {
             setIsSubmitting(true);
             const payload = {
-                code: form.code.trim().toUpperCase(),
+                code: form.code && !form.code.includes('Loading') ? form.code.trim().toUpperCase() : undefined,
                 companyName: form.companyName.trim(),
                 contactPerson: form.contactPerson.trim() || undefined,
                 phone: form.phone.trim() || undefined,
@@ -64,6 +97,7 @@ export default function CreateCustomerModal({ isOpen, onClose, onSuccess, initia
                 creditLimit: Number(form.creditLimit) || 0,
                 panNumber: form.panNumber ? form.panNumber.trim().toUpperCase() : undefined,
                 paymentTerms: form.paymentTerms ? form.paymentTerms.trim() : undefined,
+                sourceLeadId: initialData?.sourceLeadId || initialData?.nslNumber || undefined,
                 status: 'ACTIVE_CUSTOMER',
                 isActive: true
             };
@@ -74,9 +108,9 @@ export default function CreateCustomerModal({ isOpen, onClose, onSuccess, initia
                 const custId = customerData._id || customerData.id;
                 const isExisting = res.status === 200 || res.data?.message === 'Existing customer used';
                 if (isExisting) {
-                    toast.success(`Existing customer '${customerData.companyName}' selected`);
+                    toast.success(`Existing customer '${customerData.companyName}' (${customerData.code || ''}) selected`);
                 } else {
-                    toast.success(`Customer '${customerData.companyName}' created successfully!`);
+                    toast.success(`Customer '${customerData.companyName}' (${customerData.code || ''}) created successfully!`);
                 }
                 if (onSuccess) {
                     onSuccess(customerData, custId);
@@ -87,24 +121,8 @@ export default function CreateCustomerModal({ isOpen, onClose, onSuccess, initia
             }
         } catch (err) {
             console.error('Error creating customer:', err);
-            if (err.response?.status === 400 || err.response?.status === 409) {
-                try {
-                    const fallbackRes = await axiosInstance.get(`/customers?search=${encodeURIComponent(form.companyName.trim())}&limit=1`);
-                    if (fallbackRes.data?.data?.[0]) {
-                        const existingCustomer = fallbackRes.data.data[0];
-                        const custId = existingCustomer._id || existingCustomer.id;
-                        toast.success(`Existing customer '${existingCustomer.companyName}' selected`);
-                        if (onSuccess) {
-                            onSuccess(existingCustomer, custId);
-                        }
-                        onClose();
-                        return;
-                    }
-                } catch {
-                    // ignore fallback failure
-                }
-            }
-            toast.error(err.response?.data?.message || 'Failed to create customer');
+            const serverMsg = err.response?.data?.message || err.response?.data?.error;
+            toast.error(serverMsg || 'Failed to create Customer');
         } finally {
             setIsSubmitting(false);
         }
@@ -126,13 +144,12 @@ export default function CreateCustomerModal({ isOpen, onClose, onSuccess, initia
             <form onSubmit={handleSubmit} className="space-y-4 font-sans text-xs">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                        <label className={lbl}>Customer Code *</label>
+                        <label className={lbl}>Customer Code (Auto-generated)</label>
                         <input
                             type="text"
-                            required
-                            value={form.code}
-                            onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
-                            className={inp}
+                            readOnly
+                            value={form.code || 'Auto-generated on save'}
+                            className={`${inp} bg-muted cursor-not-allowed text-text-muted font-mono`}
                             placeholder="e.g. CUST-001"
                         />
                     </div>
@@ -254,14 +271,20 @@ export default function CreateCustomerModal({ isOpen, onClose, onSuccess, initia
                     >
                         Cancel
                     </button>
-                    <button
-                        type="submit"
-                        disabled={isSubmitting}
-                        className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                    >
-                        <UserCheck size={15} />
-                        <span>{isSubmitting ? 'Saving Customer...' : 'Save & Continue to Sales Order'}</span>
-                    </button>
+                    <div title={isNslBlocked ? nslBlockedTooltip : undefined}>
+                        <button
+                            type="submit"
+                            disabled={isSubmitting || isNslBlocked}
+                            className={`px-5 py-2.5 font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 ${
+                                isNslBlocked
+                                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-70'
+                                    : 'bg-primary hover:bg-primary-hover text-sidebar-bg cursor-pointer disabled:opacity-50'
+                            }`}
+                        >
+                            <UserCheck size={15} />
+                            <span>{isSubmitting ? 'Saving Customer...' : 'Save & Continue to Sales Order'}</span>
+                        </button>
+                    </div>
                 </div>
             </form>
         </SlideOverPanel>

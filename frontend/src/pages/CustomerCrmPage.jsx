@@ -209,7 +209,7 @@ export default function CustomerCrmPage() {
 
     // Interaction form
     const [interactionForm, setInteractionForm] = useState({
-        customer: '', customerId: '', interactionType: 'CALL', subject: '',
+        customer: '', customerId: '', interactionType: 'Phone Call', subject: '',
         date: TODAY, interactionDate: TODAY, assignedExecutive: '', status: 'OPEN', notes: '', nextFollowUpDate: ''
     });
 
@@ -221,7 +221,7 @@ export default function CustomerCrmPage() {
             setInteractionForm({
                 customer: custId,
                 customerId: custId,
-                interactionType: editingInteraction.interactionType || 'CALL',
+                interactionType: editingInteraction.interactionType || 'Phone Call',
                 interactionDate: editingInteraction.date ? new Date(editingInteraction.date).toISOString().split('T')[0] : (editingInteraction.interactionDate ? new Date(editingInteraction.interactionDate).toISOString().split('T')[0] : TODAY),
                 date: editingInteraction.date ? new Date(editingInteraction.date).toISOString().split('T')[0] : TODAY,
                 subject: editingInteraction.subject || '',
@@ -234,7 +234,7 @@ export default function CustomerCrmPage() {
             setInteractionForm({
                 customer: customers[0]?._id || '',
                 customerId: customers[0]?._id || '',
-                interactionType: 'CALL',
+                interactionType: 'Phone Call',
                 subject: '',
                 date: TODAY,
                 interactionDate: TODAY,
@@ -312,8 +312,17 @@ export default function CustomerCrmPage() {
             nslRecord.description || nslRecord.remarks || ''
         ].filter(Boolean).join(' | ');
 
+        const isNslConfirmed = nslRecord.status === 'Confirmed' || nslRecord.orderConfirmed || Boolean(nslRecord.salesOrderNo) || Boolean(nslRecord.salesOrder);
+
         return {
             nslId: nslRecord._id,
+            nslStatus: nslRecord.status,
+            nslApprovalStatus: nslRecord.soApprovalStatus,
+            isPendingApproval: nslRecord.status === 'Pending Approval' || nslRecord.soApprovalStatus === 'Pending Approval',
+            isRejected: nslRecord.status === 'Rejected' || nslRecord.soApprovalStatus === 'Rejected',
+            isConfirmed: isNslConfirmed,
+            orderConfirmed: Boolean(nslRecord.orderConfirmed),
+            salesOrderNo: nslRecord.salesOrderNo || '',
             customer: customerId,
             customerId: customerId,
             notes: specSummary,
@@ -329,7 +338,14 @@ export default function CustomerCrmPage() {
         };
     }, []);
 
-    const handleGenerateSalesOrder = useCallback((nslRecord) => {
+    const handleGenerateSalesOrder = useCallback(async (nslRecord) => {
+        const isConfirmed = nslRecord.status === 'Confirmed' || nslRecord.orderConfirmed || Boolean(nslRecord.salesOrderNo) || Boolean(nslRecord.salesOrder);
+        if (isConfirmed) {
+            toast.error('Sales Order already generated for this enquiry');
+            setConvertingNslId(null);
+            return;
+        }
+
         setConvertingNslId(nslRecord._id);
         const isExisting = nslRecord.customerType === 'Existing' || Boolean(nslRecord.customerRef || nslRecord.customer);
 
@@ -338,31 +354,81 @@ export default function CustomerCrmPage() {
             setSalesOrderInitialData(buildSalesOrderPayloadFromNsl(nslRecord, custId));
             setIsSalesOrderModalOpen(true);
         } else {
-            // New Prospect: Open CreateCustomerModal with prospect details pre-filled
+            // Check if prospect matches an existing customer by GSTIN or company name (Requirement 5)
+            const prospectGstin = (nslRecord.newCustomerDetails?.gstin || '').trim();
+            const prospectCompany = (nslRecord.newCustomerDetails?.company || '').trim();
+            let matchedCustomer = null;
+
+            if (prospectGstin || prospectCompany) {
+                try {
+                    const query = prospectGstin ? `search=${encodeURIComponent(prospectGstin)}` : `search=${encodeURIComponent(prospectCompany)}`;
+                    const res = await axiosInstance.get(`/customers?${query}&limit=10`);
+                    if (res.data?.data && Array.isArray(res.data.data)) {
+                        if (prospectGstin) {
+                            matchedCustomer = res.data.data.find(c => (c.gstin || '').toUpperCase() === prospectGstin.toUpperCase());
+                        }
+                        if (!matchedCustomer && prospectCompany) {
+                            matchedCustomer = res.data.data.find(c => (c.companyName || '').toLowerCase() === prospectCompany.toLowerCase());
+                        }
+                    }
+                } catch (err) {
+                    console.error('Failed to match existing customer for NSL conversion:', err);
+                }
+            }
+
+            if (matchedCustomer) {
+                const matchedId = matchedCustomer._id || matchedCustomer.id;
+                toast.success(`Matched existing customer '${matchedCustomer.companyName}' (${matchedCustomer.code})`);
+                setSalesOrderInitialData(buildSalesOrderPayloadFromNsl(nslRecord, matchedId));
+                setIsSalesOrderModalOpen(true);
+                return;
+            }
+
+            // New Prospect: Open CreateCustomerModal with prospect details pre-filled (Requirement 6)
+            const isNslPending = nslRecord.status === 'Pending Approval' || nslRecord.soApprovalStatus === 'Pending Approval';
+            const isNslRejected = nslRecord.status === 'Rejected' || nslRecord.soApprovalStatus === 'Rejected';
+            const isNslConfirmedLead = nslRecord.status === 'Confirmed' || nslRecord.orderConfirmed || Boolean(nslRecord.salesOrderNo) || Boolean(nslRecord.salesOrder);
+
             setPendingNslForConversion(nslRecord);
             setCustomerModalInitialData({
                 companyName: nslRecord.newCustomerDetails?.company || '',
                 contactPerson: nslRecord.newCustomerDetails?.name || nslRecord.contactPerson || '',
                 phone: nslRecord.newCustomerDetails?.phone || nslRecord.contactNumber || '',
-                email: nslRecord.newCustomerDetails?.email || ''
+                email: nslRecord.newCustomerDetails?.email || '',
+                gstin: nslRecord.newCustomerDetails?.gstin || '',
+                sourceLeadId: nslRecord.nslNumber || nslRecord._id,
+                nslStatus: nslRecord.status,
+                nslApprovalStatus: nslRecord.soApprovalStatus,
+                isPendingApproval: isNslPending,
+                isRejected: isNslRejected,
+                isConfirmed: isNslConfirmedLead,
+                orderConfirmed: Boolean(nslRecord.orderConfirmed),
+                salesOrderNo: nslRecord.salesOrderNo || ''
             });
             setIsCreateCustomerModalOpen(true);
         }
     }, [buildSalesOrderPayloadFromNsl]);
 
     const handleGenerateSO = useCallback(async (row) => {
+        const isConfirmed = row.status === 'Confirmed' || row.orderConfirmed || Boolean(row.salesOrderNo) || Boolean(row.salesOrder);
+        if (isConfirmed) {
+            toast.error('Sales Order already generated for this enquiry');
+            return;
+        }
+        const isPending = row.status === 'Pending Approval' || row.soApprovalStatus === 'Pending Approval';
+        const isRejected = row.status === 'Rejected' || row.soApprovalStatus === 'Rejected';
+        if (isPending) {
+            toast.error('NSL is waiting for Tenant Admin approval');
+            return;
+        }
+        if (isRejected) {
+            toast.error(row.approvalRemarks ? `NSL was rejected: ${row.approvalRemarks}` : 'NSL was rejected');
+            return;
+        }
         if (convertingNslId === row._id) return;
         setConvertingNslId(row._id);
-        if (row.soApprovalStatus === 'Pending Approval' && user?.role === 'Tenant Admin') {
-            try {
-                await axiosInstance.patch(`/crm/enquiries/${row._id}/so-approval-status`, { status: 'Approved' });
-                setRefreshKey((k) => k + 1);
-            } catch (err) {
-                console.error('Failed to auto-approve SO status:', err);
-            }
-        }
         handleGenerateSalesOrder(row);
-    }, [user?.role, handleGenerateSalesOrder, convertingNslId]);
+    }, [handleGenerateSalesOrder, convertingNslId]);
 
     const requestSOApproval = useCallback(async (id) => {
         try {
@@ -381,12 +447,27 @@ export default function CustomerCrmPage() {
         setIsCreateCustomerModalOpen(false);
         const newCustId = explicitId || newCustomer?._id || newCustomer?.id;
         if (newCustId && pendingNslForConversion) {
+            const isConfirmed = pendingNslForConversion.status === 'Confirmed' || pendingNslForConversion.orderConfirmed || Boolean(pendingNslForConversion.salesOrderNo) || Boolean(pendingNslForConversion.salesOrder);
+            if (isConfirmed) {
+                toast.error('Sales Order already generated for this enquiry');
+                setPendingNslForConversion(null);
+                setConvertingNslId(null);
+                return;
+            }
             setConvertingNslId(pendingNslForConversion._id);
             setSalesOrderInitialData(buildSalesOrderPayloadFromNsl(pendingNslForConversion, newCustId));
             setPendingNslForConversion(null);
             setIsSalesOrderModalOpen(true);
             toast.success('Customer ready! Opening Sales Order configuration.');
         }
+        axiosInstance.get('/customers?isActive=true&limit=200')
+            .then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data)) {
+                    setCustomers(res.data.data);
+                }
+            })
+            .catch(() => {});
+        setRefreshKey((p) => p + 1);
     }, [pendingNslForConversion, buildSalesOrderPayloadFromNsl]);
 
     // Auto-generate descriptive summary for Order Enquiry / NSL
@@ -574,7 +655,7 @@ export default function CustomerCrmPage() {
                 interactionType: interactionForm.interactionType,
                 subject: interactionForm.subject.trim(),
                 date: interactionForm.date || interactionForm.interactionDate || new Date(),
-                assignedExecutive: interactionForm.assignedExecutive || undefined,
+                assignedExecutive: interactionForm.assignedExecutive || null,
                 status: interactionForm.status,
                 notes: interactionForm.notes.trim(),
                 nextFollowUpDate: interactionForm.nextFollowUpDate || undefined
@@ -591,7 +672,7 @@ export default function CustomerCrmPage() {
                 toast.success(editingInteraction ? 'Customer interaction updated!' : 'Customer interaction logged successfully!');
                 setIsInteractionDrawerOpen(false);
                 setEditingInteraction(null);
-                setInteractionForm({ customer: customers[0]?._id || '', customerId: customers[0]?._id || '', interactionType: 'CALL', subject: '', date: TODAY, interactionDate: TODAY, assignedExecutive: users[0]?._id || '', status: 'OPEN', notes: '', nextFollowUpDate: '' });
+                setInteractionForm({ customer: customers[0]?._id || '', customerId: customers[0]?._id || '', interactionType: 'Phone Call', subject: '', date: TODAY, interactionDate: TODAY, assignedExecutive: users[0]?._id || '', status: 'OPEN', notes: '', nextFollowUpDate: '' });
                 setRefreshKey((p) => p + 1);
             }
         } catch (err) {
@@ -855,11 +936,15 @@ export default function CustomerCrmPage() {
     const followUpColumns = [
         {
             header: 'CUSTOMER',
+            exportValue: (row) => {
+                const c = typeof row.customer === 'object' ? row.customer : null;
+                return c?.companyName || row.customerName || '';
+            },
             render: (row) => {
                 const c = typeof row.customer === 'object' ? row.customer : null;
                 return (
                     <div className="font-sans leading-tight">
-                        <div className="font-extrabold text-text-main text-xs">{c?.companyName || row.customerName || 'Retail Client'}</div>
+                        <div className="font-extrabold text-text-main text-xs">{c?.companyName || row.customerName || '-'}</div>
                         {c?.code && <div className="text-[10px] font-mono text-text-muted">{c.code}</div>}
                     </div>
                 );
@@ -868,6 +953,7 @@ export default function CustomerCrmPage() {
         },
         {
             header: 'DATE',
+            exportValue: (row) => row.date || row.createdAt || '',
             render: (row) => {
                 const d = row.date || row.createdAt;
                 return <span className="font-mono text-xs text-text-main">{d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</span>;
@@ -876,6 +962,7 @@ export default function CustomerCrmPage() {
         },
         {
             header: 'INTERACTION TYPE',
+            exportValue: (row) => row.interactionType || 'Phone Call',
             render: (row) => {
                 const type = row.interactionType || 'Phone Call';
                 let s = 'bg-amber-50 text-amber-800 border-amber-200';
@@ -887,10 +974,15 @@ export default function CustomerCrmPage() {
         },
         {
             header: 'SUBJECT',
+            exportValue: (row) => row.subject || '',
             render: (row) => <span className="font-semibold text-text-main text-xs truncate max-w-xs block" title={row.subject}>{row.subject || '-'}</span>
         },
         {
             header: 'ASSIGNED EXECUTIVE',
+            exportValue: (row) => {
+                const ex = typeof row.assignedExecutive === 'object' ? row.assignedExecutive : null;
+                return ex?.name || row.assignedTo || 'Unassigned';
+            },
             render: (row) => {
                 const ex = typeof row.assignedExecutive === 'object' ? row.assignedExecutive : null;
                 return <span className="font-semibold text-text-main text-xs">{ex?.name || row.assignedTo || 'Unassigned'}</span>;
@@ -898,6 +990,7 @@ export default function CustomerCrmPage() {
         },
         {
             header: 'STATUS',
+            exportValue: (row) => row.status || 'Open',
             render: (row) => {
                 const st = (row.status || 'OPEN').toUpperCase();
                 let dot = 'bg-amber-500', badge = 'bg-amber-50 text-amber-800 border-amber-200', label = 'Open';
@@ -939,13 +1032,35 @@ export default function CustomerCrmPage() {
     ];
 
     const complaintColumns = [
-        { header: 'TICKET #', render: (row) => <span className="font-mono font-bold uppercase text-text-main text-xs">{row.ticketNumber || 'COMP-001'}</span>, sortable: true },
-        { header: 'CUSTOMER', render: (row) => { const c = typeof row.customer === 'object' ? row.customer : null; return <span className="font-extrabold text-text-main text-xs">{c?.companyName || '-'}</span>; } },
-        { header: 'COMPLAINT TYPE', render: (row) => <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-800 border border-rose-200">{row.complaintType || 'Quality Defect'}</span> },
-        { header: 'DESCRIPTION', render: (row) => <span className="text-xs text-text-muted max-w-xs block truncate" title={row.description}>{row.description || '-'}</span> },
-        { header: 'ASSIGNED EXECUTIVE', render: (row) => { const ex = typeof row.assignedExecutive === 'object' ? row.assignedExecutive : null; return <span className="font-semibold text-text-main text-xs">{ex?.name || 'Quality Lead'}</span>; } },
+        {
+            header: 'TICKET #',
+            exportValue: (row) => row.ticketNumber || '',
+            render: (row) => <span className="font-mono font-bold uppercase text-text-main text-xs">{row.ticketNumber || 'COMP-001'}</span>,
+            sortable: true
+        },
+        {
+            header: 'CUSTOMER',
+            exportValue: (row) => { const c = typeof row.customer === 'object' ? row.customer : null; return c?.companyName || row.customerName || ''; },
+            render: (row) => { const c = typeof row.customer === 'object' ? row.customer : null; return <span className="font-extrabold text-text-main text-xs">{c?.companyName || '-'}</span>; }
+        },
+        {
+            header: 'COMPLAINT TYPE',
+            exportValue: (row) => row.complaintType || 'Quality Defect',
+            render: (row) => <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-800 border border-rose-200">{row.complaintType || 'Quality Defect'}</span>
+        },
+        {
+            header: 'DESCRIPTION',
+            exportValue: (row) => row.description || '',
+            render: (row) => <span className="text-xs text-text-muted max-w-xs block truncate" title={row.description}>{row.description || '-'}</span>
+        },
+        {
+            header: 'ASSIGNED EXECUTIVE',
+            exportValue: (row) => { const ex = typeof row.assignedExecutive === 'object' ? row.assignedExecutive : null; return ex?.name || 'Quality Lead'; },
+            render: (row) => { const ex = typeof row.assignedExecutive === 'object' ? row.assignedExecutive : null; return <span className="font-semibold text-text-main text-xs">{ex?.name || 'Quality Lead'}</span>; }
+        },
         {
             header: 'STATUS',
+            exportValue: (row) => row.status || 'Open Ticket',
             render: (row) => {
                 const raw = row.status || 'Open Ticket';
                 const st = raw.toUpperCase();
@@ -993,6 +1108,13 @@ export default function CustomerCrmPage() {
     const enquiryColumns = [
         {
             header: 'CUSTOMER',
+            exportValue: (row) => {
+                const isNew = !row.customerRef || !row.customer || row.customerType === 'New';
+                const c = typeof row.customer === 'object' ? row.customer : (typeof row.customerRef === 'object' ? row.customerRef : null);
+                return isNew
+                    ? (row.newCustomerDetails?.company || row.newCustomerDetails?.name || 'New Prospect')
+                    : (c?.companyName || c?.name || '');
+            },
             render: (row) => {
                 const isNew = !row.customerRef || !row.customer || row.customerType === 'New';
                 const c = typeof row.customer === 'object' ? row.customer : (typeof row.customerRef === 'object' ? row.customerRef : null);
@@ -1016,6 +1138,7 @@ export default function CustomerCrmPage() {
         {
             header: 'CUSTOMER REQUIREMENT',
             title: 'CUSTOMER REQUIREMENT',
+            exportValue: (row) => row.description || row.remarks || '',
             render: (row) => {
                 const desc = row.description || row.remarks || '-';
                 return (
@@ -1027,14 +1150,16 @@ export default function CustomerCrmPage() {
         },
         {
             header: 'ENQUIRY DATE',
+            exportValue: (row) => row.enquiryDate || row.createdAt || '',
             render: (row) => {
                 const d = row.enquiryDate || row.createdAt;
-                return <span className="font-mono text-xs text-text-main">{d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</span>;
+                return <span className="font-mono text-xs text-text-main">{d ? new Date(d).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</span>;
             },
             sortable: true
         },
         {
             header: 'CATEGORY',
+            exportValue: (row) => row.productCategory || '',
             render: (row) => {
                 const cat = row.productCategory || '-';
                 const isPrint = cat === 'Print';
@@ -1047,6 +1172,7 @@ export default function CustomerCrmPage() {
         },
         {
             header: 'FABRIC / LAMINATION',
+            exportValue: (row) => [row.materialQualityFabric, row.fabricLaminationType].filter(Boolean).join(' / ') || '',
             render: (row) => (
                 <div className="text-xs leading-tight">
                     <div className="font-semibold text-text-main">{row.materialQualityFabric || '-'}</div>
@@ -1056,6 +1182,7 @@ export default function CustomerCrmPage() {
         },
         {
             header: 'TOTAL QTY',
+            exportValue: (row) => (row.totalOrderQuantity != null ? row.totalOrderQuantity : (row.orderQuantity != null ? row.orderQuantity : 0)),
             render: (row) => (
                 <span className="font-mono font-bold text-text-main text-xs">
                     {row.totalOrderQuantity != null ? row.totalOrderQuantity.toLocaleString('en-IN') : '-'}
@@ -1064,32 +1191,74 @@ export default function CustomerCrmPage() {
         },
         {
             header: 'STATUS',
+            exportValue: (row) => {
+                const isConfirmed = row.status === 'Confirmed' || row.orderConfirmed || Boolean(row.salesOrderNo) || Boolean(row.salesOrder) || ['Converted', 'SO Created', 'Closed - Won'].includes(row.status);
+                if (isConfirmed) return 'Confirmed';
+                return row.status || 'Open';
+            },
             render: (row) => {
-                const isConfirmed = row.status === 'Confirmed' || row.orderConfirmed;
+                const isConfirmed = row.status === 'Confirmed' || row.orderConfirmed || Boolean(row.salesOrderNo) || Boolean(row.salesOrder) || ['Converted', 'SO Created', 'Closed - Won'].includes(row.status);
+                const isRejected = row.status === 'Rejected' || row.soApprovalStatus === 'Rejected';
+                const isPending = row.status === 'Pending Approval' || row.soApprovalStatus === 'Pending Approval';
+                const isApproved = row.status === 'Approved' || row.soApprovalStatus === 'Approved';
+                const isLost = row.status === 'Lost';
+
+                // Priority: Confirmed (SO generated) > Rejected > Pending Approval > Approved > Open
                 if (isConfirmed) {
                     return (
-                        <div className="flex flex-col items-start gap-0.5">
-                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
                                 <CheckCircle2 size={10} /> Confirmed
-                            </div>
-                            {row.expectedDeliveryDate && (
-                                <span className="text-[10px] font-mono text-text-muted">
-                                    {new Date(row.expectedDeliveryDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                                </span>
-                            )}
+                            </span>
                         </div>
                     );
                 }
-                if (row.status === 'Lost') {
+
+                if (isRejected) {
                     return (
-                        <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
-                            <XCircle size={10} /> Lost
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-300" title={row.approvalRemarks || row.remarks || 'Rejected by Admin'}>
+                                <XCircle size={10} className="text-rose-600" /> Rejected
+                            </span>
                         </div>
                     );
                 }
+
+                if (isPending) {
+                    return (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-300" title="Awaiting Tenant Admin approval">
+                                <Clock size={10} className="animate-spin text-amber-600" /> Pending Approval
+                            </span>
+                        </div>
+                    );
+                }
+
+                if (isApproved) {
+                    return (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
+                                <CheckCircle2 size={10} className="text-emerald-600" /> Approved
+                            </span>
+                        </div>
+                    );
+                }
+
+                if (isLost) {
+                    return (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                                <XCircle size={10} /> Lost
+                            </span>
+                        </div>
+                    );
+                }
+
                 return (
-                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
-                        <Clock size={10} /> {row.status || 'Open'}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-300">
+                            {row.status || 'Open'}
+                        </span>
                     </div>
                 );
             }
@@ -1097,37 +1266,46 @@ export default function CustomerCrmPage() {
         {
             header: 'ACTIONS',
             render: (row) => {
+                const isConfirmed = row.status === 'Confirmed' || row.orderConfirmed || Boolean(row.salesOrderNo) || Boolean(row.salesOrder) || ['Converted', 'SO Created', 'Closed - Won'].includes(row.status);
+                const isNslPending = row.status === 'Pending Approval' || row.soApprovalStatus === 'Pending Approval';
+                const isNslRejected = row.status === 'Rejected' || row.soApprovalStatus === 'Rejected';
+                const soNumberDisplay = row.salesOrderNo || (typeof row.salesOrder === 'object' && row.salesOrder?.soNumber ? row.salesOrder.soNumber : '');
+
                 return (
                     <div className="flex items-center gap-1.5 flex-wrap">
-                        {/* If enquiry status is Converted, SO Created, Closed - Won, or Confirmed */}
-                        {['Converted', 'SO Created', 'Closed - Won', 'Confirmed'].includes(row.status) ? (
-                            <button 
-                                disabled 
-                                className="flex items-center gap-1 bg-gray-400 text-white px-2 py-1 rounded text-[10px] font-bold uppercase cursor-not-allowed"
+                        {isConfirmed ? (
+                            <span 
+                                className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-300 px-2 py-1 rounded text-[10px] font-bold uppercase cursor-default select-none"
+                                title="Sales Order already generated"
                             >
-                                SO Generated
-                            </button>
-                        ) : row.soApprovalStatus === 'Approved' || user?.role === 'Tenant Admin' ? (
-                            <button 
-                                onClick={() => handleGenerateSO(row)} 
-                                disabled={convertingNslId === row._id}
-                                className="flex items-center gap-1 bg-green-500 text-white px-2 py-1 rounded text-[10px] font-bold uppercase hover:bg-green-600 transition-colors disabled:opacity-50"
+                                SO Generated {soNumberDisplay ? `(${soNumberDisplay})` : ''}
+                            </span>
+                        ) : isNslPending ? (
+                            <button
+                                disabled
+                                title="NSL is waiting for Tenant Admin approval"
+                                className="flex items-center gap-1 bg-gray-300 text-gray-500 border border-gray-400 px-2 py-1 rounded text-[10px] font-bold uppercase cursor-not-allowed opacity-80"
                             >
-                                {row.soApprovalStatus === 'Pending Approval' && user?.role === 'Tenant Admin' ? 'Approve & Gen SO' : 'Generate SO'}
+                                GENERATE SO
                             </button>
-                        ) : row.soApprovalStatus === 'Pending Approval' ? (
-                            <button disabled className="flex items-center gap-1 bg-gray-400 text-white px-2 py-1 rounded text-[10px] font-bold uppercase cursor-not-allowed">
-                                Approval Pending
+                        ) : isNslRejected ? (
+                            <button
+                                disabled
+                                title={row.approvalRemarks ? `NSL was rejected: ${row.approvalRemarks}` : "NSL was rejected"}
+                                className="flex items-center gap-1 bg-gray-300 text-gray-500 border border-gray-400 px-2 py-1 rounded text-[10px] font-bold uppercase cursor-not-allowed opacity-80"
+                            >
+                                GENERATE SO
                             </button>
                         ) : (
                             <button 
-                                onClick={() => requestSOApproval(row._id)} 
-                                className="flex items-center gap-1 bg-yellow-500 text-white px-2 py-1 rounded text-[10px] font-bold uppercase hover:bg-yellow-600 transition-colors"
+                                onClick={() => handleGenerateSO(row)} 
+                                disabled={convertingNslId === row._id}
+                                className="flex items-center gap-1 bg-green-500 text-white px-2 py-1 rounded text-[10px] font-bold uppercase hover:bg-green-600 transition-colors disabled:opacity-50 cursor-pointer"
                             >
-                                Request SO Approval
+                                GENERATE SO
                             </button>
                         )}
-                        {!['Converted', 'SO Created', 'Closed - Won', 'Confirmed'].includes(row.status) && (
+                        {!['Converted', 'SO Created', 'Closed - Won', 'Confirmed', 'Rejected'].includes(row.status) && !row.orderConfirmed && (
                             <button
                                 type="button"
                                 title="Log Follow-up"
@@ -1173,7 +1351,7 @@ export default function CustomerCrmPage() {
 
     // ── Tab definitions — Order Enquiries is first/default ───────────────────
     const tabs = useMemo(() => [
-        { key: 'enquiries', label: 'Order Enquiries', resourcePath: '/crm/enquiries', columns: enquiryColumns, availableStatuses: ['Open', 'Confirmed', 'Lost'], defaultStatus: 'All Statuses' },
+        { key: 'enquiries', label: 'Order Enquiries', resourcePath: '/crm/enquiries', columns: enquiryColumns, availableStatuses: ['Open', 'Pending Approval', 'Approved', 'Rejected', 'Confirmed', 'Lost'], defaultStatus: 'All Statuses' },
         { 
             key: 'follow-ups', 
             label: 'Follow-up Logs', 
@@ -1258,12 +1436,12 @@ export default function CustomerCrmPage() {
                                 <div>
                                     <label className={lbl}>Interaction Type *</label>
                                     <select required value={interactionForm.interactionType} onChange={(e) => setInteractionForm({ ...interactionForm, interactionType: e.target.value })} className={sel}>
-                                        <option value="CALL">Phone Call</option>
-                                        <option value="EMAIL">Email Communication</option>
-                                        <option value="MEETING">In-Person Meeting</option>
-                                        <option value="VISIT">Factory Visit</option>
-                                        <option value="FOLLOW_UP">Follow Up</option>
-                                        <option value="OTHER">Other / Escalation</option>
+                                        <option value="Phone Call">Phone Call</option>
+                                        <option value="Email Communication">Email Communication</option>
+                                        <option value="In-Person Meeting">In-Person Meeting</option>
+                                        <option value="Site Visit">Site Visit</option>
+                                        <option value="Follow Up">Follow Up</option>
+                                        <option value="Other / Escalation">Other / Escalation</option>
                                     </select>
                                 </div>
                                 <div>
@@ -1475,7 +1653,7 @@ export default function CustomerCrmPage() {
                                                 <input
                                                     type="text"
                                                     required
-                                                    placeholder="e.g. Acme Polymers Ltd"
+                                                    placeholder="e.g. PolySack Packaging Pvt Ltd"
                                                     value={enquiryForm.newCustomerDetails?.company || ''}
                                                     onChange={(e) => {
                                                         const val = e.target.value;
@@ -1757,20 +1935,26 @@ export default function CustomerCrmPage() {
                                     </div>
                                     <div>
                                         <label className={lbl}>Order Confirmed?</label>
-                                        <div className="flex items-center gap-4 mt-2.5">
-                                            {[{ val: true, label: 'Yes — Confirmed' }, { val: false, label: 'No — Pending' }].map(({ val, label }) => (
-                                                <label key={String(val)} className="flex items-center gap-1.5 cursor-pointer">
-                                                    <input
-                                                        type="radio"
-                                                        name="orderConfirmed"
-                                                        checked={enquiryForm.orderConfirmed === val}
-                                                        onChange={() => setEnquiryForm((p) => ({ ...p, orderConfirmed: val, expectedDeliveryDate: val ? p.expectedDeliveryDate : '' }))}
-                                                        className="accent-primary"
-                                                    />
-                                                    <span className="font-semibold text-text-main">{label}</span>
-                                                </label>
-                                            ))}
-                                        </div>
+                                        {['Pending Approval', 'Rejected'].includes(editingEnquiry?.status) ? (
+                                            <div className="mt-1 text-[11px] text-amber-800 font-semibold bg-amber-50 p-2 rounded border border-amber-300">
+                                                Order confirmation disabled: this NSL is currently <span className="font-bold underline">{editingEnquiry.status}</span>. Tenant Admin approval is required before confirmation.
+                                            </div>
+                                        ) : (
+                                            <div className="flex items-center gap-4 mt-2.5">
+                                                {[{ val: true, label: 'Yes — Confirmed' }, { val: false, label: 'No — Pending' }].map(({ val, label }) => (
+                                                    <label key={String(val)} className="flex items-center gap-1.5 cursor-pointer">
+                                                        <input
+                                                            type="radio"
+                                                            name="orderConfirmed"
+                                                            checked={enquiryForm.orderConfirmed === val}
+                                                            onChange={() => setEnquiryForm((p) => ({ ...p, orderConfirmed: val, expectedDeliveryDate: val ? p.expectedDeliveryDate : '' }))}
+                                                            className="accent-primary"
+                                                        />
+                                                        <span className="font-semibold text-text-main">{label}</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
 
@@ -1949,18 +2133,7 @@ export default function CustomerCrmPage() {
                     setSalesOrderInitialData(null);
                     setConvertingNslId(null);
                 }}
-                onSuccess={async () => {
-                    const targetNslId = convertingNslId || salesOrderInitialData?.nslId;
-                    if (targetNslId) {
-                        try {
-                            await axiosInstance.put(`/crm/enquiries/${targetNslId}`, {
-                                status: 'Converted',
-                                orderConfirmed: true
-                            });
-                        } catch (err) {
-                            console.error('Failed to auto-update enquiry status:', err);
-                        }
-                    }
+                onSuccess={() => {
                     setIsSalesOrderModalOpen(false);
                     setSalesOrderInitialData(null);
                     setConvertingNslId(null);

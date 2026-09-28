@@ -5,6 +5,7 @@ const Customer = require('../models/customer.model');
 const FinishedGood = require('../models/finishedGood.model');
 const Machine = require('../models/machine.model');
 const Tenant = require('../models/tenant.model');
+const ProductionLog = require('../models/productionLog.model');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
 
 const ALL_8_STAGES = [
@@ -383,7 +384,7 @@ const advanceStage = async (req, res) => {
         });
     }
 
-    const { goodOutputQty, rejectedQty, notes } = req.body;
+    const { goodOutputQty, rejectedQty, wastageKg, returnToStore, notes } = req.body;
 
     const numGoodQty = Number(goodOutputQty || 0);
     const numRejectedQty = Number(rejectedQty || 0);
@@ -466,8 +467,36 @@ const advanceStage = async (req, res) => {
         // 1. Complete current stage
         currentStage.goodOutputQty = numGoodQty;
         currentStage.rejectedQty = finalRejectedQty;
+        if (wastageKg !== undefined) currentStage.wastageKg = Math.max(0, Number(wastageKg) || 0);
+        if (returnToStore !== undefined) currentStage.returnToStore = Math.max(0, Number(returnToStore) || 0);
         currentStage.status = 'COMPLETED';
         currentStage.completedAt = now;
+
+        // Calculate Total Input KG from Job Order Rolls (or fallback)
+        let totalIssuedMaterial = 0;
+        if (Array.isArray(workOrder.jobOrderDetails?.rolls)) {
+            totalIssuedMaterial = workOrder.jobOrderDetails.rolls.reduce(
+                (sum, r) => sum + Number(r.netWeight || r.grossWeight || r.totalQuantityKg || 0),
+                0
+            );
+        }
+
+        // Record production log for analytics & yield metrics
+        await ProductionLog.create([{
+            tenant: tenantId,
+            workOrder: workOrder._id,
+            stageName: currentStage.stageName,
+            stageSequence: currentStage.sequence,
+            goodOutput: numGoodQty,
+            goodOutputQty: numGoodQty,
+            rejectedQty: finalRejectedQty,
+            wastageKg: currentStage.wastageKg || 0,
+            returnToStore: currentStage.returnToStore || 0,
+            issuedMaterialKg: totalIssuedMaterial,
+            totalInputKg: totalIssuedMaterial,
+            performedBy: req.user?._id || req.user?.id,
+            date: now
+        }], sessionOption);
 
         let outputTxn = null;
 

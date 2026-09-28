@@ -4,7 +4,7 @@ import { useAuthStore } from '../../store/authStore';
 import GlobalSearchBar from './GlobalSearchBar';
 import { Building2, ChevronDown, ShieldCheck, Bell, BellOff, LogOut, Loader2, Check, Menu, User, Settings, Users, ShoppingCart, CheckCircle, AlertTriangle, CheckCheck, ExternalLink, X } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
-import { hasModulePermission, checkIsSuperAdmin } from '../../utils/permissionUtils';
+import { hasModulePermission, checkIsSuperAdmin, isTenantAdmin } from '../../utils/permissionUtils';
 import toast from 'react-hot-toast';
 
 // Helper to detect 24-character hexadecimal MongoDB ObjectId
@@ -51,7 +51,7 @@ export default function Topbar({ onToggleSidebar }) {
     const isSuperAdmin = checkIsSuperAdmin(user);
 
     // Module permission visibility checks
-    const canSeeCompanySettings = hasModulePermission(user, 'USERS') || hasModulePermission(user, 'TENANTS');
+    const canSeeCompanySettings = hasModulePermission(user, 'COMPANY_SETTINGS');
     const canSeeRoles = hasModulePermission(user, 'ROLES');
     const canSeeUsers = hasModulePermission(user, 'USERS');
 
@@ -88,7 +88,14 @@ export default function Topbar({ onToggleSidebar }) {
         }
         fetchNotifications();
         const interval = setInterval(fetchNotifications, 15000);
-        return () => clearInterval(interval);
+        const handleRefresh = () => fetchNotifications();
+        window.addEventListener('approval-count-changed', handleRefresh);
+        window.addEventListener('notification-read', handleRefresh);
+        return () => {
+            clearInterval(interval);
+            window.removeEventListener('approval-count-changed', handleRefresh);
+            window.removeEventListener('notification-read', handleRefresh);
+        };
     }, [isSuperAdmin]);
 
     const handleNotificationClick = async (notif) => {
@@ -108,8 +115,10 @@ export default function Topbar({ onToggleSidebar }) {
             navigate(notif.link);
         } else if (notif.type === 'LOW_STOCK') {
             navigate(`/inventory?tab=raw-materials&search=${encodeURIComponent(notif.data?.code || '')}`);
-        } else if (notif.type === 'PO_APPROVAL') {
-            navigate('/procurement');
+        } else if (notif.type === 'PO_APPROVAL' || notif.type === 'APPROVAL_REQUEST' || notif.type === 'APPROVAL_REMINDER') {
+            if (isTenantAdmin(user)) {
+                navigate(notif.data?.approvalId ? `/approvals?id=${notif.data.approvalId}` : '/approvals');
+            }
         }
     };
 
@@ -153,12 +162,14 @@ export default function Topbar({ onToggleSidebar }) {
     const [showNotificationDropdown, setShowNotificationDropdown] = useState(false);
     const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
 
-    const handleApprovePo = async (poId, poNum) => {
+    const handleApprovePo = async (targetId, poNum) => {
         try {
-            setIsApproving(poId);
-            const res = await axiosInstance.patch(`/purchase-orders/${poId}/status`, { status: 'SENT_TO_SUPPLIER' });
+            setIsApproving(targetId);
+            const res = await axiosInstance.post(`/approvals/${targetId}/approve`, { remarks: 'Approved from Notification Bell' });
             if (res.data?.success) {
                 toast.success(`Purchase Order ${poNum} approved & sent to supplier!`);
+                window.dispatchEvent(new CustomEvent('approval-count-changed'));
+                window.dispatchEvent(new CustomEvent('notification-read'));
                 fetchNotifications();
             }
         } catch (err) {
@@ -169,7 +180,45 @@ export default function Topbar({ onToggleSidebar }) {
         }
     };
 
-    const notificationCount = unreadCount;
+    const handleRejectPo = async (targetId, poNum) => {
+        const remarks = window.prompt(`Please enter mandatory rejection remarks for Purchase Order ${poNum}:`);
+        if (remarks === null) return;
+        if (!remarks.trim()) {
+            toast.error('Rejection remarks are mandatory.');
+            return;
+        }
+        try {
+            setIsApproving(targetId);
+            const res = await axiosInstance.post(`/approvals/${targetId}/reject`, { remarks: remarks.trim() });
+            if (res.data?.success) {
+                toast.success(`Purchase Order ${poNum} rejected.`);
+                window.dispatchEvent(new CustomEvent('approval-count-changed'));
+                window.dispatchEvent(new CustomEvent('notification-read'));
+                fetchNotifications();
+            }
+        } catch (err) {
+            console.error('Error rejecting PO:', err);
+            toast.error(err.response?.data?.message || 'Failed to reject PO');
+        } finally {
+            setIsApproving(null);
+        }
+    };
+
+    const isApprovalNotification = (notif) => {
+        return ['PO_APPROVAL', 'APPROVAL_REQUEST', 'APPROVAL_REMINDER', 'APPROVAL_DECISION'].includes(notif?.type) ||
+            notif?.module === 'APPROVALS' ||
+            Boolean(notif?.data?.approvalId);
+    };
+
+    const visibleNotifications = notifications.filter(notif => {
+        if (isApprovalNotification(notif)) {
+            return isTenantAdmin(user);
+        }
+        return true;
+    });
+
+    const visibleUnreadCount = visibleNotifications.filter(n => !n.isRead).length;
+    const notificationCount = visibleUnreadCount;
 
     return (
         <header className="h-16 bg-sidebar-bg border-b border-sidebar-hover flex items-center justify-between px-3 sm:px-6 text-sidebar-text-active font-sans gap-2 sm:gap-6 shadow-xs shrink-0 relative z-30">
@@ -228,14 +277,14 @@ export default function Topbar({ onToggleSidebar }) {
                                 <div className="flex items-center justify-between text-xs font-bold text-text-main mb-2.5 border-b border-border pb-2">
                                     <div className="flex items-center gap-2">
                                         <span className="uppercase tracking-wider">SYSTEM NOTIFICATIONS</span>
-                                        {unreadCount > 0 && (
+                                        {visibleUnreadCount > 0 && (
                                             <span className="px-2 py-0.5 bg-rose-500/15 text-rose-600 border border-rose-500/30 rounded-full text-[10px] font-extrabold">
-                                                {unreadCount} Unread
+                                                {visibleUnreadCount} Unread
                                             </span>
                                         )}
                                     </div>
 
-                                    {unreadCount > 0 && (
+                                    {visibleUnreadCount > 0 && (
                                         <button
                                             type="button"
                                             onClick={handleMarkAllRead}
@@ -248,7 +297,7 @@ export default function Topbar({ onToggleSidebar }) {
                                     )}
                                 </div>
 
-                                {notifications.length === 0 ? (
+                                {visibleNotifications.length === 0 ? (
                                     <div className="flex flex-col items-center justify-center py-7 text-center text-text-muted">
                                         <BellOff size={28} className="mb-2 opacity-40 text-text-muted" />
                                         <span className="font-semibold text-text-main">No notifications</span>
@@ -256,7 +305,7 @@ export default function Topbar({ onToggleSidebar }) {
                                     </div>
                                 ) : (
                                     <div className="space-y-2 max-h-80 overflow-y-auto pr-0.5">
-                                        {notifications.map((notif) => {
+                                        {visibleNotifications.map((notif) => {
                                             const isLowStock = notif.type === 'LOW_STOCK';
                                             const isPoApproval = notif.type === 'PO_APPROVAL';
 
@@ -315,23 +364,36 @@ export default function Topbar({ onToggleSidebar }) {
                                                         )}
 
                                                         {/* PO Approval Specific Actions */}
-                                                        {isPoApproval && (
+                                                        {isPoApproval && isTenantAdmin(user) && (
                                                             <div className="flex items-center justify-between gap-2 mt-2 pt-1.5 border-t border-amber-200/60">
                                                                 <span className="text-[10px] text-amber-800 font-semibold truncate">
                                                                     Supplier: {notif.data?.supplierName || 'Assigned Supplier'}
                                                                 </span>
 
-                                                                <button
-                                                                    type="button"
-                                                                    disabled={isApproving === (notif.data?.poId || notif._id)}
-                                                                    onClick={(e) => {
-                                                                        e.stopPropagation();
-                                                                        handleApprovePo(notif.data?.poId || notif._id, notif.data?.poNumber || 'PO');
-                                                                    }}
-                                                                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] rounded transition-all cursor-pointer shrink-0 shadow-2xs"
-                                                                >
-                                                                    {isApproving === (notif.data?.poId || notif._id) ? 'Approving...' : 'Approve PO'}
-                                                                </button>
+                                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={isApproving === (notif.data?.approvalId || notif.data?.poId || notif._id)}
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            handleRejectPo(notif.data?.approvalId || notif.data?.poId || notif._id, notif.data?.poNumber || 'PO');
+                                                                        }}
+                                                                        className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded transition-all cursor-pointer shadow-2xs"
+                                                                    >
+                                                                        Reject
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={isApproving === (notif.data?.approvalId || notif.data?.poId || notif._id)}
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            handleApprovePo(notif.data?.approvalId || notif.data?.poId || notif._id, notif.data?.poNumber || 'PO');
+                                                                        }}
+                                                                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] rounded transition-all cursor-pointer shadow-2xs"
+                                                                    >
+                                                                        {isApproving === (notif.data?.approvalId || notif.data?.poId || notif._id) ? 'Approving...' : 'Approve PO'}
+                                                                    </button>
+                                                                </div>
                                                             </div>
                                                         )}
                                                     </div>

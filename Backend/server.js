@@ -50,6 +50,8 @@ const superAdminRoutes = require('./src/routes/superAdmin.routes');
 const dashboardRoutes = require('./src/routes/dashboard.routes');
 const notificationRoutes = require('./src/routes/notification.routes');
 const materialReceiptRoutes = require('./src/routes/materialReceipt.routes');
+const approvalRoutes = require('./src/routes/approval.routes');
+const { startApprovalReminderScheduler } = require('./src/services/approval.service');
 
 const app = express();
 const allowedOrigins = [
@@ -90,11 +92,12 @@ const initializeSystem = async () => {
   }
 
   try {
+    const { ensurePermissions } = require('./src/controllers/role.controller');
+    await ensurePermissions();
     const count = await Permission.countDocuments();
-    const EXPECTED_PERMISSIONS_COUNT = 40;
+    const EXPECTED_PERMISSIONS_COUNT = 65;
     if (count < EXPECTED_PERMISSIONS_COUNT) {
       console.warn(`\x1b[33m⚠️ WARNING: Permission collection has missing entries! Expected ${EXPECTED_PERMISSIONS_COUNT}, found ${count}.\x1b[0m`);
-      console.warn(`\x1b[33m👉 Please run: node src/scripts/permission.seed.js\x1b[0m`);
     } else {
       console.log(`✅ System Permissions verified (${count}/${EXPECTED_PERMISSIONS_COUNT}).`);
     }
@@ -158,6 +161,8 @@ const initializeSystem = async () => {
         );
       }
     }
+    // Start central approval reminder scheduler
+    startApprovalReminderScheduler();
   } catch (err) {
     console.warn('⚠️ Could not verify permission count on boot:', err.message);
   }
@@ -213,6 +218,7 @@ app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/material-receipts', materialReceiptRoutes);
+app.use('/api/approvals', approvalRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

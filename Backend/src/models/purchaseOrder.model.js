@@ -71,9 +71,19 @@ const PurchaseOrderSchema = new mongoose.Schema({
         type: String,
         default: 'DRAFT',
         enum: {
-            values: ['DRAFT', 'PENDING_APPROVAL', 'SENT_TO_SUPPLIER', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'],
+            values: ['DRAFT', 'PENDING_APPROVAL', 'SENT_TO_SUPPLIER', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED', 'REJECTED'],
             message: '{VALUE} is not a valid PO status.'
         }
+    },
+    approvalRemarks: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
     },
     deliveryLocation: {
         type: mongoose.Schema.Types.ObjectId,

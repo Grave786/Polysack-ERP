@@ -1,8 +1,8 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { isTenantModuleEnabled, checkIsSuperAdmin, checkIsTenantAdmin } from '../utils/permissionUtils';
+import { isTenantModuleEnabled, checkIsSuperAdmin, checkIsTenantAdmin, isTenantAdmin } from '../utils/permissionUtils';
 
-export default function ProtectedRoute({ allowedRoles, requiredModule, requiredAction }) {
+export default function ProtectedRoute({ allowedRoles, requiredModule, requiredAction, requireTenantAdmin }) {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
     const isLoading = useAuthStore((state) => state.isLoading);
     const user = useAuthStore((state) => state.user);
@@ -20,6 +20,10 @@ export default function ProtectedRoute({ allowedRoles, requiredModule, requiredA
     }
 
     if (user) {
+        if (requireTenantAdmin && !isTenantAdmin(user)) {
+            return <Navigate to="/403" state={{ message: "Only Tenant Admin can access this module." }} replace />;
+        }
+
         const isSuperAdmin = checkIsSuperAdmin(user);
 
         // 1. Super Admin Route Scoping

@@ -118,11 +118,13 @@ export default function InventoryPage() {
     const auditLedgerColumns = [
         {
             header: 'REF #',
+            exportValue: (row) => row.referenceNumber || (row._id ? String(row._id).slice(-6) : ''),
             render: (row) => <span className="font-mono font-bold uppercase">{row.referenceNumber || row._id?.slice(-6) || '-'}</span>,
             sortable: true
         },
         {
             header: 'TRANSACTION TYPE',
+            exportValue: (row) => (row.transactionType || 'ADJUSTMENT').replace(/_/g, ' '),
             render: (row) => {
                 const type = row.transactionType || 'ADJUSTMENT';
                 const isReceipt = type.includes('RECEIPT') || type.includes('IN') || type === 'ADJUSTMENT';
@@ -143,6 +145,7 @@ export default function InventoryPage() {
         },
         {
             header: 'ITEM NAME',
+            exportValue: (row) => row.item?.name || row.finishedGood?.name || row.rawMaterial?.name || row.notes || 'Stock Item',
             render: (row) => (
                 <span className="font-semibold text-text-main">
                     {row.item?.name || row.finishedGood?.name || row.rawMaterial?.name || row.notes || 'Stock Item'}
@@ -151,6 +154,7 @@ export default function InventoryPage() {
         },
         {
             header: 'QUANTITY',
+            exportValue: (row) => (row.quantity !== undefined ? row.quantity : 0),
             render: (row) => (
                 <span className="font-mono font-bold text-text-main">
                     {row.quantity !== undefined ? row.quantity.toLocaleString('en-IN') : 0}
@@ -159,6 +163,7 @@ export default function InventoryPage() {
         },
         {
             header: 'BEFORE → AFTER',
+            exportValue: (row) => `${row.previousStock !== undefined ? row.previousStock : '-'} -> ${row.newStock !== undefined ? row.newStock : '-'}`,
             render: (row) => (
                 <span className="font-mono text-xs text-text-muted">
                     {row.previousStock !== undefined ? row.previousStock.toLocaleString('en-IN') : '-'} → <strong className="text-text-main">{row.newStock !== undefined ? row.newStock.toLocaleString('en-IN') : '-'}</strong>
@@ -167,6 +172,7 @@ export default function InventoryPage() {
         },
         {
             header: 'FROM → TO LOCATION',
+            exportValue: (row) => `${row.fromLocation?.name || 'Main Warehouse'} -> ${row.toLocation?.name || 'Shop Floor'}`,
             render: (row) => (
                 <span className="text-xs text-text-muted">
                     {row.fromLocation?.name || 'Main Warehouse'} → {row.toLocation?.name || 'Shop Floor'}
@@ -175,10 +181,12 @@ export default function InventoryPage() {
         },
         {
             header: 'BATCH / LOT',
+            exportValue: (row) => row.batchNumber || row.lotNumber || '',
             render: (row) => <span className="font-mono text-xs">{row.batchNumber || row.lotNumber || '-'}</span>
         },
         {
             header: 'TIMESTAMP',
+            exportValue: (row) => row.createdAt || '',
             render: (row) => (
                 <span className="font-mono text-xs text-text-muted">
                     {row.createdAt ? new Date(row.createdAt).toLocaleString() : '-'}
@@ -187,6 +195,7 @@ export default function InventoryPage() {
         },
         {
             header: 'USER',
+            exportValue: (row) => row.performedBy?.name || row.createdBy?.name || 'System Admin',
             render: (row) => (
                 <span className="font-medium text-xs text-text-main">
                     {row.performedBy?.name || row.createdBy?.name || 'System Admin'}

@@ -178,7 +178,7 @@ const login = async (req, res) => {
 
 const DEFAULT_TENANT_MODULES = [
     'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY',
-    'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS'
+    'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS', 'COMPANY_SETTINGS'
 ];
 
 /**
@@ -189,12 +189,14 @@ const formatUserResponse = (userDoc) => {
     delete userObj.password;
 
     const userRoleName = typeof userObj.role === 'object' ? userObj.role?.name : userObj.role;
+    const normalizedRoleName = (userRoleName || '').toLowerCase().trim();
     const isSuperAdmin = Boolean(
         !userObj.tenant ||
         userObj.email === (process.env.SUPER_ADMIN_EMAIL || 'superadmin@polysack.com') ||
-        userRoleName === 'SUPER_ADMIN' ||
-        userRoleName === 'Super Admin'
+        normalizedRoleName === 'super_admin' ||
+        normalizedRoleName === 'super admin'
     );
+    const isTenantAdmin = !normalizedRoleName.includes('assistant') && (normalizedRoleName === 'tenant admin' || normalizedRoleName === 'admin' || (normalizedRoleName.includes('admin') && !normalizedRoleName.includes('assistant')));
 
     let tenantEnabledModules = DEFAULT_TENANT_MODULES;
     if (userObj.tenant && typeof userObj.tenant === 'object' && Array.isArray(userObj.tenant.enabledModules) && userObj.tenant.enabledModules.length > 0) {
@@ -204,6 +206,12 @@ const formatUserResponse = (userDoc) => {
     let permittedModules = [];
     if (isSuperAdmin) {
         permittedModules = ['SUPER_ADMIN_PANEL', 'TENANTS', 'USERS', 'ROLES', 'DASHBOARD'];
+    } else if (isTenantAdmin) {
+        permittedModules = [
+            'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY',
+            'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS',
+            'COMPANY_SETTINGS', 'ROLES', 'USERS', 'DASHBOARD', 'APPROVALS'
+        ];
     } else if (userObj.role && Array.isArray(userObj.role.permissions)) {
         const permSet = new Set();
         userObj.role.permissions.forEach((p) => {

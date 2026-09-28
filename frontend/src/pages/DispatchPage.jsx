@@ -169,6 +169,7 @@ export default function DispatchPage() {
     const columns = [
         {
             header: 'DISPATCH #',
+            exportValue: (row) => row.dispatchNumber || '',
             render: (row) => (
                 <button
                     type="button"
@@ -182,6 +183,12 @@ export default function DispatchPage() {
         },
         {
             header: 'SOURCE / REFERENCE',
+            exportValue: (row) => {
+                const isPos = row.sourceType === 'POS_INVOICE' || Boolean(row.invoice && !row.salesOrder);
+                return isPos
+                    ? (row.invoice?.invoiceNumber || 'POS Invoice')
+                    : (row.salesOrder?.soNumber || row.soNumber || '');
+            },
             render: (row) => {
                 const isPos = row.sourceType === 'POS_INVOICE' || Boolean(row.invoice && !row.salesOrder);
                 const refNum = isPos
@@ -207,10 +214,15 @@ export default function DispatchPage() {
         },
         {
             header: 'CUSTOMER',
+            exportValue: (row) => {
+                const soCust = row.salesOrder?.customer?.companyName || row.salesOrder?.customer?.name;
+                const invCust = row.invoice?.customer?.companyName || row.invoice?.customer?.name || row.invoice?.walkInCustomer?.name;
+                return soCust || invCust || row.customerName || '';
+            },
             render: (row) => {
                 const soCust = row.salesOrder?.customer?.companyName || row.salesOrder?.customer?.name;
                 const invCust = row.invoice?.customer?.companyName || row.invoice?.customer?.name || row.invoice?.walkInCustomer?.name;
-                const customerName = soCust || invCust || row.customerName || 'Retail Customer';
+                const customerName = soCust || invCust || row.customerName || '-';
 
                 return (
                     <span className="font-extrabold text-text-main text-xs">
@@ -222,6 +234,7 @@ export default function DispatchPage() {
         },
         {
             header: 'VEHICLE NUMBER',
+            exportValue: (row) => row.vehicleNumber || '',
             render: (row) => (
                 <span className="font-mono font-semibold uppercase text-text-main text-xs bg-app-bg px-2 py-0.5 rounded border border-border">
                     {row.vehicleNumber || '-'}
@@ -230,6 +243,7 @@ export default function DispatchPage() {
         },
         {
             header: 'TRANSPORTER',
+            exportValue: (row) => row.transporter || row.carrierName || 'V-Trans India Ltd',
             render: (row) => (
                 <span className="font-semibold text-text-main text-xs">
                     {row.transporter || row.carrierName || 'V-Trans India Ltd'}
@@ -238,6 +252,10 @@ export default function DispatchPage() {
         },
         {
             header: 'BAGS SHIPPED',
+            exportValue: (row) => {
+                const itemsList = row.items || [];
+                return itemsList.reduce((acc, i) => acc + Number(i.dispatchedQuantity || i.quantity || 0), 0);
+            },
             render: (row) => {
                 const itemsList = row.items || [];
                 const totalBags = itemsList.reduce((acc, i) => acc + Number(i.dispatchedQuantity || i.quantity || 0), 0);
@@ -259,6 +277,13 @@ export default function DispatchPage() {
         },
         {
             header: 'DELIVERY STATUS',
+            exportValue: (row) => {
+                const status = (row.deliveryStatus || row.status || 'IN_TRANSIT').toUpperCase();
+                if (status === 'DELIVERED') return 'Delivered';
+                if (status === 'POD_PENDING_APPROVAL') return 'POD Pending Approval';
+                if (status === 'RETURNED') return 'Returned';
+                return 'In Transit';
+            },
             render: (row) => {
                 const status = (row.deliveryStatus || row.status || 'IN_TRANSIT').toUpperCase();
                 const isDelivered = status === 'DELIVERED';

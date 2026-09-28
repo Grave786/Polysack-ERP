@@ -7,7 +7,15 @@ const Customer = require('../models/customer.model');
 const User = require('../models/user.model');
 const SalesOrder = require('../models/salesOrder.model');
 const Invoice = require('../models/invoice.model');
+const Approval = require('../models/approval.model');
+const { notifyApprovers, REMINDER_INTERVAL_HOURS } = require('../services/approval.service');
 const { normalizeEnum } = require('../utils/enumNormalizer');
+const { isTenantAdmin } = require('../middlewares/rbac.middleware');
+
+/**
+ * Check if the given user has Tenant Admin privileges
+ */
+const isUserTenantAdmin = isTenantAdmin;
 
 /**
  * Auto-generates sequential complaint ticket number per tenant (COMP-YYYY-0001...)
@@ -97,14 +105,35 @@ const createInteraction = async (req, res) => {
             }
         }
 
-        if (assignedExecutive) {
-            const execDoc = await User.findOne({ _id: assignedExecutive, ...(tenantId && { tenant: tenantId }), isActive: true });
-            if (!execDoc) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Assigned Executive user not found.'
-                });
+        let resolvedExecutive = null;
+        if (assignedExecutive && assignedExecutive !== 'Unassigned') {
+            const rawExec = typeof assignedExecutive === 'object' ? assignedExecutive._id : assignedExecutive;
+            if (rawExec && mongoose.Types.ObjectId.isValid(rawExec)) {
+                const execDoc = await User.findOne({ _id: rawExec, ...(tenantId && { tenant: tenantId }), isActive: true });
+                if (execDoc) resolvedExecutive = execDoc._id;
             }
+        }
+        if (!resolvedExecutive && req.user?._id) {
+            resolvedExecutive = req.user._id;
+        }
+
+        let normType = interactionType || 'Phone Call';
+        if (normType) {
+            const t = String(normType).trim().toUpperCase();
+            if (t === 'EMAIL' || t.includes('EMAIL')) normType = 'Email Communication';
+            else if (t === 'CALL' || t.includes('PHONE') || t.includes('CALL')) normType = 'Phone Call';
+            else if (t.includes('MEET')) normType = 'In-Person Meeting';
+            else if (t.includes('VISIT')) normType = 'Site Visit';
+            else if (t.includes('WHATSAPP')) normType = 'WhatsApp';
+            else if (t === 'OTHER' || t.includes('ESCALAT') || t.includes('OTHER')) normType = 'Other / Escalation';
+        }
+
+        let normStatus = status || 'OPEN';
+        if (normStatus) {
+            const sUpper = String(normStatus).trim().toUpperCase();
+            if (sUpper === 'OPEN' || sUpper.includes('OPEN')) normStatus = 'OPEN';
+            else if (sUpper === 'IN_PROGRESS' || sUpper.includes('PROGRESS')) normStatus = 'IN_PROGRESS';
+            else if (sUpper === 'CLOSED' || sUpper === 'RESOLVED' || sUpper.includes('CLOSE') || sUpper.includes('RESOLV')) normStatus = 'CLOSED';
         }
 
         const interaction = new CustomerInteraction({
@@ -114,11 +143,11 @@ const createInteraction = async (req, res) => {
             enquiryId: refId || null,
             referenceId: refId || null,
             date: date ? new Date(date) : new Date(),
-            interactionType: interactionType || 'Phone Call',
+            interactionType: normType,
             subject: (subject || `Follow-up: ${refId || 'Lead'}`).trim(),
-            notes: notes ? notes.trim() : undefined,
-            assignedExecutive: assignedExecutive || req.user._id || req.user.id,
-            status: status || 'OPEN',
+            notes: notes ? notes.trim() : '',
+            assignedExecutive: resolvedExecutive,
+            status: normStatus,
             nextFollowUpDate: nextFollowUpDate ? new Date(nextFollowUpDate) : null,
             isActive: true
         });
@@ -353,16 +382,95 @@ const getInteractionById = async (req, res) => {
  */
 const updateInteraction = async (req, res) => {
     try {
+        const tenantId = req.user?.tenant;
         delete req.body.tenant;
 
+        // Resolve customer
+        const targetCustomer = req.body.customer !== undefined ? req.body.customer : req.body.customerId;
+        let resolvedCustomer = undefined;
+        if (targetCustomer !== undefined) {
+            const rawCustId = typeof targetCustomer === 'object' ? targetCustomer?._id : targetCustomer;
+            if (rawCustId && mongoose.Types.ObjectId.isValid(rawCustId)) {
+                resolvedCustomer = new mongoose.Types.ObjectId(rawCustId);
+            } else if (rawCustId === null || rawCustId === '') {
+                resolvedCustomer = null;
+            }
+        }
 
-        const interaction = await CustomerInteraction.findByIdAndUpdate(
-            req.params.id,
-            { $set: req.body },
+        // Resolve assigned executive
+        let resolvedExecutive = undefined;
+        if (req.body.assignedExecutive !== undefined) {
+            const rawExecId = typeof req.body.assignedExecutive === 'object' ? req.body.assignedExecutive?._id : req.body.assignedExecutive;
+            if (rawExecId && mongoose.Types.ObjectId.isValid(rawExecId)) {
+                resolvedExecutive = new mongoose.Types.ObjectId(rawExecId);
+            } else {
+                resolvedExecutive = null;
+            }
+        }
+
+        // Normalize status
+        let resolvedStatus = undefined;
+        if (req.body.status !== undefined) {
+            const s = String(req.body.status).trim();
+            const sUpper = s.toUpperCase();
+            if (sUpper === 'OPEN' || s.includes('Open')) {
+                resolvedStatus = 'OPEN';
+            } else if (sUpper === 'IN_PROGRESS' || sUpper.includes('PROGRESS')) {
+                resolvedStatus = 'IN_PROGRESS';
+            } else if (sUpper === 'CLOSED' || sUpper === 'RESOLVED' || s.includes('Close') || s.includes('Resolv')) {
+                resolvedStatus = 'CLOSED';
+            } else {
+                resolvedStatus = s;
+            }
+        }
+
+        // Normalize interactionType
+        let resolvedType = undefined;
+        if (req.body.interactionType !== undefined) {
+            const t = String(req.body.interactionType).trim();
+            const tUpper = t.toUpperCase();
+            if (tUpper === 'EMAIL' || tUpper.includes('EMAIL')) resolvedType = 'Email Communication';
+            else if (tUpper === 'CALL' || tUpper.includes('PHONE') || tUpper.includes('CALL')) resolvedType = 'Phone Call';
+            else if (tUpper.includes('MEET')) resolvedType = 'In-Person Meeting';
+            else if (tUpper.includes('VISIT')) resolvedType = 'Site Visit';
+            else if (tUpper.includes('WHATSAPP')) resolvedType = 'WhatsApp';
+            else if (tUpper === 'OTHER' || tUpper.includes('ESCALAT') || tUpper.includes('OTHER')) resolvedType = 'Other / Escalation';
+            else resolvedType = t;
+        }
+
+        const updateData = {};
+        if (resolvedCustomer !== undefined) updateData.customer = resolvedCustomer;
+        if (req.body.customerName !== undefined) updateData.customerName = req.body.customerName;
+        if (resolvedExecutive !== undefined) updateData.assignedExecutive = resolvedExecutive;
+        if (resolvedStatus !== undefined) updateData.status = resolvedStatus;
+        if (resolvedType !== undefined) updateData.interactionType = resolvedType;
+        if (req.body.subject !== undefined) updateData.subject = String(req.body.subject).trim();
+        if (req.body.notes !== undefined) updateData.notes = String(req.body.notes).trim();
+        if (req.body.date || req.body.interactionDate) updateData.date = new Date(req.body.date || req.body.interactionDate);
+        if (req.body.nextFollowUpDate !== undefined) updateData.nextFollowUpDate = req.body.nextFollowUpDate ? new Date(req.body.nextFollowUpDate) : null;
+        if (req.body.isActive !== undefined) updateData.isActive = Boolean(req.body.isActive);
+
+        const filter = { _id: req.params.id };
+        if (tenantId) filter.tenant = tenantId;
+
+        let interaction = await CustomerInteraction.findOneAndUpdate(
+            filter,
+            { $set: updateData },
             { new: true, runValidators: true }
         )
         .populate('customer', 'companyName code contactPerson phone email')
         .populate('assignedExecutive', 'name email role');
+
+        if (!interaction) {
+            // Fallback without tenant constraint in case of cross-session or admin update
+            interaction = await CustomerInteraction.findByIdAndUpdate(
+                req.params.id,
+                { $set: updateData },
+                { new: true, runValidators: true }
+            )
+            .populate('customer', 'companyName code contactPerson phone email')
+            .populate('assignedExecutive', 'name email role');
+        }
 
         if (!interaction) {
             return res.status(404).json({
@@ -398,7 +506,15 @@ const updateInteraction = async (req, res) => {
  */
 const deleteInteraction = async (req, res) => {
     try {
-        const interaction = await CustomerInteraction.findByIdAndDelete(req.params.id);
+        const tenantId = req.user?.tenant;
+        const filter = { _id: req.params.id };
+        if (tenantId) filter.tenant = tenantId;
+
+        let interaction = await CustomerInteraction.findOneAndDelete(filter);
+        if (!interaction) {
+            interaction = await CustomerInteraction.findByIdAndDelete(req.params.id);
+        }
+
         if (!interaction) {
             return res.status(404).json({
                 success: false,
@@ -949,16 +1065,47 @@ const createOrderEnquiry = async (req, res) => {
             tenant: tenantId,
             ...req.body,
             nslNumber: req.body.nslNumber,
+            status: 'Pending Approval',
+            soApprovalStatus: 'Pending Approval',
             customer: targetCustomer || undefined,
             customerRef: targetCustomer || undefined,
+            orderConfirmed: false,
             enquiryDate: req.body.enquiryDate ? new Date(req.body.enquiryDate) : new Date(),
-            expectedDeliveryDate: (orderConfirmed && expectedDeliveryDate) ? new Date(expectedDeliveryDate) : null
+            expectedDeliveryDate: null
         });
 
         await enquiry.save();
         if (enquiry.customer) {
             await enquiry.populate('customer', 'companyName code contactPerson phone email');
         }
+
+        // Always create an Approval record (type "NSL") and notify Tenant Admins with repeated reminders
+        const prospectName = enquiry.newCustomerDetails?.company || enquiry.newCustomerDetails?.name || (enquiry.customer?.companyName || enquiry.customer?.name) || 'Prospect';
+        const category = enquiry.productCategory || 'Plain';
+        const qtyVal = enquiry.totalOrderQuantity ? `${enquiry.totalOrderQuantity} ${enquiry.quantityUnit || 'Kg'}` : '';
+        const summary = [prospectName, category, qtyVal].filter(Boolean).join(' | ');
+
+        // Generate sequential approval number
+        const approvalNo = await Approval.generateNextApprovalNo(tenantId);
+
+        // Pending Approval creation + notify active Tenant Admins
+        const approval = await Approval.create({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            approvalNo,
+            type: 'NSL',
+            referenceModel: 'OrderEnquiry',
+            referenceId: enquiry._id,
+            referenceNo: enquiry.nslNumber,
+            title: `NSL Approval: ${enquiry.nslNumber}`,
+            summary,
+            requestedBy: new mongoose.Types.ObjectId(req.user._id),
+            status: 'Pending',
+            reminderCount: 0,
+            nextReminderAt: new Date(Date.now() + REMINDER_INTERVAL_HOURS * 60 * 60 * 1000)
+        });
+
+        // Fire initial notification to active Tenant Admins
+        await notifyApprovers(tenantId, approval);
 
         return res.status(201).json({ success: true, message: 'Order enquiry logged successfully.', data: enquiry });
     } catch (error) {
@@ -982,15 +1129,17 @@ const getOrderEnquiries = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Tenant context is missing or invalid.' });
         }
 
-        const { customer, orderConfirmed, productCategory, search, page = 1, limit = 20 } = req.query;
+        const { customer, orderConfirmed, productCategory, status, search, page = 1, limit = 20 } = req.query;
         const filter = { tenant: tenantId, isActive: true };
 
         if (customer) filter.customer = customer;
         if (productCategory) filter.productCategory = productCategory;
+        if (status && status !== 'All Statuses' && status !== 'All') filter.status = status;
         if (orderConfirmed !== undefined) filter.orderConfirmed = orderConfirmed === 'true';
 
         if (search) {
             filter.$or = [
+                { nslNumber: { $regex: search, $options: 'i' } },
                 { contactPerson: { $regex: search, $options: 'i' } },
                 { materialQualityFabric: { $regex: search, $options: 'i' } },
                 { description: { $regex: search, $options: 'i' } },
@@ -1006,17 +1155,41 @@ const getOrderEnquiries = async (req, res) => {
             OrderEnquiry.find(filter)
                 .populate('customer', 'companyName code contactPerson phone email')
                 .populate('customerRef', 'companyName code contactPerson phone email')
+                .populate('salesOrder', 'soNumber status')
                 .sort({ enquiryDate: -1 })
                 .skip(skip)
                 .limit(limitNum),
             OrderEnquiry.countDocuments(filter)
         ]);
 
+        // Enrich enquiries with salesOrderNo if confirmed and missing
+        const enrichedEnquiries = await Promise.all(enquiries.map(async (enq) => {
+            const doc = enq.toObject ? enq.toObject() : enq;
+            if ((doc.orderConfirmed || doc.status === 'Confirmed') && !doc.salesOrderNo) {
+                const so = await SalesOrder.findOne({
+                    tenant: tenantId,
+                    isActive: true,
+                    status: { $ne: 'CANCELLED' },
+                    $or: [
+                        { sourceEnquiry: doc._id },
+                        ...(doc.salesOrder ? [{ _id: doc.salesOrder }] : []),
+                        ...(doc.nslNumber ? [{ notes: { $regex: doc.nslNumber } }] : [])
+                    ]
+                }).select('soNumber');
+                if (so) {
+                    doc.salesOrderNo = so.soNumber;
+                    doc.salesOrder = so._id;
+                    OrderEnquiry.updateOne({ _id: doc._id }, { $set: { salesOrder: so._id, salesOrderNo: so.soNumber } }).catch(() => {});
+                }
+            }
+            return doc;
+        }));
+
         return res.status(200).json({
             success: true,
-            count: enquiries.length,
+            count: enrichedEnquiries.length,
             pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) || 1 },
-            data: enquiries
+            data: enrichedEnquiries
         });
     } catch (error) {
         console.error('Error in getOrderEnquiries:', error);
@@ -1038,13 +1211,33 @@ const getOrderEnquiryById = async (req, res) => {
 
         const enquiry = await OrderEnquiry.findOne({ _id: req.params.id, tenant: tenantId })
             .populate('customer', 'companyName code contactPerson phone email')
-            .populate('customerRef', 'companyName code contactPerson phone email');
+            .populate('customerRef', 'companyName code contactPerson phone email')
+            .populate('salesOrder', 'soNumber status');
 
         if (!enquiry) {
             return res.status(404).json({ success: false, message: 'Order enquiry not found.' });
         }
 
-        return res.status(200).json({ success: true, data: enquiry });
+        const doc = enquiry.toObject ? enquiry.toObject() : enquiry;
+        if ((doc.orderConfirmed || doc.status === 'Confirmed') && !doc.salesOrderNo) {
+            const so = await SalesOrder.findOne({
+                tenant: tenantId,
+                isActive: true,
+                status: { $ne: 'CANCELLED' },
+                $or: [
+                    { sourceEnquiry: doc._id },
+                    ...(doc.salesOrder ? [{ _id: doc.salesOrder }] : []),
+                    ...(doc.nslNumber ? [{ notes: { $regex: doc.nslNumber } }] : [])
+                ]
+            }).select('soNumber');
+            if (so) {
+                doc.salesOrderNo = so.soNumber;
+                doc.salesOrder = so._id;
+                OrderEnquiry.updateOne({ _id: doc._id }, { $set: { salesOrder: so._id, salesOrderNo: so.soNumber } }).catch(() => {});
+            }
+        }
+
+        return res.status(200).json({ success: true, data: doc });
     } catch (error) {
         console.error('Error in getOrderEnquiryById:', error);
         return res.status(500).json({ success: false, message: 'Failed to fetch order enquiry.' });
@@ -1067,6 +1260,24 @@ const updateOrderEnquiry = async (req, res) => {
         const enquiry = await OrderEnquiry.findOne({ _id: req.params.id, tenant: tenantId });
         if (!enquiry) {
             return res.status(404).json({ success: false, message: 'Order enquiry not found.' });
+        }
+
+        // Block direct update to Approved or confirmation/conversion if NSL is Pending Approval or Rejected
+        if (req.body.status === 'Approved' || req.body.soApprovalStatus === 'Approved') {
+            return res.status(400).json({
+                success: false,
+                message: 'Direct update to Approved status is not allowed. NSLs must be approved by Tenant Admin through the central Approvals module.'
+            });
+        }
+
+        if (['Pending Approval', 'Rejected'].includes(enquiry.status)) {
+            const wantsToConfirm = req.body.orderConfirmed === true || req.body.status === 'Confirmed' || req.body.status === 'Converted';
+            if (wantsToConfirm) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot confirm or convert NSL '${enquiry.nslNumber || enquiry._id}' while status is '${enquiry.status}'. It must be Approved by Tenant Admin first.`
+                });
+            }
         }
 
         // Validate delivery date if confirmed

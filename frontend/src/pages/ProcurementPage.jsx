@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Download, Truck, FileText, Check, ClipboardList, Eye, Pencil } from 'lucide-react';
+import { Plus, Download, Truck, FileText, Check, ClipboardList, Eye, Pencil, X } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreatePurchaseOrderPanel from '../components/procurement/CreatePurchaseOrderPanel';
 import CreateGRNPanel from '../components/procurement/CreateGRNPanel';
@@ -8,8 +8,12 @@ import PrintPOModal from '../components/procurement/PrintPOModal';
 import DetailViewModal from '../components/shared/DetailViewModal';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../store/authStore';
+import { isTenantAdmin } from '../utils/permissionUtils';
 
 export default function ProcurementPage() {
+    const user = useAuthStore((state) => state.user);
+    const isAdmin = isTenantAdmin(user);
     const [isCreatePoOpen, setIsCreatePoOpen] = useState(false);
     const [editPo, setEditPo] = useState(null);
     const [selectedPoForGrn, setSelectedPoForGrn] = useState(null);
@@ -75,11 +79,13 @@ export default function ProcurementPage() {
     const poColumns = [
         {
             header: 'PO NUMBER',
+            exportValue: (row) => row.poNumber || '',
             render: (row) => <span className="font-mono font-bold text-primary uppercase">{row.poNumber || '-'}</span>,
             sortable: true
         },
         {
             header: 'SUPPLIER NAME',
+            exportValue: (row) => (typeof row.supplier === 'object' ? (row.supplier?.companyName || row.supplier?.name) : row.supplier) || '',
             render: (row) => (
                 <span className="font-semibold text-text-main">
                     {typeof row.supplier === 'object' ? (row.supplier?.companyName || row.supplier?.name) : (row.supplier || '-')}
@@ -89,6 +95,7 @@ export default function ProcurementPage() {
         },
         {
             header: 'PO DATE',
+            exportValue: (row) => row.poDate || row.createdAt || '',
             render: (row) => (
                 <span className="font-mono text-xs text-text-muted">
                     {row.poDate ? new Date(row.poDate).toLocaleDateString() : (row.createdAt ? new Date(row.createdAt).toLocaleDateString() : '-')}
@@ -97,6 +104,7 @@ export default function ProcurementPage() {
         },
         {
             header: 'EXPECTED DELIVERY',
+            exportValue: (row) => row.expectedDelivery || '',
             render: (row) => (
                 <span className="font-mono text-xs text-text-main font-semibold">
                     {row.expectedDelivery ? new Date(row.expectedDelivery).toLocaleDateString() : '-'}
@@ -105,6 +113,7 @@ export default function ProcurementPage() {
         },
         {
             header: 'PO TOTAL VALUE (₹)',
+            exportValue: (row) => (row.totalValue !== undefined ? row.totalValue : 0),
             render: (row) => (
                 <span className="font-mono font-bold text-text-main">
                     ₹{(row.totalValue || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
@@ -113,6 +122,7 @@ export default function ProcurementPage() {
         },
         {
             header: 'STATUS',
+            exportValue: (row) => row.status || 'DRAFT',
             render: (row) => {
                 const status = row.status || 'DRAFT';
                 let badgeStyle = 'bg-gray-100 text-gray-800 border-gray-300';
@@ -189,25 +199,9 @@ export default function ProcurementPage() {
                         )}
 
                         {isPendingApproval && (
-                            <button
-                                type="button"
-                                onClick={async () => {
-                                    try {
-                                        const res = await axiosInstance.patch(`/purchase-orders/${row._id}/status`, { status: 'SENT_TO_SUPPLIER' });
-                                        if (res.data?.success) {
-                                            toast.success(`PO ${row.poNumber} approved & sent to supplier!`);
-                                            setRefreshKey(prev => prev + 1);
-                                        }
-                                    } catch (err) {
-                                        toast.error(err.response?.data?.message || 'Failed to approve PO');
-                                    }
-                                }}
-                                className="flex items-center gap-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold shadow-2xs transition-colors cursor-pointer"
-                                title="Approve & issue PO to supplier"
-                            >
-                                <Check size={13} />
-                                <span>Approve PO</span>
-                            </button>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                Pending Approval
+                            </span>
                         )}
 
                         {canReceive && (
@@ -249,11 +243,13 @@ export default function ProcurementPage() {
     const mrColumns = [
         {
             header: 'RECEIPT #',
+            exportValue: (row) => row.receiptNumber || '',
             render: (row) => <span className="font-mono font-bold text-primary uppercase">{row.receiptNumber || '-'}</span>,
             sortable: true
         },
         {
             header: 'DATE',
+            exportValue: (row) => row.date || '',
             render: (row) => (
                 <span className="font-mono text-xs text-text-muted">
                     {row.date ? new Date(row.date).toLocaleDateString('en-IN') : '-'}
@@ -262,6 +258,7 @@ export default function ProcurementPage() {
         },
         {
             header: 'CUSTOMER',
+            exportValue: (row) => (typeof row.customer === 'object' ? (row.customer?.companyName || row.customer?.name) : row.customer) || '',
             render: (row) => (
                 <span className="font-semibold text-text-main">
                     {typeof row.customer === 'object'
@@ -273,6 +270,7 @@ export default function ProcurementPage() {
         },
         {
             header: 'MATERIAL',
+            exportValue: (row) => [row.materialDescription, row.laminationType].filter(Boolean).join(' / ') || '',
             render: (row) => (
                 <span className="text-xs text-text-muted">
                     {[row.materialDescription, row.laminationType].filter(Boolean).join(' / ') || '-'}
@@ -281,6 +279,7 @@ export default function ProcurementPage() {
         },
         {
             header: 'QTY (KG)',
+            exportValue: (row) => (row.totalQuantityKg != null ? row.totalQuantityKg : 0),
             render: (row) => (
                 <span className="font-mono text-xs font-semibold text-text-main">
                     {row.totalQuantityKg != null ? row.totalQuantityKg.toLocaleString('en-IN') : '-'}
@@ -289,6 +288,7 @@ export default function ProcurementPage() {
         },
         {
             header: 'QTY (PCS)',
+            exportValue: (row) => (row.totalQuantityPcs != null ? row.totalQuantityPcs : 0),
             render: (row) => (
                 <span className="font-mono text-xs font-semibold text-text-main">
                     {row.totalQuantityPcs != null ? row.totalQuantityPcs.toLocaleString('en-IN') : '-'}
@@ -297,6 +297,7 @@ export default function ProcurementPage() {
         },
         {
             header: 'TOTAL AMOUNT (₹)',
+            exportValue: (row) => (row.totalInvoiceAmount != null ? row.totalInvoiceAmount : 0),
             render: (row) => (
                 <span className="font-mono font-bold text-text-main">
                     ₹{(row.totalInvoiceAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
@@ -305,6 +306,7 @@ export default function ProcurementPage() {
         },
         {
             header: 'PRINT/PLAIN',
+            exportValue: (row) => row.printOrPlain || 'PLAIN',
             render: (row) => {
                 const v = row.printOrPlain || 'PLAIN';
                 return (

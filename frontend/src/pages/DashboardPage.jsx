@@ -258,11 +258,7 @@ export default function DashboardPage() {
         list.sort((a, b) => b.value - a.value);
 
         if (list.length === 0) {
-            return [
-                { name: 'Acme PolySack Ind.', value: 450000, percentage: 45 },
-                { name: 'Surat Textiles Corp', value: 300000, percentage: 30 },
-                { name: 'Gujarat Cement Works', value: 250000, percentage: 25 }
-            ];
+            return [];
         }
 
         return list.slice(0, 5);

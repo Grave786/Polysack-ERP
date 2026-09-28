@@ -524,6 +524,7 @@ const MASTER_SCHEMAS = {
         {
             title: 'Requirements & Remarks',
             fields: [
+                { label: 'Rejection Remarks', key: (r) => r.approvalRemarks || r.rejectionRemarks || '-', span: 2 },
                 { label: 'Description', key: 'description', span: 2 },
                 { label: 'Remarks', key: 'remarks', span: 2 }
             ]
@@ -1371,6 +1372,20 @@ export default function DetailViewModal({
 
                 {/* Modal Scrollable Body */}
                 <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-card-bg">
+                    {(record.status === 'Rejected' || record.soApprovalStatus === 'Rejected') && (
+                        <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-900 flex items-start gap-2.5">
+                            <XCircle size={18} className="text-rose-600 shrink-0 mt-0.5" />
+                            <div>
+                                <span className="font-extrabold block text-rose-800 uppercase tracking-wide text-[11px]">
+                                    NSL Rejected by Tenant Admin
+                                </span>
+                                <p className="mt-0.5 font-medium leading-relaxed">
+                                    <span className="font-bold">Remarks:</span> {record.approvalRemarks || record.rejectionRemarks || record.remarks || 'No remarks provided.'}
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
                     {isWorkOrder && (
                         <div className="col-span-full mb-4">
                             <span className="text-xs font-bold text-gray-500 block">WORK TITLE / REQUIREMENT</span>

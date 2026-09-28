@@ -21,6 +21,7 @@ export default function QualityPage() {
             columns: [
                 {
                     header: 'QC CERTIFICATE #',
+                    exportValue: (row) => row.qcCertificateNumber || '',
                     render: (row) => (
                         <button
                             type="button"
@@ -35,6 +36,7 @@ export default function QualityPage() {
                 },
                 {
                     header: 'GRN / PO #',
+                    exportValue: (row) => row.grn?.grnNumber || (row.po ? `PO-${row.po}` : 'Direct Receipt'),
                     render: (row) => (
                         <span className="font-mono font-semibold text-text-main">
                             {row.grn?.grnNumber || (row.po ? `PO-${row.po}` : 'Direct Receipt')}
@@ -43,6 +45,7 @@ export default function QualityPage() {
                 },
                 {
                     header: 'RAW MATERIAL',
+                    exportValue: (row) => row.rawMaterial?.name || '',
                     render: (row) => (
                         <span className="font-semibold text-xs text-text-main max-w-[220px] truncate block" title={row.rawMaterial?.name || ''}>
                             {row.rawMaterial?.name || '-'}
@@ -51,10 +54,12 @@ export default function QualityPage() {
                 },
                 {
                     header: 'RECEIVED QTY',
+                    exportValue: (row) => row.receivedQty || (row.passedQty + row.rejectedQty) || 0,
                     render: (row) => <span className="font-mono font-bold">{row.receivedQty || (row.passedQty + row.rejectedQty) || 0}</span>
                 },
                 {
                     header: 'PASSED QTY',
+                    exportValue: (row) => (row.passedQty !== undefined ? row.passedQty : 0),
                     render: (row) => (
                         <span className="font-mono font-bold text-emerald-700">
                             {row.passedQty !== undefined ? row.passedQty : 0}
@@ -63,6 +68,7 @@ export default function QualityPage() {
                 },
                 {
                     header: 'REJECTED QTY',
+                    exportValue: (row) => (row.rejectedQty !== undefined ? row.rejectedQty : 0),
                     render: (row) => (
                         <span className="font-mono font-bold text-rose-700">
                             {row.rejectedQty !== undefined ? row.rejectedQty : 0}
@@ -71,6 +77,7 @@ export default function QualityPage() {
                 },
                 {
                     header: 'GSM TESTED',
+                    exportValue: (row) => row.gsmTested || '',
                     render: (row) => (
                         <span className="font-mono font-medium">
                             {row.gsmTested ? `${row.gsmTested} GSM` : '-'}
@@ -79,6 +86,7 @@ export default function QualityPage() {
                 },
                 {
                     header: 'QC STATUS',
+                    exportValue: (row) => row.qcStatus || 'PASSED',
                     render: (row) => {
                         const status = row.qcStatus || 'PASSED';
                         const isPassed = status === 'PASSED';
@@ -127,6 +135,7 @@ export default function QualityPage() {
             columns: [
                 {
                     header: 'QC CERTIFICATE #',
+                    exportValue: (row) => row.qcCertificateNumber || '',
                     render: (row) => (
                         <button
                             type="button"
@@ -141,6 +150,7 @@ export default function QualityPage() {
                 },
                 {
                     header: 'WORK ORDER #',
+                    exportValue: (row) => row.workOrder?.workOrderNumber || '',
                     render: (row) => (
                         <span className="font-mono font-semibold text-text-main">
                             {row.workOrder?.workOrderNumber || '-'}
@@ -149,6 +159,7 @@ export default function QualityPage() {
                 },
                 {
                     header: 'FINISHED GOOD',
+                    exportValue: (row) => row.finishedGood?.name || '',
                     render: (row) => (
                         <span className="font-semibold text-xs text-text-main max-w-[220px] truncate block" title={row.finishedGood?.name || ''}>
                             {row.finishedGood?.name || '-'}
@@ -157,10 +168,12 @@ export default function QualityPage() {
                 },
                 {
                     header: 'SAMPLE SIZE',
+                    exportValue: (row) => row.sampleSize || 0,
                     render: (row) => <span className="font-mono">{row.sampleSize || 0}</span>
                 },
                 {
                     header: 'PASSED QTY',
+                    exportValue: (row) => (row.passedQty !== undefined ? row.passedQty : 0),
                     render: (row) => (
                         <span className="font-mono font-bold text-emerald-700">
                             {row.passedQty !== undefined ? row.passedQty : 0}
@@ -169,6 +182,7 @@ export default function QualityPage() {
                 },
                 {
                     header: 'REJECTED QTY',
+                    exportValue: (row) => (row.rejectedQty !== undefined ? row.rejectedQty : 0),
                     render: (row) => (
                         <span className="font-mono font-bold text-rose-700">
                             {row.rejectedQty !== undefined ? row.rejectedQty : 0}
@@ -177,6 +191,7 @@ export default function QualityPage() {
                 },
                 {
                     header: 'TENSILE STRENGTH',
+                    exportValue: (row) => row.tensileStrength || '',
                     render: (row) => (
                         <span className="font-mono font-medium">
                             {row.tensileStrength ? `${row.tensileStrength} N` : '-'}
@@ -185,6 +200,7 @@ export default function QualityPage() {
                 },
                 {
                     header: 'QC STATUS',
+                    exportValue: (row) => row.qcStatus || 'PASSED',
                     render: (row) => {
                         const status = row.qcStatus || 'PASSED';
                         const isPassed = status === 'PASSED';

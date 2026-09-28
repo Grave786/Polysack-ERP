@@ -117,28 +117,28 @@ export default function ViewQCInspectionModal({ isOpen, inspection, onClose }) {
                         </span>
                     </div>
 
-                    <div className="bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 rounded-xl p-3 text-center space-y-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 block flex items-center justify-center gap-1">
+                    <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-green-700 block flex items-center justify-center gap-1">
                             <CheckCircle2 size={12} />
                             Passed Quantity
                         </span>
-                        <span className="font-mono font-extrabold text-base text-emerald-700 dark:text-emerald-400">
+                        <span className="font-mono font-extrabold text-base text-green-800">
                             {passedQty.toLocaleString()}
                         </span>
-                        <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 block">
+                        <span className="text-[10px] font-bold text-green-700 block">
                             {passPercentage}% Yield
                         </span>
                     </div>
 
-                    <div className="bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800 rounded-xl p-3 text-center space-y-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-rose-800 dark:text-rose-300 block flex items-center justify-center gap-1">
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-center space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-red-700 block flex items-center justify-center gap-1">
                             <XCircle size={12} />
                             Rejected Quantity
                         </span>
-                        <span className="font-mono font-extrabold text-base text-rose-700 dark:text-rose-400">
+                        <span className="font-mono font-extrabold text-base text-red-800">
                             {rejectedQty.toLocaleString()}
                         </span>
-                        <span className="text-[10px] font-bold text-rose-700 dark:text-rose-400 block">
+                        <span className="text-[10px] font-bold text-red-700 block">
                             {100 - passPercentage}% Loss
                         </span>
                     </div>

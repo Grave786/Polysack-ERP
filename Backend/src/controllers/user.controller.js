@@ -95,19 +95,56 @@ const getUsers = async (req, res) => {
     try {
         const userTenant = req.user?.tenant || null;
 
-        // Fetch users strictly filtered by caller's tenant, excluding password
-        const users = await User.find({ tenant: userTenant })
-            .select('-password')
-            .populate({
-                path: 'role',
-                populate: {
-                    path: 'permissions'
-                }
-            });
+        const { search, status, page = 1, limit = 20 } = req.query;
+
+        // Build filter — always scope to caller's tenant
+        const filter = { tenant: userTenant };
+
+        // Map status param to isActive boolean field
+        if (status && status !== 'All Statuses' && status !== 'All' && status !== 'ALL') {
+            if (status === 'Active' || status === 'active') {
+                filter.isActive = true;
+            } else if (status === 'Inactive' || status === 'inactive') {
+                filter.isActive = false;
+            }
+        }
+
+        // Search across name and email
+        if (search && search.trim()) {
+            filter.$or = [
+                { name: { $regex: search.trim(), $options: 'i' } },
+                { email: { $regex: search.trim(), $options: 'i' } }
+            ];
+        }
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.max(1, parseInt(limit, 10) || 20);
+        const skip = (pageNum - 1) * limitNum;
+
+        const [users, total] = await Promise.all([
+            User.find(filter)
+                .select('-password')
+                .populate({
+                    path: 'role',
+                    populate: { path: 'permissions' }
+                })
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum),
+            User.countDocuments(filter)
+        ]);
 
         return res.status(200).json({
             success: true,
             count: users.length,
+            totalCount: total,
+            pagination: {
+                total,
+                page: pageNum,
+                limit: limitNum,
+                totalPages: Math.ceil(total / limitNum) || 1,
+                pages: Math.ceil(total / limitNum) || 1
+            },
             data: users
         });
     } catch (error) {
@@ -119,6 +156,7 @@ const getUsers = async (req, res) => {
         });
     }
 };
+
 
 /**
  * @desc    Toggle user active/inactive status (Soft delete)

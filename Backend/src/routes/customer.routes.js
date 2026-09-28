@@ -6,7 +6,8 @@ const {
     exportCustomers,
     getCustomerById,
     updateCustomer,
-    deleteCustomer
+    deleteCustomer,
+    getNextCustomerCodeHandler
 } = require('../controllers/customer.controller');
 const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
 
@@ -33,6 +34,13 @@ router.get('/', authenticate, checkPermission('MASTER_DATA', 'READ'), getCustome
  * @access  Private (MASTER_DATA:READ)
  */
 router.get('/export', authenticate, checkPermission('MASTER_DATA', 'READ'), exportCustomers);
+
+/**
+ * @route   GET /api/customers/next-code
+ * @desc    Preview next sequential Customer code
+ * @access  Private (MASTER_DATA:READ)
+ */
+router.get('/next-code', authenticate, checkPermission('MASTER_DATA', 'READ'), getNextCustomerCodeHandler);
 
 /**
  * @route   GET /api/customers/:id

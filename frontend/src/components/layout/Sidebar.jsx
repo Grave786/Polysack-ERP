@@ -1,3 +1,4 @@
+import { useState, useEffect, useCallback } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
     LayoutDashboard,
@@ -5,6 +6,7 @@ import {
     Factory,
     ShieldCheck,
     Boxes,
+    CheckSquare,
     CreditCard,
     Receipt,
     ShoppingBag,
@@ -18,7 +20,8 @@ import {
     X
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
-import { hasModulePermission, checkIsSuperAdmin, checkIsTenantAdmin } from '../../utils/permissionUtils';
+import { hasModulePermission, checkIsSuperAdmin, isTenantAdmin } from '../../utils/permissionUtils';
+import axiosInstance from '../../api/axiosInstance';
 
 const SIDEBAR_SECTIONS = [
     {
@@ -43,7 +46,8 @@ const SIDEBAR_SECTIONS = [
         items: [
             { name: 'Production', path: '/production', icon: Factory, module: 'PRODUCTION' },
             { name: 'Quality Control', path: '/quality', icon: ShieldCheck, module: 'QUALITY' },
-            { name: 'Inventory & Stock', path: '/inventory', icon: Boxes, module: 'INVENTORY' }
+            { name: 'Inventory & Stock', path: '/inventory', icon: Boxes, module: 'INVENTORY' },
+            { name: 'Approvals', path: '/approvals', icon: CheckSquare, module: 'APPROVALS' }
         ]
     },
     {
@@ -63,7 +67,7 @@ const SIDEBAR_SECTIONS = [
         items: [
             { name: 'Attendance & HR', path: '/attendance', icon: UserCheck, module: 'HR' },
             { name: 'Analytics & Reports', path: '/analytics', icon: BarChart3, module: 'ANALYTICS' },
-            { name: 'Company Settings', path: '/administration', icon: Settings, module: 'USERS' },
+            { name: 'Company Settings', path: '/administration', icon: Settings, module: 'COMPANY_SETTINGS' },
             { name: 'Roles & Permissions', path: '/administration/roles', icon: ShieldCheck, module: 'ROLES' },
             { name: 'User Accounts', path: '/administration/users', icon: Users, module: 'USERS' }
         ]
@@ -72,14 +76,51 @@ const SIDEBAR_SECTIONS = [
 
 export default function Sidebar({ isOpen, onClose }) {
     const user = useAuthStore((state) => state.user);
+    const [pendingCount, setPendingCount] = useState(0);
 
     const isSuperAdmin = checkIsSuperAdmin(user);
-    const isTenantAdmin = checkIsTenantAdmin(user);
+    const isAdmin = isTenantAdmin(user);
+
+    const fetchPendingCount = useCallback(() => {
+        if (!isAdmin || !user) return;
+        axiosInstance.get('/approvals/pending-count')
+            .then((res) => {
+                if (res.data?.success) {
+                    setPendingCount(res.data.count || 0);
+                }
+            })
+            .catch(() => {});
+    }, [isAdmin, user]);
+
+    useEffect(() => {
+        if (!isAdmin) {
+            setPendingCount(0);
+            return;
+        }
+        fetchPendingCount();
+        const interval = setInterval(fetchPendingCount, 15000);
+        const handleCountChanged = () => fetchPendingCount();
+        window.addEventListener('approval-count-changed', handleCountChanged);
+        window.addEventListener('notification-read', handleCountChanged);
+        return () => {
+            clearInterval(interval);
+            window.removeEventListener('approval-count-changed', handleCountChanged);
+            window.removeEventListener('notification-read', handleCountChanged);
+        };
+    }, [isAdmin, fetchPendingCount]);
 
     const isItemVisible = (item) => {
         // Super Admin sees ONLY System Dashboard and Tenant Accounts
         if (isSuperAdmin) {
             return ['/dashboard', '/administration/tenants'].includes(item.path);
+        }
+
+        if (item.path === '/approvals') {
+            return isAdmin;
+        }
+
+        if (item.path === '/dashboard') {
+            return true;
         }
 
         if (item.module) {
@@ -148,6 +189,11 @@ export default function Sidebar({ isOpen, onClose }) {
                                         >
                                             <Icon className="shrink-0" size={17} />
                                             <span className="truncate flex-1">{item.name}</span>
+                                            {item.path === '/approvals' && pendingCount > 0 && (
+                                                <span className="ml-auto px-1.5 py-0.2 rounded-full text-[10px] font-black bg-rose-600 text-white min-w-[18px] text-center shadow-xs animate-pulse">
+                                                    {pendingCount}
+                                                </span>
+                                            )}
                                         </NavLink>
                                     );
                                 })}

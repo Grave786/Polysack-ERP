@@ -33,7 +33,11 @@ const CustomerInteractionSchema = new mongoose.Schema({
         type: String,
         required: [true, 'Interaction type is required'],
         default: 'Phone Call',
-        enum: ['Phone Call', 'Email Communication', 'In-Person Meeting', 'Site Visit', 'WhatsApp', 'Other / Escalation']
+        enum: [
+            'Phone Call', 'Email Communication', 'In-Person Meeting', 'Site Visit', 'WhatsApp', 'Other / Escalation',
+            'Phone', 'Call', 'CALL', 'Email', 'EMAIL', 'Meeting', 'MEETING', 'Visit', 'VISIT', 'Factory Visit',
+            'WhatsApp Communication', 'FOLLOW_UP', 'Other', 'OTHER'
+        ]
     },
     subject: {
         type: String,
@@ -42,7 +46,8 @@ const CustomerInteractionSchema = new mongoose.Schema({
     },
     notes: {
         type: String,
-        trim: true
+        trim: true,
+        default: ''
     },
     assignedExecutive: {
         type: mongoose.Schema.Types.ObjectId,
@@ -52,7 +57,11 @@ const CustomerInteractionSchema = new mongoose.Schema({
     status: {
         type: String,
         default: 'OPEN',
-        enum: ['Open (Requires Follow-up)', 'In Progress', 'Closed (Resolved)', 'OPEN', 'CLOSED']
+        enum: [
+            'OPEN', 'IN_PROGRESS', 'CLOSED', 'RESOLVED',
+            'Open (Requires Follow-up)', 'In Progress', 'Closed (Resolved)', 'Resolved', 'Resolved / Complete',
+            'Open', 'Closed', 'in_progress', 'open', 'closed', 'resolved'
+        ]
     },
     nextFollowUpDate: {
         type: Date,

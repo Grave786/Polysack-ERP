@@ -392,13 +392,15 @@ export default function UserManagementPage() {
                   key: 'platform-admins',
                   label: 'Platform Super Admins',
                   resourcePath: '/users',
-                  columns: columns
+                  columns: columns,
+                  availableStatuses: ['Active', 'Inactive']
               },
               {
                   key: 'tenant-admins',
                   label: 'Tenant Administrators (Across Organizations)',
                   resourcePath: '/super-admin/tenant-admins',
-                  columns: tenantAdminColumns
+                  columns: tenantAdminColumns,
+                  availableStatuses: ['Active', 'Inactive']
               }
           ]
         : [
@@ -406,7 +408,8 @@ export default function UserManagementPage() {
                   key: 'users',
                   label: 'User Accounts',
                   resourcePath: '/users',
-                  columns: columns
+                  columns: columns,
+                  availableStatuses: ['Active', 'Inactive']
               }
           ];
 

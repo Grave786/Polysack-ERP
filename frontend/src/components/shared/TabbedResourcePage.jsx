@@ -611,16 +611,20 @@ export default function TabbedResourcePage({
         bulkDeleteItems
     } = useResourceApi(
         isTabPlaceholder ? null : activeTab?.resourcePath,
-        activeTab?.defaultStatus ? { status: activeTab.defaultStatus } : undefined,
+        // Only pass a non-"All" defaultStatus as initial param; 'All Statuses' is the hook's own default
+        (activeTab?.defaultStatus && activeTab.defaultStatus !== 'All Statuses' && activeTab.defaultStatus !== 'All')
+            ? { status: activeTab.defaultStatus }
+            : undefined,
         customerExtraParams
     );
 
-    // Sync status filter if active tab declares a specific defaultStatus
+    // When the user switches tabs, reset the status filter to that tab's defaultStatus.
+    // setStatusFilter is now a stable useCallback reference so it is safe to omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
-        if (activeTab?.defaultStatus) {
-            setStatusFilter(activeTab.defaultStatus);
-        }
-    }, [activeTabKey, activeTab?.defaultStatus, setStatusFilter]);
+        const defaultSt = activeTab?.defaultStatus ?? 'All Statuses';
+        setStatusFilter(defaultSt);
+    }, [activeTabKey]); // intentionally omit setStatusFilter — it is stable (useCallback)
 
     // Keep tab count badge updated when pagination total changes for active tab
     useEffect(() => {
@@ -1381,113 +1385,276 @@ export default function TabbedResourcePage({
     /**
      * CSV Export Handler for Active Tab
      */
-    const handleExportCsv = async () => {
+    const handleExportCsv = async (selectedRowIds = []) => {
         if (!activeTab?.resourcePath) return;
         try {
             toast.loading('Generating CSV export...', { id: 'csv-export' });
 
-            let csvBlob;
-            const isWorkOrdersTab = activeTabKey === 'work-orders' || activeTab?.key === 'work-orders';
+            const masterDataPaths = ['/customers', '/suppliers', '/raw-materials', '/finished-goods', '/machines', '/employees'];
+            const isMasterData = masterDataPaths.includes(activeTab.resourcePath);
+            const hasSelectedRows = Array.isArray(selectedRowIds) && selectedRowIds.length > 0;
 
-            if (isWorkOrdersTab || typeof activeTab?.exportMapper === 'function') {
-                const listRes = await axiosInstance.get(activeTab.resourcePath, {
+            // 7. Preserve exact behavior for the 6 Master Data tabs when no rows are selected
+            if (isMasterData && !hasSelectedRows) {
+                const response = await axiosInstance.get(`${activeTab.resourcePath}/export`, {
                     params: {
-                        limit: 500,
                         search,
                         status: (statusFilter && statusFilter !== 'All Statuses' && statusFilter !== 'All' && statusFilter !== 'ALL') ? statusFilter : undefined
+                    },
+                    responseType: 'blob'
+                });
+                const csvBlob = new Blob([response.data], { type: 'text/csv' });
+                const url = window.URL.createObjectURL(csvBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.setAttribute('download', `${activeTabKey}_export_${Date.now()}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                toast.success('CSV export downloaded successfully!', { id: 'csv-export' });
+                return;
+            }
+
+            // Client-side export engine for all other modules or when specific rows are selected
+            const baseParams = {};
+            if (search && search.trim()) baseParams.search = search.trim();
+            const isAllStatus = !statusFilter || statusFilter === 'All Statuses' || statusFilter === 'All' || statusFilter === 'ALL';
+            if (!isAllStatus) {
+                baseParams.status = statusFilter;
+            }
+
+            // 3. Fetch all matching records across all pages
+            let records = [];
+            let currentPage = 1;
+            const fetchLimit = 100;
+            let totalPages = 1;
+
+            while (currentPage <= totalPages && currentPage <= 100) {
+                const listRes = await axiosInstance.get(activeTab.resourcePath, {
+                    params: {
+                        ...baseParams,
+                        page: currentPage,
+                        limit: fetchLimit
                     }
                 });
 
-                if (listRes.data?.success && Array.isArray(listRes.data.data) && listRes.data.data.length > 0) {
-                    const data = listRes.data.data;
-                    const exportData = typeof activeTab?.exportMapper === 'function'
-                        ? activeTab.exportMapper(data)
-                        : data.map(row => ({
-                            'WORK ORDER #': row.workOrderNumber || row.code || '',
-                            'CUSTOMER / CLIENT': row.customer?.companyName || row.customerName || '',
-                            'WORK TITLE': row.finishedGood?.productName || row.workTitle || '',
-                            'TARGET BAGS': row.targetQuantity || row.targetBags || 0,
-                            'COMPLETED BAGS': row.completedQuantity || row.completedBags || 0,
-                            'STAGE PROGRESS': row.currentStage || '',
-                            'MACHINE': row.machine?.machineName || row.machineAllocation?.machineName || '',
-                            'STATUS': row.status || ''
-                        }));
-
-                    const headers = Object.keys(exportData[0]);
-                    const csvRows = [headers.join(',')];
-
-                    exportData.forEach((row) => {
-                        const rowVals = headers.map((h) => `"${String(row[h] !== undefined && row[h] !== null ? row[h] : '').replace(/"/g, '""')}"`);
-                        csvRows.push(rowVals.join(','));
-                    });
-
-                    csvBlob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-                } else {
-                    throw new Error('No data available to export');
+                if (!listRes.data?.success) {
+                    throw new Error(listRes.data?.message || 'Failed to fetch data for export');
                 }
-            } else {
+
+                const raw = listRes.data.data;
+                const pageRecords = Array.isArray(raw)
+                    ? raw
+                    : (Array.isArray(raw?.records)
+                        ? raw.records
+                        : (Array.isArray(raw?.docs)
+                            ? raw.docs
+                            : (Array.isArray(raw?.data) ? raw.data : [])));
+
+                if (!pageRecords.length) break;
+
+                records = records.concat(pageRecords);
+
+                const pagination = listRes.data.pagination;
+                const totalCount = listRes.data.totalCount ?? pagination?.totalCount ?? pagination?.total;
+                if (pagination?.totalPages) {
+                    totalPages = Number(pagination.totalPages);
+                } else if (pagination?.pages) {
+                    totalPages = Number(pagination.pages);
+                } else if (totalCount !== undefined) {
+                    totalPages = Math.ceil(Number(totalCount) / fetchLimit) || 1;
+                } else {
+                    if (pageRecords.length < fetchLimit) {
+                        break;
+                    }
+                    totalPages = currentPage + 1;
+                }
+
+                currentPage++;
+            }
+
+            // Filter to selected rows if any checkboxes are checked
+            if (hasSelectedRows) {
+                const idSet = new Set(selectedRowIds.map(String));
+                records = records.filter((row) => idSet.has(String(row._id || row.id)));
+            }
+
+            // 2. Skip non-data columns (Actions, Checkbox, View/Edit icons)
+            const isNonDataHeader = (h) => {
+                const s = String(h || '').trim().toUpperCase();
+                return !s || ['ACTIONS', 'ACTION', 'CHECKBOX', 'SELECT', 'VIEW', 'EDIT', 'DELETE', 'OPERATIONS', 'MANAGE', '#'].includes(s);
+            };
+
+            const validColumns = (activeTab?.columns || []).filter((c) => {
+                if (!c || c.excludeFromExport) return false;
+                return !isNonDataHeader(c.header);
+            });
+
+            // 4. Formatting helpers: IST Date (dd-mm-yyyy)
+            const formatDateIST = (val) => {
+                if (!val) return '';
+                const d = (val instanceof Date) ? val : new Date(val);
+                if (isNaN(d.getTime())) return String(val);
                 try {
-                    const response = await axiosInstance.get(`${activeTab.resourcePath}/export`, {
-                        params: {
-                            search,
-                            status: (statusFilter && statusFilter !== 'All Statuses' && statusFilter !== 'All' && statusFilter !== 'ALL') ? statusFilter : undefined
-                        },
-                        responseType: 'blob'
-                    });
-                    csvBlob = new Blob([response.data], { type: 'text/csv' });
+                    const parts = new Intl.DateTimeFormat('en-IN', {
+                        timeZone: 'Asia/Kolkata',
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric'
+                    }).formatToParts(d);
+                    const day = parts.find((p) => p.type === 'day')?.value || String(d.getDate()).padStart(2, '0');
+                    const month = parts.find((p) => p.type === 'month')?.value || String(d.getMonth() + 1).padStart(2, '0');
+                    const year = parts.find((p) => p.type === 'year')?.value || String(d.getFullYear());
+                    return `${day}-${month}-${year}`;
                 } catch {
-                    // Fallback: Fetch data records and generate CSV client-side
-                    const listRes = await axiosInstance.get(activeTab.resourcePath, {
-                        params: {
-                            limit: 500,
-                            search,
-                            status: (statusFilter && statusFilter !== 'All Statuses' && statusFilter !== 'All' && statusFilter !== 'ALL') ? statusFilter : undefined
-                        }
-                    });
+                    const day = String(d.getDate()).padStart(2, '0');
+                    const month = String(d.getMonth() + 1).padStart(2, '0');
+                    const year = d.getFullYear();
+                    return `${day}-${month}-${year}`;
+                }
+            };
 
-                    if (listRes.data?.success && Array.isArray(listRes.data.data) && listRes.data.data.length > 0) {
-                        const records = listRes.data.data;
-                        const validColumns = (activeTab?.columns || []).filter(
-                            (c) => String(c.header || '').toUpperCase() !== 'ACTIONS'
-                        );
-                        const headers = validColumns.length > 0
-                            ? validColumns.map((c) => typeof c.header === 'string' ? c.header : c.accessor || 'FIELD')
-                            : Object.keys(records[0]).filter((k) => typeof records[0][k] !== 'object');
+            const getNestedValue = (obj, path) => {
+                if (!obj || !path) return undefined;
+                const parts = String(path).split('.');
+                let curr = obj;
+                for (const p of parts) {
+                    if (curr == null) return undefined;
+                    curr = curr[p];
+                }
+                return curr;
+            };
 
-                        const csvRows = [headers.join(',')];
+            const getObjectDisplayString = (obj) => {
+                if (!obj || typeof obj !== 'object') return '';
+                return obj.companyName ||
+                    obj.name ||
+                    obj.productName ||
+                    obj.machineName ||
+                    obj.employeeName ||
+                    obj.code ||
+                    obj.shiftCode ||
+                    obj.soNumber ||
+                    obj.invoiceNumber ||
+                    obj.poNumber ||
+                    obj.workOrderNumber ||
+                    obj.qcCertificateNumber ||
+                    obj.ticketNumber ||
+                    obj.receiptNumber ||
+                    obj.referenceNumber ||
+                    obj.dispatchNumber ||
+                    obj.title ||
+                    '';
+            };
 
-                        records.forEach((row) => {
-                            const rowVals = validColumns.length > 0
-                                ? validColumns.map((c) => {
-                                    let val = '';
-                                    if (c.accessor) val = row[c.accessor];
-                                    else if (c.render && typeof c.render === 'function') val = row.name || row.code || row.poNumber || '';
-                                    if (val === undefined || val === null) val = '';
-                                    return `"${String(val).replace(/"/g, '""')}"`;
-                                })
-                                : headers.map((h) => `"${String(row[h] || '').replace(/"/g, '""')}"`);
+            // 1 & 4. Value extraction and cleaning per cell
+            const extractCellValue = (row, col) => {
+                let rawVal;
+                if (typeof col.exportValue === 'function') {
+                    rawVal = col.exportValue(row);
+                } else if (col.accessor) {
+                    rawVal = getNestedValue(row, col.accessor);
+                } else if (col.key) {
+                    rawVal = getNestedValue(row, col.key);
+                } else {
+                    rawVal = '';
+                }
 
-                            csvRows.push(rowVals.join(','));
-                        });
+                if (rawVal === undefined || rawVal === null) return '';
 
-                        csvBlob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-                    } else {
-                        throw new Error('No data available to export');
+                if (typeof rawVal === 'boolean') {
+                    return rawVal ? 'Yes' : 'No';
+                }
+
+                if (rawVal instanceof Date) {
+                    return formatDateIST(rawVal);
+                }
+
+                if (Array.isArray(rawVal)) {
+                    return rawVal.map((item) => (typeof item === 'object' && item !== null ? getObjectDisplayString(item) : String(item))).join('; ');
+                }
+
+                if (typeof rawVal === 'object') {
+                    return getObjectDisplayString(rawVal);
+                }
+
+                if (typeof rawVal === 'number') {
+                    return isNaN(rawVal) ? '' : String(rawVal);
+                }
+
+                let str = String(rawVal).trim();
+                // Strip currency symbols and commas from currency-formatted strings
+                if (str.startsWith('₹') || str.includes('₹')) {
+                    str = str.replace(/₹\s?/g, '').replace(/,/g, '').trim();
+                }
+
+                // Detect ISO date strings: e.g., 2026-08-20T10:30:00.000Z or 2026-08-20
+                if (/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/.test(str)) {
+                    const d = new Date(str);
+                    if (!isNaN(d.getTime())) {
+                        return formatDateIST(d);
                     }
                 }
+
+                return str;
+            };
+
+            const escapeCsvCell = (val) => {
+                const s = String(val === undefined || val === null ? '' : val);
+                return `"${s.replace(/"/g, '""')}"`;
+            };
+
+            // Build CSV rows
+            const headers = validColumns.map((col) => (typeof col.header === 'string' ? col.header.trim() : (col.key || col.accessor || 'FIELD')));
+            const csvRows = [headers.map(escapeCsvCell).join(',')];
+
+            records.forEach((row) => {
+                const rowCells = validColumns.map((col) => escapeCsvCell(extractCellValue(row, col)));
+                csvRows.push(rowCells.join(','));
+            });
+
+            // 6. Generate File Name: <module>-<tab>-<dd-mm-yyyy>.csv
+            const today = new Date();
+            const dd = String(today.getDate()).padStart(2, '0');
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const yyyy = today.getFullYear();
+            const dateStr = `${dd}-${mm}-${yyyy}`;
+
+            let moduleSlug = 'module';
+            const pathParts = (window.location.pathname || '').split('/').filter(Boolean);
+            if (pathParts.length > 0) {
+                moduleSlug = pathParts[0].toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            } else if (title) {
+                moduleSlug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
             }
+
+            const tabSlug = (activeTab?.key || activeTabKey || activeTab?.label || 'export')
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-');
+
+            const filename = `${moduleSlug}-${tabSlug}-${dateStr}.csv`;
+
+            // 4. Add UTF-8 BOM (\uFEFF) for Excel compatibility with symbols and Indian languages
+            const csvContent = '\uFEFF' + csvRows.join('\r\n');
+            const csvBlob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
 
             const url = window.URL.createObjectURL(csvBlob);
             const link = document.createElement('a');
             link.href = url;
-            link.setAttribute('download', `${activeTabKey}_export_${Date.now()}.csv`);
+            link.setAttribute('download', filename);
             document.body.appendChild(link);
             link.click();
             link.remove();
-            toast.success('CSV export downloaded successfully!', { id: 'csv-export' });
+
+            // 5. Zero rows notification
+            if (records.length === 0) {
+                toast('No records to export', { id: 'csv-export', icon: 'ℹ️' });
+            } else {
+                toast.success(`Exported ${records.length} records to ${filename}`, { id: 'csv-export' });
+            }
         } catch (err) {
             console.error('Export CSV error:', err);
-            toast.error(err.message || 'Failed to export CSV file', { id: 'csv-export' });
+            toast.error(err.response?.data?.message || err.message || 'Failed to export CSV file', { id: 'csv-export' });
         }
     };
 
@@ -1737,6 +1904,20 @@ export default function TabbedResourcePage({
             dimensions: { width: '', length: '', unit: 'cm' },
             status: activeTabKey === 'customers' ? 'ACTIVE_CUSTOMER' : (activeTabKey === 'machines' ? 'AVAILABLE' : 'Active')
         });
+
+        if (activeTabKey === 'customers') {
+            axiosInstance.get('/customers/next-code')
+                .then((res) => {
+                    if (res.data?.data?.nextCode) {
+                        setFormData((prev) => ({
+                            ...prev,
+                            code: res.data.data.nextCode,
+                            customerCode: res.data.data.nextCode
+                        }));
+                    }
+                })
+                .catch(() => {});
+        }
 
         if (onAddClick && (activeTabKey === 'work-orders' || activeTabKey === 'stage-monitor')) {
             onAddClick(activeTabKey);
@@ -2010,7 +2191,7 @@ export default function TabbedResourcePage({
                         <input
                             type="text"
                             required
-                            placeholder="e.g. Acme PolySack Industries Pvt Ltd"
+                            placeholder="e.g. Sterling Polyfab Ltd"
                             value={formData.companyName || formData.name || ''}
                             onChange={(e) => {
                                 handleInputChange('companyName', e.target.value);
@@ -2055,7 +2236,7 @@ export default function TabbedResourcePage({
                             </label>
                             <input
                                 type="email"
-                                placeholder="sales@acmepolysack.com"
+                                placeholder="contact@company.com"
                                 value={formData.email || ''}
                                 onChange={(e) => handleInputChange('email', e.target.value)}
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"

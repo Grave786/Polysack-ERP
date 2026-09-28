@@ -229,7 +229,7 @@ export default function DataTable({
                         <button
                             type="button"
                             className="flex items-center gap-1.5 px-3 py-2 bg-card-bg border border-border hover:bg-app-bg text-text-muted hover:text-text-main rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-2xs select-none"
-                            onClick={onExportCsv}
+                            onClick={() => onExportCsv(selectedRowIds)}
                         >
                             <Download size={15} />
                             <span>Export CSV</span>

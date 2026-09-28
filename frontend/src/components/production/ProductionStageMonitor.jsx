@@ -19,6 +19,7 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
     const [allWorkOrders, setAllWorkOrders] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [goodOutputQty, setGoodOutputQty] = useState('');
+    const [stageForm, setStageForm] = useState({ rejectedQty: '', wastageKg: '', returnToStore: '' });
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Searchable combobox & status filter states for Select Job
@@ -129,10 +130,6 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
     }
 
     const numGoodOutput = goodOutputQty !== '' ? Number(goodOutputQty) : '';
-    const autoRejectedQty = typeof numGoodOutput === 'number' && !isNaN(numGoodOutput)
-        ? Math.max(0, maxAvailableQty - numGoodOutput)
-        : maxAvailableQty;
-
     const isExceedingCap = typeof numGoodOutput === 'number' && numGoodOutput > maxAvailableQty;
 
     // Handle Advance Stage submit
@@ -141,11 +138,16 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
         if (!workOrder?._id || !activeStage) return;
 
         const numGood = Number(goodOutputQty);
-        const numDefect = autoRejectedQty;
+        const numDefect = stageForm.rejectedQty !== '' ? Number(stageForm.rejectedQty) : 0;
         const totalEntered = numGood + numDefect;
 
         if (isNaN(numGood) || numGood < 0) {
             toast.error('Please enter a valid Good Output quantity >= 0');
+            return;
+        }
+
+        if (isNaN(numDefect) || numDefect < 0) {
+            toast.error('Please enter a valid Rejected / Defect quantity >= 0');
             return;
         }
 
@@ -158,7 +160,9 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
             setIsSubmitting(true);
             const res = await axiosInstance.patch(`/work-orders/${workOrder._id}/advance-stage`, {
                 goodOutputQty: numGood,
-                rejectedQty: autoRejectedQty
+                rejectedQty: numDefect,
+                wastageKg: stageForm.wastageKg ? Number(stageForm.wastageKg) : 0,
+                returnToStore: stageForm.returnToStore ? Number(stageForm.returnToStore) : 0
             });
 
             if (res.data?.success) {
@@ -169,6 +173,7 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                 }
 
                 setGoodOutputQty('');
+                setStageForm({ rejectedQty: '', wastageKg: '', returnToStore: '' });
 
                 // Refetch details to reflect newly active/completed stage
                 await fetchWorkOrderDetail(workOrder._id);
@@ -557,17 +562,53 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
 
                             <div>
                                 <label className="block text-xs font-bold uppercase tracking-wider text-white mb-1">
-                                    Rejected / Defect Bags (Auto-Calculated)
+                                    Rejected / Defect Qty
                                 </label>
                                 <input
                                     type="number"
-                                    readOnly
-                                    disabled
-                                    value={autoRejectedQty}
-                                    className="w-full border border-sidebar-hover rounded-lg p-2 bg-app-bg text-amber-400 text-xs font-mono font-bold focus:outline-none cursor-not-allowed opacity-90"
+                                    step="0.01"
+                                    min="0"
+                                    value={stageForm.rejectedQty === 0 ? '' : stageForm.rejectedQty}
+                                    onChange={(e) => setStageForm(p => ({ ...p, rejectedQty: e.target.value }))}
+                                    placeholder="e.g. 2"
+                                    className="w-full border border-sidebar-hover rounded-lg p-2 bg-card-bg text-text-main text-xs font-bold focus:outline-none focus:border-primary"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                            <div>
+                                <label className="block text-[10px] font-bold text-sidebar-text mb-1 uppercase tracking-wider">
+                                    Wastage / Scrap (Kg)
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={stageForm.wastageKg || ''}
+                                    onChange={(e) => setStageForm(p => ({ ...p, wastageKg: e.target.value }))}
+                                    placeholder="e.g. 2.5"
+                                    className="w-full border border-sidebar-hover rounded-md p-2 bg-card-bg text-text-main text-xs focus:outline-none focus:border-primary"
                                 />
                                 <span className="text-[10px] text-sidebar-text mt-1 block">
-                                    Auto-filled as ({maxAvailableQty} available − {numGoodOutput || 0} passed)
+                                    Lumps, chindi, or unrecoverable machine scrap
+                                </span>
+                            </div>
+                            <div>
+                                <label className="block text-[10px] font-bold text-sidebar-text mb-1 uppercase tracking-wider">
+                                    Return to Store (Kg / Rolls)
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={stageForm.returnToStore || ''}
+                                    onChange={(e) => setStageForm(p => ({ ...p, returnToStore: e.target.value }))}
+                                    placeholder="e.g. 50"
+                                    className="w-full border border-sidebar-hover rounded-md p-2 bg-card-bg text-text-main text-xs focus:outline-none focus:border-primary"
+                                />
+                                <span className="text-[10px] text-sidebar-text mt-1 block">
+                                    Unused raw material sent back to inventory
                                 </span>
                             </div>
                         </div>

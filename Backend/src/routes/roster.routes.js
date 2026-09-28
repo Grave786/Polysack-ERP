@@ -6,12 +6,12 @@ const { authenticate, checkPermission, checkTenantModule } = require('../middlew
 router.use(authenticate);
 router.use(checkTenantModule('HR'));
 
-router.post('/', authenticate, checkPermission('USERS', 'CREATE'), createRoster);
-router.get('/', authenticate, checkPermission('USERS', 'READ'), getRosters);
+router.post('/', authenticate, checkPermission('HR', 'CREATE'), createRoster);
+router.get('/', authenticate, checkPermission('HR', 'READ'), getRosters);
 const Roster = require('../models/roster.model');
 const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
 
-router.delete('/:id', authenticate, checkPermission('USERS', 'DELETE'), deleteRoster);
-router.post('/bulk-delete', authenticate, checkPermission('USERS', 'DELETE'), createBulkDeleteHandler(Roster, { resourceName: 'Rosters' }));
+router.delete('/:id', authenticate, checkPermission('HR', 'DELETE'), deleteRoster);
+router.post('/bulk-delete', authenticate, checkPermission('HR', 'DELETE'), createBulkDeleteHandler(Roster, { resourceName: 'Rosters' }));
 
 module.exports = router;

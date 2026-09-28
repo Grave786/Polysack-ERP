@@ -124,24 +124,9 @@ const syncLowStockNotifications = async (tenantId) => {
             }
         }
 
-        // Also sync any unalerted pending POs
-        const pendingPOs = await PurchaseOrder.find({
-            tenant: tenantId,
-            status: 'PENDING_APPROVAL'
-        }).populate('supplier', 'name');
-
-        for (const po of pendingPOs) {
-            const existingNotif = await Notification.findOne({
-                tenant: tenantId,
-                type: 'PO_APPROVAL',
-                'data.poId': po._id,
-                isRead: false
-            });
-
-            if (!existingNotif) {
-                await createPoApprovalNotification(po);
-            }
-        }
+        // Also sync any pending PO approvals
+        const { syncPendingPurchaseOrderApprovals } = require('./approval.service');
+        await syncPendingPurchaseOrderApprovals(tenantId);
     } catch (err) {
         console.error('Error in syncLowStockNotifications:', err);
     }
@@ -168,7 +153,7 @@ const createPoApprovalNotification = async (poDoc) => {
                 supplierName,
                 totalValue: poDoc.totalValue
             },
-            link: '/procurement',
+            link: `/approvals?id=${poDoc._id}`,
             isRead: false
         });
         console.log(`📋 [NOTIFICATION] PO Approval notification created for ${poDoc.poNumber}`);

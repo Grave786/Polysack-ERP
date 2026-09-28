@@ -3,6 +3,8 @@ const Supplier = require('../models/supplier.model');
 const Location = require('../models/location.model');
 const RawMaterial = require('../models/rawMaterial.model');
 const { createPoApprovalNotification, resolvePoApprovalNotification } = require('../services/notification.service');
+const { createPoApprovalRequest } = require('../services/approval.service');
+const { isTenantAdmin } = require('../middlewares/rbac.middleware');
 
 /**
  * Helper function to auto-generate unique PO number per tenant & year
@@ -153,7 +155,13 @@ const createPurchaseOrder = async (req, res) => {
         }
 
         const poNumber = await generatePoNumber(tenantId);
-        const initialStatus = ['SENT_TO_SUPPLIER', 'PENDING_APPROVAL'].includes(status) ? status : 'DRAFT';
+        if (status === 'SENT_TO_SUPPLIER') {
+            return res.status(400).json({
+                success: false,
+                message: 'Direct creation as SENT_TO_SUPPLIER is not allowed. Purchase Orders must be approved by Tenant Admin through the central Approvals module.'
+            });
+        }
+        const initialStatus = (status === 'DRAFT') ? 'DRAFT' : 'PENDING_APPROVAL';
 
         const purchaseOrder = new PurchaseOrder({
             tenant: tenantId,
@@ -166,13 +174,14 @@ const createPurchaseOrder = async (req, res) => {
             status: initialStatus,
             deliveryLocation: deliveryLocation || null,
             notes,
-            isActive: true
+            isActive: true,
+            createdBy: req.user?._id
         });
 
         await purchaseOrder.save();
 
         if (purchaseOrder.status === 'PENDING_APPROVAL') {
-            await createPoApprovalNotification(purchaseOrder);
+            await createPoApprovalRequest(purchaseOrder, req.user);
         }
 
         await purchaseOrder.populate([
@@ -391,9 +400,18 @@ const updatePurchaseOrder = async (req, res) => {
         if (expectedDelivery) purchaseOrder.expectedDelivery = expectedDelivery;
         if (notes !== undefined) purchaseOrder.notes = notes;
         if (status) {
-            const validStatuses = ['DRAFT', 'SENT_TO_SUPPLIER', 'PENDING_APPROVAL', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'];
+            if (status === 'SENT_TO_SUPPLIER') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Direct transition to SENT_TO_SUPPLIER is not allowed. Purchase Orders must be approved by Tenant Admin through the central Approvals module.'
+                });
+            }
+            const validStatuses = ['DRAFT', 'PENDING_APPROVAL', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'];
             if (validStatuses.includes(status)) {
                 purchaseOrder.status = status;
+                if (status === 'PENDING_APPROVAL') {
+                    await createPoApprovalRequest(purchaseOrder, req.user);
+                }
             }
         }
 
@@ -523,6 +541,13 @@ const updateStatus = async (req, res) => {
             });
         }
 
+        if (purchaseOrder.status === 'PENDING_APPROVAL' && status !== 'CANCELLED') {
+            return res.status(400).json({
+                success: false,
+                message: 'This Purchase Order is Pending Approval. Please approve or reject it through the central Approvals module.'
+            });
+        }
+
         if (status === 'CANCELLED') {
             if (purchaseOrder.status === 'FULLY_RECEIVED' || purchaseOrder.status === 'PARTIALLY_RECEIVED') {
                 return res.status(400).json({
@@ -531,14 +556,19 @@ const updateStatus = async (req, res) => {
                 });
             }
             purchaseOrder.status = 'CANCELLED';
-        } else if (status === 'SENT_TO_SUPPLIER') {
-            if (purchaseOrder.status !== 'DRAFT' && purchaseOrder.status !== 'PENDING_APPROVAL') {
+        } else if (status === 'PENDING_APPROVAL') {
+            if (purchaseOrder.status !== 'DRAFT') {
                 return res.status(400).json({
                     success: false,
-                    message: `Can only mark as SENT_TO_SUPPLIER when current status is DRAFT or PENDING_APPROVAL. Current status is ${purchaseOrder.status}.`
+                    message: `Can only submit for approval from DRAFT status. Current status is ${purchaseOrder.status}.`
                 });
             }
-            purchaseOrder.status = 'SENT_TO_SUPPLIER';
+            purchaseOrder.status = 'PENDING_APPROVAL';
+        } else if (status === 'SENT_TO_SUPPLIER') {
+            return res.status(400).json({
+                success: false,
+                message: 'Direct transition to SENT_TO_SUPPLIER is not allowed. Purchase Orders must be approved by Tenant Admin through the central Approvals module.'
+            });
         } else {
             return res.status(400).json({
                 success: false,
@@ -547,6 +577,10 @@ const updateStatus = async (req, res) => {
         }
 
         await purchaseOrder.save();
+
+        if (purchaseOrder.status === 'PENDING_APPROVAL') {
+            await createPoApprovalRequest(purchaseOrder, req.user);
+        }
 
         if (status === 'SENT_TO_SUPPLIER' || status === 'CANCELLED') {
             await resolvePoApprovalNotification(purchaseOrder._id, tenantId);

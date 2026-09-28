@@ -41,6 +41,16 @@ const WorkOrderStageSchema = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    wastageKg: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    returnToStore: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
     startedAt: {
         type: Date,
         default: null

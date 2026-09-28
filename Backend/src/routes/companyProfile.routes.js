@@ -6,16 +6,16 @@ const { authenticate, checkPermission } = require('../middlewares/rbac.middlewar
 /**
  * @route   GET /api/admin/company-profile
  * @desc    Get Tenant Company Profile & GST Settings
- * @access  Private (USERS:READ permission - pending ADMINISTRATION module approval)
+ * @access  Private (COMPANY_SETTINGS:READ)
  */
-router.get('/', authenticate, checkPermission('USERS', 'READ'), getCompanyProfile);
+router.get('/', authenticate, checkPermission('COMPANY_SETTINGS', 'READ'), getCompanyProfile);
 
 /**
  * @route   PATCH /api/admin/company-profile
  * @desc    Update Tenant Company Profile & GST Settings
- * @access  Private (USERS:UPDATE permission - pending ADMINISTRATION module approval)
+ * @access  Private (COMPANY_SETTINGS:UPDATE)
  */
-router.patch('/', authenticate, checkPermission('USERS', 'UPDATE'), updateCompanyProfile);
-router.put('/', authenticate, checkPermission('USERS', 'UPDATE'), updateCompanyProfile);
+router.patch('/', authenticate, checkPermission('COMPANY_SETTINGS', 'UPDATE'), updateCompanyProfile);
+router.put('/', authenticate, checkPermission('COMPANY_SETTINGS', 'UPDATE'), updateCompanyProfile);
 
 module.exports = router;

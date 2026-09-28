@@ -14,6 +14,9 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
 
     // Items array mapping PO items
     const [grnItems, setGrnItems] = useState([]);
+    const inwardItems = grnItems;
+    const setInwardItems = setGrnItems;
+
     // Multiple rolls array to manage incoming rolls
     const [inwardRolls, setInwardRolls] = useState([
         { rollNo: '', length: '', width: '', grossWeight: '', netWeight: '', qtyKgs: '', qtyPcs: '' }
@@ -22,6 +25,50 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
     const setRolls = setInwardRolls;
 
     const [activePoDetails, setActivePoDetails] = useState(null);
+
+    // Determine if item is Fabric/Roll-based or Bulk/Ink
+    const isFabric = (item) => {
+        if (!item) return false;
+        const cat = String(item.materialCategory || item.category || '').toLowerCase();
+        const name = String(item.name || '').toLowerCase();
+        const code = String(item.code || '').toLowerCase();
+        const unit = String(item.unit || '').toLowerCase();
+
+        // Ink, chemical, or consumable items are bulk
+        if (
+            cat.includes('ink') ||
+            cat.includes('chemical') ||
+            cat.includes('consumable') ||
+            name.includes('ink') ||
+            name.includes('chemical') ||
+            name.includes('solvent') ||
+            name.includes('masterbatch') ||
+            unit.includes('liter') ||
+            unit.includes('bucket') ||
+            unit.includes('drum')
+        ) {
+            return false;
+        }
+
+        // Fabric or roll items
+        if (
+            cat.includes('fabric') ||
+            cat.includes('roll') ||
+            name.includes('fabric') ||
+            name.includes('roll') ||
+            code.includes('fab') ||
+            unit.includes('roll') ||
+            unit.includes('meter') ||
+            unit.includes('mtr')
+        ) {
+            return true;
+        }
+
+        // Default to fabric/roll
+        return true;
+    };
+
+    const hasFabricItems = inwardItems.some((item) => isFabric(item));
 
     // Initialize items & refetch fresh PO details whenever modal opens or po._id changes
     useEffect(() => {
@@ -50,27 +97,35 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
 
                     const itemsList = Array.isArray(freshPo?.items) ? freshPo.items : [];
                     setGrnItems(
-                        itemsList.map((i) => {
+                        itemsList.map((i, index) => {
                             const rmId = typeof i.rawMaterial === 'object' ? i.rawMaterial?._id : i.rawMaterial;
-                            const rmName = typeof i.rawMaterial === 'object' ? i.rawMaterial?.name : 'Raw Material';
-                            const rmCode = typeof i.rawMaterial === 'object' ? i.rawMaterial?.code : '';
-                            
+                            const rmName = typeof i.rawMaterial === 'object' ? i.rawMaterial?.name : (i.name || 'Raw Material');
+                            const rmCode = typeof i.rawMaterial === 'object' ? i.rawMaterial?.code : (i.code || '');
+                            const rmCategory = typeof i.rawMaterial === 'object'
+                                ? (i.rawMaterial?.category?.name || i.rawMaterial?.category || i.rawMaterial?.materialCategory || '')
+                                : (i.category || i.materialCategory || '');
+
                             const ordered = i.orderedQuantity || 0;
                             const alreadyRecv = i.receivedQuantity || 0;
                             const remaining = Math.max(0, ordered - alreadyRecv);
 
                             return {
+                                _id: i._id || rmId || `item-${index}`,
                                 rawMaterial: rmId,
                                 name: rmName,
                                 code: rmCode,
+                                category: rmCategory,
+                                materialCategory: rmCategory,
                                 unit: i.unit || (typeof i.rawMaterial === 'object' && (i.rawMaterial?.uom?.symbol || i.rawMaterial?.uom?.name || i.rawMaterial?.uom)) || 'Kg',
                                 orderedQuantity: ordered,
                                 alreadyReceivedQuantity: alreadyRecv,
                                 remainingAllowed: remaining,
                                 receivedQuantity: remaining,
+                                receivedQty: remaining,
                                 batchNumber: '',
                                 receivedRolls: '',
-                                fabricAverage: ''
+                                fabricAverage: '',
+                                bucketsCount: ''
                             };
                         })
                     );
@@ -87,10 +142,22 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
         }
     }, [isOpen, po?._id]);
 
-    const handleItemChange = (index, field, value) => {
+    const handleItemChange = (identifier, field, value) => {
         setGrnItems((prev) => {
             const updated = [...prev];
-            updated[index][field] = value;
+            const targetIdx = typeof identifier === 'number'
+                ? identifier
+                : updated.findIndex(it => (it._id && it._id === identifier) || it.rawMaterial === identifier);
+
+            if (targetIdx !== -1) {
+                const updatedItem = { ...updated[targetIdx], [field]: value };
+                if (field === 'receivedQty') {
+                    updatedItem.receivedQuantity = value;
+                } else if (field === 'receivedQuantity') {
+                    updatedItem.receivedQty = value;
+                }
+                updated[targetIdx] = updatedItem;
+            }
             return updated;
         });
     };
@@ -118,9 +185,12 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
         }
 
         const validItems = [];
-        for (let idx = 0; idx < grnItems.length; idx++) {
-            const item = grnItems[idx];
-            const numRecv = Number(item.receivedQuantity);
+        for (let idx = 0; idx < inwardItems.length; idx++) {
+            const item = inwardItems[idx];
+            const rawQty = item.receivedQuantity !== undefined && item.receivedQuantity !== ''
+                ? item.receivedQuantity
+                : item.receivedQty;
+            const numRecv = Number(rawQty);
 
             if (isNaN(numRecv) || numRecv < 0) {
                 toast.error(`Invalid received quantity for ${item.name}`);
@@ -136,9 +206,11 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                 validItems.push({
                     rawMaterial: item.rawMaterial,
                     receivedQuantity: numRecv,
+                    unit: item.unit,
                     batchNumber: item.batchNumber?.trim() || undefined,
                     receivedRolls: item.receivedRolls ? Number(item.receivedRolls) : undefined,
-                    fabricAverage: item.fabricAverage ? Number(item.fabricAverage) : undefined
+                    fabricAverage: item.fabricAverage ? Number(item.fabricAverage) : undefined,
+                    bucketsCount: item.bucketsCount ? Number(item.bucketsCount) : undefined
                 });
             }
         }
@@ -148,60 +220,64 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
             return;
         }
 
-        const selectedPoItem = grnItems[0] || activePo?.items?.[0];
+        const selectedPoItem = inwardItems[0] || activePo?.items?.[0];
 
         const validRolls = [];
-        // Validate Packing Slip & Roll Specifications - Mandatory for all items
-        if (!inwardRolls || inwardRolls.length === 0) {
-            toast.error('At least one Roll Specification is required. Please fill in the packing slip roll details.');
-            return;
-        }
-        for (let rIdx = 0; rIdx < inwardRolls.length; rIdx++) {
-            const r = inwardRolls[rIdx];
-            const rollNumberVal = (r.rollNumber || r.rollNo || '').trim();
-            if (!rollNumberVal) {
-                toast.error(`Roll Number is required for Roll #${rIdx + 1}.`);
+        const hasActiveFabricItems = inwardItems.some((item) => isFabric(item) && Number(item.receivedQuantity ?? item.receivedQty ?? 0) > 0);
+
+        if (hasActiveFabricItems) {
+            // Validate Packing Slip & Roll Specifications - Mandatory for fabric items
+            if (!inwardRolls || inwardRolls.length === 0) {
+                toast.error('At least one Roll Specification is required. Please fill in the packing slip roll details.');
                 return;
             }
+            for (let rIdx = 0; rIdx < inwardRolls.length; rIdx++) {
+                const r = inwardRolls[rIdx];
+                const rollNumberVal = (r.rollNumber || r.rollNo || '').trim();
+                if (!rollNumberVal) {
+                    toast.error(`Roll Number is required for Roll #${rIdx + 1}.`);
+                    return;
+                }
 
-            const gw = Number(r.grossWeight);
-            const nw = Number(r.netWeight);
-            if (!isNaN(gw) && !isNaN(nw) && gw > 0 && nw > gw) {
-                toast.error(`Roll #${rIdx + 1}: Net Weight (${nw} kg) cannot exceed Gross Weight (${gw} kg).`);
-                return;
+                const gw = Number(r.grossWeight);
+                const nw = Number(r.netWeight);
+                if (!isNaN(gw) && !isNaN(nw) && gw > 0 && nw > gw) {
+                    toast.error(`Roll #${rIdx + 1}: Net Weight (${nw} kg) cannot exceed Gross Weight (${gw} kg).`);
+                    return;
+                }
+
+                const lenVal = (r.fabricLength !== undefined && r.fabricLength !== '' && r.fabricLength !== null)
+                    ? Number(r.fabricLength)
+                    : ((r.length !== undefined && r.length !== '' && r.length !== null) ? Number(r.length) : null);
+
+                const kgVal = (r.totalQuantityKg !== undefined && r.totalQuantityKg !== '' && r.totalQuantityKg !== null)
+                    ? Number(r.totalQuantityKg)
+                    : ((r.qtyKgs !== undefined && r.qtyKgs !== '' && r.qtyKgs !== null) ? Number(r.qtyKgs) : null);
+
+                const pcsVal = (r.totalQuantityPcs !== undefined && r.totalQuantityPcs !== '' && r.totalQuantityPcs !== null)
+                    ? Number(r.totalQuantityPcs)
+                    : ((r.qtyPcs !== undefined && r.qtyPcs !== '' && r.qtyPcs !== null) ? Number(r.qtyPcs) : null);
+
+                validRolls.push({
+                    rollNumber: rollNumberVal,
+                    rollNo: rollNumberVal,
+                    fabricLength: lenVal,
+                    length: lenVal,
+                    width: r.width !== '' && r.width !== null && r.width !== undefined ? Number(r.width) : null,
+                    grossWeight: r.grossWeight !== '' && r.grossWeight !== null && r.grossWeight !== undefined ? Number(r.grossWeight) : null,
+                    netWeight: r.netWeight !== '' && r.netWeight !== null && r.netWeight !== undefined ? Number(r.netWeight) : null,
+                    fabricAverage: r.fabricAverage !== '' && r.fabricAverage !== null && r.fabricAverage !== undefined ? Number(r.fabricAverage) : null,
+                    totalQuantityKg: kgVal,
+                    qtyKgs: kgVal,
+                    totalQuantityPcs: pcsVal,
+                    qtyPcs: pcsVal
+                });
             }
 
-            const lenVal = (r.fabricLength !== undefined && r.fabricLength !== '' && r.fabricLength !== null)
-                ? Number(r.fabricLength)
-                : ((r.length !== undefined && r.length !== '' && r.length !== null) ? Number(r.length) : null);
-
-            const kgVal = (r.totalQuantityKg !== undefined && r.totalQuantityKg !== '' && r.totalQuantityKg !== null)
-                ? Number(r.totalQuantityKg)
-                : ((r.qtyKgs !== undefined && r.qtyKgs !== '' && r.qtyKgs !== null) ? Number(r.qtyKgs) : null);
-
-            const pcsVal = (r.totalQuantityPcs !== undefined && r.totalQuantityPcs !== '' && r.totalQuantityPcs !== null)
-                ? Number(r.totalQuantityPcs)
-                : ((r.qtyPcs !== undefined && r.qtyPcs !== '' && r.qtyPcs !== null) ? Number(r.qtyPcs) : null);
-
-            validRolls.push({
-                rollNumber: rollNumberVal,
-                rollNo: rollNumberVal,
-                fabricLength: lenVal,
-                length: lenVal,
-                width: r.width !== '' && r.width !== null && r.width !== undefined ? Number(r.width) : null,
-                grossWeight: r.grossWeight !== '' && r.grossWeight !== null && r.grossWeight !== undefined ? Number(r.grossWeight) : null,
-                netWeight: r.netWeight !== '' && r.netWeight !== null && r.netWeight !== undefined ? Number(r.netWeight) : null,
-                fabricAverage: r.fabricAverage !== '' && r.fabricAverage !== null && r.fabricAverage !== undefined ? Number(r.fabricAverage) : null,
-                totalQuantityKg: kgVal,
-                qtyKgs: kgVal,
-                totalQuantityPcs: pcsVal,
-                qtyPcs: pcsVal
-            });
-        }
-
-        if (validRolls.length === 0) {
-            toast.error('Please enter at least one roll with a valid Roll Number.');
-            return;
+            if (validRolls.length === 0) {
+                toast.error('Please enter at least one roll with a valid Roll Number.');
+                return;
+            }
         }
 
         try {
@@ -233,7 +309,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
     const activePo = activePoDetails || po;
     if (!activePo) return null;
 
-    const selectedPoItem = grnItems[0] || activePo?.items?.[0];
+    const selectedPoItem = inwardItems[0] || activePo?.items?.[0];
     const supplierName = typeof activePo.supplier === 'object' ? (activePo.supplier?.companyName || activePo.supplier?.name) : 'Supplier';
 
     return (
@@ -290,8 +366,8 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                     </label>
 
                     <div className="space-y-2.5">
-                        {grnItems.map((item, idx) => (
-                            <div key={idx} className="bg-app-bg border border-border rounded-lg p-3 space-y-2">
+                        {inwardItems.map((item, idx) => (
+                            <div key={item._id || idx} className="bg-app-bg border border-border rounded-lg p-3 space-y-2">
                                 <div className="flex justify-between items-start">
                                     <div>
                                         <span className="font-bold text-text-main block">{item.name}</span>
@@ -307,73 +383,138 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                                     </div>
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border/60">
-                                    <div>
-                                        <label className="block text-[10px] font-bold text-text-muted mb-0.5">
-                                            Received Qty ({item.unit || 'Kg'}) *
-                                        </label>
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            max={item.remainingAllowed}
-                                            required
-                                            value={item.receivedQuantity}
-                                            onChange={(e) => handleItemChange(idx, 'receivedQuantity', e.target.value)}
-                                            className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-emerald-800 focus:outline-none focus:border-primary"
-                                        />
-                                    </div>
+                                {/* Determine if item is Fabric/Roll-based or Bulk/Ink */}
+                                {isFabric(item) ? (
+                                    <div className="roll-tracking-section space-y-2">
+                                        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border/60">
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-text-muted mb-0.5">
+                                                    Received Qty ({item.unit || 'Kg'}) *
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    max={item.remainingAllowed}
+                                                    required
+                                                    value={item.receivedQuantity ?? item.receivedQty ?? ''}
+                                                    onChange={(e) => {
+                                                        handleItemChange(item._id, 'receivedQuantity', e.target.value);
+                                                        handleItemChange(item._id, 'receivedQty', e.target.value);
+                                                    }}
+                                                    className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-emerald-800 focus:outline-none focus:border-primary"
+                                                />
+                                            </div>
 
-                                    <div>
-                                        <label className="block text-[10px] font-bold text-text-muted mb-0.5">
-                                            Batch / Lot Number
-                                        </label>
-                                        <input
-                                            type="text"
-                                            placeholder="e.g. LOT-2026-X"
-                                            value={item.batchNumber}
-                                            onChange={(e) => handleItemChange(idx, 'batchNumber', e.target.value)}
-                                            className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary"
-                                        />
-                                    </div>
-                                </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-text-muted mb-0.5">
+                                                    Batch / Lot Number
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="e.g. LOT-2026-X"
+                                                    value={item.batchNumber || ''}
+                                                    onChange={(e) => handleItemChange(item._id, 'batchNumber', e.target.value)}
+                                                    className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary"
+                                                />
+                                            </div>
+                                        </div>
 
-                                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">No. of Rolls Received</label>
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            placeholder="e.g. 15"
-                                            value={item.receivedRolls || ''}
-                                            onChange={(e) => handleItemChange(idx, 'receivedRolls', e.target.value)}
-                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
-                                        />
+                                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">No. of Rolls Received</label>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    placeholder="e.g. 15"
+                                                    value={item.receivedRolls || ''}
+                                                    onChange={(e) => handleItemChange(item._id, 'receivedRolls', e.target.value)}
+                                                    className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">Fabric Average</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    placeholder="e.g. 120.5"
+                                                    value={item.fabricAverage || ''}
+                                                    onChange={(e) => handleItemChange(item._id, 'fabricAverage', e.target.value)}
+                                                    className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                                />
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">Fabric Average</label>
-                                        <input
-                                            type="number"
-                                            step="0.01"
-                                            placeholder="e.g. 120.5"
-                                            value={item.fabricAverage || ''}
-                                            onChange={(e) => handleItemChange(idx, 'fabricAverage', e.target.value)}
-                                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
-                                        />
+                                ) : (
+                                    <div className="mt-4 p-4 border border-dashed border-gray-300 rounded-md bg-gray-50">
+                                        <h4 className="text-sm font-bold text-gray-700 mb-3">BULK MATERIAL / INK RECEIPT</h4>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase">Total Quantity Received</label>
+                                                <div className="flex gap-2">
+                                                    <input
+                                                        type="number"
+                                                        value={item.receivedQty ?? item.receivedQuantity ?? ''}
+                                                        onChange={(e) => {
+                                                            handleItemChange(item._id, 'receivedQty', e.target.value);
+                                                            handleItemChange(item._id, 'receivedQuantity', e.target.value);
+                                                        }}
+                                                        className="flex-1 border border-border rounded-md p-2 text-xs"
+                                                        placeholder="e.g. 50"
+                                                    />
+                                                    <select 
+                                                        value={item.unit || 'Kg'}
+                                                        onChange={(e) => handleItemChange(item._id, 'unit', e.target.value)}
+                                                        className="w-24 shrink-0 border border-border rounded-md p-2 text-xs"
+                                                    >
+                                                        <option value="Kg">Kg</option>
+                                                        <option value="Liters">Liters</option>
+                                                        <option value="Buckets">Buckets</option>
+                                                        <option value="Drums">Drums</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase">Batch / Lot Number</label>
+                                                <input
+                                                    type="text"
+                                                    value={item.batchNumber || ''}
+                                                    onChange={(e) => handleItemChange(item._id, 'batchNumber', e.target.value)}
+                                                    className="w-full border border-border rounded-md p-2 text-xs"
+                                                    placeholder="e.g. INK-RED-001"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase">Number of Buckets / Drums</label>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    value={item.bucketsCount || ''}
+                                                    onChange={(e) => {
+                                                        handleItemChange(item._id, 'bucketsCount', e.target.value);
+                                                        handleItemChange(item._id, 'drumsCount', e.target.value);
+                                                    }}
+                                                    className="w-full border border-border rounded-md p-2 text-xs"
+                                                    placeholder="e.g. 5"
+                                                />
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
+                                )}
                             </div>
                         ))}
                     </div>
                 </div>
 
                 {/* Packing Slip & Roll Specifications */}
-                <PackingSlipRollsSection
-                    rolls={rolls}
-                    onChange={setRolls}
-                    title="Packing Slip & Roll Specifications"
-                    subtitle="Record multiple rolls inwarded with this purchase"
-                    required={true}
-                />
+                {hasFabricItems && (
+                    <PackingSlipRollsSection
+                        rolls={rolls}
+                        onChange={setRolls}
+                        title="Packing Slip & Roll Specifications"
+                        subtitle="Record multiple rolls inwarded with this purchase"
+                        required={true}
+                    />
+                )}
 
                 {/* Inward Notes */}
                 <div>

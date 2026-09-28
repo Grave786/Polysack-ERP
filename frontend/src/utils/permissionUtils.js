@@ -21,15 +21,18 @@ export const checkIsSuperAdmin = (user) => {
 /**
  * Helper to check if a user is a Tenant Admin
  */
-export const checkIsTenantAdmin = (user) => {
+export const isTenantAdmin = (user) => {
     if (!user) return false;
-    const userRoleName = (user.roleName || (typeof user.role === 'object' ? user.role?.name : user.role) || '').toLowerCase();
-    return userRoleName.includes('admin') || userRoleName.includes('tenant admin');
+    const userRoleName = (user.roleName || (typeof user.role === 'object' ? user.role?.name : user.role) || '').toLowerCase().trim();
+    if (userRoleName.includes('assistant')) return false;
+    return userRoleName.includes('admin');
 };
+
+export const checkIsTenantAdmin = isTenantAdmin;
 
 export const DEFAULT_ALL_MODULES = [
     'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY',
-    'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS'
+    'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS', 'COMPANY_SETTINGS'
 ];
 
 /**
@@ -40,7 +43,7 @@ export const isTenantModuleEnabled = (user, moduleName) => {
     if (checkIsSuperAdmin(user)) return true;
 
     // Core management & dashboard modules are always available
-    if (['DASHBOARD', 'ROLES', 'USERS'].includes(moduleName)) return true;
+    if (['DASHBOARD', 'ROLES', 'USERS', 'COMPANY_SETTINGS'].includes(moduleName)) return true;
 
     const enabledModules = user.tenantEnabledModules || user.tenant?.enabledModules;
     if (Array.isArray(enabledModules) && enabledModules.length > 0) {
@@ -57,6 +60,9 @@ export const isTenantModuleEnabled = (user, moduleName) => {
 export const hasModulePermission = (user, moduleName) => {
     if (!user) return false;
     if (checkIsSuperAdmin(user)) return true;
+
+    // Dashboard is accessible to everyone logged in
+    if (moduleName === 'DASHBOARD') return true;
 
     // 1. Check Platform-Level Tenant Entitlement First
     if (!isTenantModuleEnabled(user, moduleName)) {
@@ -101,6 +107,7 @@ const MODULE_ROUTE_MAP = [
     { module: 'DISPATCH', route: '/dispatch' },
     { module: 'HR', route: '/attendance' },
     { module: 'ANALYTICS', route: '/analytics' },
+    { module: 'COMPANY_SETTINGS', route: '/administration' },
     { module: 'ROLES', route: '/administration/roles' },
     { module: 'USERS', route: '/administration/users' }
 ];
@@ -114,18 +121,6 @@ export const getFirstPermittedRoute = (user) => {
 
     if (checkIsSuperAdmin(user) || checkIsTenantAdmin(user)) return '/dashboard';
 
-    // If user has explicit permission for DASHBOARD
-    if (hasModulePermission(user, 'DASHBOARD')) {
-        return '/dashboard';
-    }
-
-    // Find the first route matching a permitted module in priority order
-    for (const item of MODULE_ROUTE_MAP) {
-        if (hasModulePermission(user, item.module)) {
-            return item.route;
-        }
-    }
-
-    // Fallback: If user has zero permitted modules
-    return '/403';
+    // Dashboard is visible to everyone logged in
+    return '/dashboard';
 };

@@ -24,15 +24,31 @@ export default function LogInteractionModal({ isOpen, onClose, onSuccess, editDa
 
     useEffect(() => {
         if (activeData) {
+            let initialStatus = activeData.status || 'OPEN';
+            if (['OPEN', 'Open', 'Open (Requires Follow-up)'].includes(initialStatus)) {
+                initialStatus = 'Open (Requires Follow-up)';
+            } else if (['IN_PROGRESS', 'in_progress', 'In Progress'].includes(initialStatus)) {
+                initialStatus = 'In Progress';
+            } else if (['CLOSED', 'RESOLVED', 'Resolved', 'Resolved / Complete', 'Closed (Resolved)', 'Closed'].includes(initialStatus)) {
+                initialStatus = 'Resolved';
+            }
+
+            let initialType = activeData.interactionType || 'Phone Call';
+            if (initialType === 'CALL') initialType = 'Phone Call';
+            else if (initialType === 'EMAIL' || initialType === 'Email') initialType = 'Email Communication';
+            else if (initialType === 'MEETING') initialType = 'In-Person Meeting';
+            else if (initialType === 'VISIT') initialType = 'Site Visit';
+            else if (initialType === 'OTHER' || initialType === 'Other') initialType = 'Other / Escalation';
+
             setFormData({
                 customerId: activeData.customerId || activeData.customer?._id || activeData.customer || '',
-                interactionType: activeData.interactionType || 'Phone Call',
+                interactionType: initialType,
                 interactionDate: activeData.interactionDate
                     ? new Date(activeData.interactionDate).toISOString().split('T')[0]
                     : (activeData.date ? new Date(activeData.date).toISOString().split('T')[0] : TODAY),
                 subject: activeData.subject || '',
                 assignedExecutive: activeData.assignedExecutive?._id || activeData.assignedExecutive || '',
-                status: activeData.status || 'Open (Requires Follow-up)',
+                status: initialStatus,
                 notes: activeData.notes || ''
             });
         } else {
@@ -67,8 +83,8 @@ export default function LogInteractionModal({ isOpen, onClose, onSuccess, editDa
                 date: formData.interactionDate,
                 interactionDate: formData.interactionDate,
                 subject: formData.subject.trim(),
-                assignedExecutive: formData.assignedExecutive || undefined,
-                status: formData.status === 'Open (Requires Follow-up)' ? 'OPEN' : formData.status,
+                assignedExecutive: formData.assignedExecutive || null,
+                status: formData.status === 'Open (Requires Follow-up)' ? 'OPEN' : (formData.status === 'In Progress' ? 'IN_PROGRESS' : (formData.status === 'Resolved' ? 'CLOSED' : formData.status)),
                 notes: formData.notes.trim(),
                 enquiryId: activeData?.enquiryId || activeData?.referenceId || undefined,
                 referenceId: activeData?.referenceId || activeData?.enquiryId || undefined
@@ -158,11 +174,11 @@ export default function LogInteractionModal({ isOpen, onClose, onSuccess, editDa
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
                             >
                                 <option value="Phone Call">Phone Call</option>
-                                <option value="Email">Email Communication</option>
+                                <option value="Email Communication">Email Communication</option>
                                 <option value="In-Person Meeting">In-Person Meeting</option>
                                 <option value="Site Visit">Site Visit</option>
                                 <option value="WhatsApp">WhatsApp</option>
-                                <option value="Other">Other / Escalation</option>
+                                <option value="Other / Escalation">Other / Escalation</option>
                             </select>
                         </div>
 

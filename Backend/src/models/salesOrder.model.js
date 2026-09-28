@@ -84,6 +84,16 @@ const SalesOrderSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    sourceEnquiry: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'OrderEnquiry',
+        default: null
+    },
+    nslNumber: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     isActive: {
         type: Boolean,
         default: true
@@ -91,5 +101,6 @@ const SalesOrderSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 SalesOrderSchema.index({ soNumber: 1, tenant: 1 }, { unique: true });
+SalesOrderSchema.index({ tenant: 1, sourceEnquiry: 1 });
 
 module.exports = mongoose.model('SalesOrder', SalesOrderSchema);

@@ -17,22 +17,22 @@ const upload = multer({
 /**
  * @route   POST /api/attendance/manual-punch
  * @desc    Manual Punch / Attendance Log Entry
- * @access  Private (USERS:CREATE)
+ * @access  Private (HR:CREATE)
  */
-router.post('/manual-punch', authenticate, checkPermission('USERS', 'CREATE'), manualPunch);
+router.post('/manual-punch', authenticate, checkPermission('HR', 'CREATE'), manualPunch);
 
 /**
  * @route   POST /api/attendance/biometric-import
  * @desc    Import Biometric Attendance CSV File
- * @access  Private (USERS:CREATE)
+ * @access  Private (HR:CREATE)
  */
-router.post('/biometric-import', authenticate, checkPermission('USERS', 'CREATE'), upload.single('file'), importBiometricCsv);
+router.post('/biometric-import', authenticate, checkPermission('HR', 'CREATE'), upload.single('file'), importBiometricCsv);
 
 /**
  * @route   GET /api/attendance
  * @desc    Get Attendance Logs with filtering and pagination
- * @access  Private (USERS:READ)
+ * @access  Private (HR:READ)
  */
-router.get('/', authenticate, checkPermission('USERS', 'READ'), getAttendanceLogs);
+router.get('/', authenticate, checkPermission('HR', 'READ'), getAttendanceLogs);
 
 module.exports = router;

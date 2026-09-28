@@ -17,7 +17,10 @@ export default function WorkOrderShortageModal({ isOpen, onClose, shortages = []
 
             axiosInstance.get('/purchase-orders?limit=100')
                 .then(res => {
-                    const openList = (res.data?.data || []).filter(po => ['PENDING_APPROVAL', 'SENT_TO_SUPPLIER', 'DRAFT'].includes(po.status));
+                    const openList = (res.data?.data || []).filter(po =>
+                        !['CANCELLED', 'REJECTED'].includes(po.status) &&
+                        ['PENDING_APPROVAL', 'SENT_TO_SUPPLIER', 'PARTIALLY_RECEIVED'].includes(po.status)
+                    );
                     setExistingPos(openList);
                 })
                 .catch(() => setExistingPos([]));
@@ -26,10 +29,10 @@ export default function WorkOrderShortageModal({ isOpen, onClose, shortages = []
 
     if (!isOpen || shortages.length === 0) return null;
 
-    // Check if any open PO already covers shortages
+    // Check if any open PO already covers shortages (ignoring CANCELLED and REJECTED)
     const coveredShortages = shortages.map(item => {
         const matchingPo = existingPos.find(po =>
-            ['PENDING_APPROVAL', 'SENT_TO_SUPPLIER', 'DRAFT'].includes(po.status) &&
+            ['PENDING_APPROVAL', 'SENT_TO_SUPPLIER', 'PARTIALLY_RECEIVED'].includes(po.status) &&
             po.items?.some(i => (typeof i.rawMaterial === 'object' ? String(i.rawMaterial?._id) : String(i.rawMaterial)) === String(item.rawMaterialId))
         );
         return { ...item, matchingPo };
@@ -38,6 +41,11 @@ export default function WorkOrderShortageModal({ isOpen, onClose, shortages = []
     const unCoveredShortages = coveredShortages.filter(i => !i.matchingPo);
     const hasExistingCoveringPo = coveredShortages.some(i => i.matchingPo);
     const isAllCovered = unCoveredShortages.length === 0;
+
+    const coveringPo = coveredShortages.find(i => i.matchingPo)?.matchingPo;
+    const poNumber = coveringPo?.poNumber || 'PO';
+    const isCoveringPlaced = isAllCovered && coveredShortages.some(i => ['SENT_TO_SUPPLIER', 'PARTIALLY_RECEIVED'].includes(i.matchingPo?.status));
+    const isCoveringPending = isAllCovered && !isCoveringPlaced && coveredShortages.some(i => i.matchingPo?.status === 'PENDING_APPROVAL');
 
     const handleSupplierChange = (rmId, supplierId) => {
         setSelectedSuppliers(prev => ({ ...prev, [rmId]: supplierId }));
@@ -95,11 +103,11 @@ export default function WorkOrderShortageModal({ isOpen, onClose, shortages = []
             }
 
             if (createdPoNumbers.length > 0 && failedErrors.length === 0) {
-                toast.success(`Generated ${createdPoNumbers.length} PO(s) [${createdPoNumbers.join(', ')}] with status 'PENDING_APPROVAL'!`, { duration: 5000 });
+                toast.success('Sent for Tenant Admin approval');
             } else if (createdPoNumbers.length > 0 && failedErrors.length > 0) {
                 toast.error(`${createdPoNumbers.length} PO(s) created [${createdPoNumbers.join(', ')}], but ${failedErrors.length} failed: ${failedErrors.join('; ')}`, { duration: 6000 });
             } else {
-                toast.error(failedErrors[0] || 'Failed to generate draft POs.');
+                toast.error(failedErrors[0] || 'Failed to generate POs.');
             }
 
             try {
@@ -193,22 +201,34 @@ export default function WorkOrderShortageModal({ isOpen, onClose, shortages = []
                     </div>
 
                     {isAllCovered ? (
-                        <div className="p-3 bg-amber-100/70 border border-amber-300 rounded-lg text-xs text-amber-900 flex items-start gap-2">
-                            <ShieldAlert size={18} className="text-amber-700 shrink-0 mt-0.5" />
-                            <div>
-                                <span className="font-extrabold text-amber-900 uppercase">Existing Purchase Order Awaiting Approval:</span>
-                                <p className="mt-0.5">
-                                    A pending purchase order (<strong>{coveredShortages[0]?.matchingPo?.poNumber}</strong> — status: <strong>{coveredShortages[0]?.matchingPo?.status}</strong>) already covers this shortage gap. Duplicate PO creation is disabled.
-                                </p>
+                        isCoveringPlaced ? (
+                            <div className="p-3 bg-blue-100/70 border border-blue-300 rounded-lg text-xs text-blue-900 flex items-start gap-2">
+                                <ShieldAlert size={18} className="text-blue-700 shrink-0 mt-0.5" />
+                                <div>
+                                    <span className="font-extrabold text-blue-900 uppercase">Existing Purchase Order already placed</span>
+                                    <p className="mt-0.5">
+                                        {poNumber} has been sent to the supplier and covers this shortage. Receive the GRN to add stock
+                                    </p>
+                                </div>
                             </div>
-                        </div>
+                        ) : (
+                            <div className="p-3 bg-amber-100/70 border border-amber-300 rounded-lg text-xs text-amber-900 flex items-start gap-2">
+                                <ShieldAlert size={18} className="text-amber-700 shrink-0 mt-0.5" />
+                                <div>
+                                    <span className="font-extrabold text-amber-900 uppercase">Existing Purchase Order awaiting approval</span>
+                                    <p className="mt-0.5">
+                                        A pending purchase order (<strong>{poNumber}</strong> — status: <strong>Pending Approval</strong>) already covers this shortage gap. Duplicate PO creation is disabled.
+                                    </p>
+                                </div>
+                            </div>
+                        )
                     ) : (
                         <div className="p-3 bg-app-bg border border-border rounded-lg text-xs text-text-muted flex items-start gap-2">
                             <ShoppingCart size={16} className="text-primary shrink-0 mt-0.5" />
                             <div>
-                                <span className="font-bold text-text-main">Auto-PO Purchase Order Routing:</span>
+                                <span className="font-bold text-text-main">Purchase Order Routing:</span>
                                 <p className="mt-0.5">
-                                    Clicking "Auto-Generate Draft PO" will issue purchase order(s) for shortage quantities directly with status <strong className="text-amber-700 uppercase">PENDING_APPROVAL</strong>.
+                                    Clicking "Auto-Generate PO" will issue purchase order(s) for shortage quantities directly with status <strong className="text-amber-700 uppercase">PENDING_APPROVAL</strong>.
                                 </p>
                             </div>
                         </div>
@@ -225,29 +245,31 @@ export default function WorkOrderShortageModal({ isOpen, onClose, shortages = []
                         Adjust Work Order Qty
                     </button>
 
-                    <button
-                        type="button"
-                        onClick={handleGenerateDraftPOs}
-                        disabled={isGenerating || isAllCovered}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {isGenerating ? (
-                            <>
-                                <RefreshCw size={14} className="animate-spin" />
-                                <span>Generating POs...</span>
-                            </>
-                        ) : isAllCovered ? (
-                            <>
-                                <ShieldAlert size={14} />
-                                <span>Awaiting Existing PO Approval</span>
-                            </>
-                        ) : (
-                            <>
-                                <ShoppingCart size={14} />
-                                <span>Auto-Generate Draft PO (Pending Approval)</span>
-                            </>
-                        )}
-                    </button>
+                    {!isCoveringPlaced && (
+                        <button
+                            type="button"
+                            onClick={handleGenerateDraftPOs}
+                            disabled={isGenerating || isAllCovered}
+                            className="flex items-center gap-1.5 px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isGenerating ? (
+                                <>
+                                    <RefreshCw size={14} className="animate-spin" />
+                                    <span>Generating POs...</span>
+                                </>
+                            ) : isAllCovered ? (
+                                <>
+                                    <ShieldAlert size={14} />
+                                    <span>Awaiting Existing PO Approval</span>
+                                </>
+                            ) : (
+                                <>
+                                    <ShoppingCart size={14} />
+                                    <span>Auto-Generate PO</span>
+                                </>
+                            )}
+                        </button>
+                    )}
                 </div>
             </div>
         </div>

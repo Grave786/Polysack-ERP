@@ -344,28 +344,39 @@ export default function AttendancePage() {
     const shiftColumns = [
         {
             header: 'SHIFT CODE',
+            exportValue: (row) => row.shiftCode || '',
             render: (row) => <span className="font-mono font-bold uppercase text-text-main text-xs">{row.shiftCode || '-'}</span>,
             sortable: true
         },
-        { header: 'SHIFT NAME', accessor: 'name', sortable: true },
+        {
+            header: 'SHIFT NAME',
+            accessor: 'name',
+            exportValue: (row) => row.name || '',
+            sortable: true
+        },
         {
             header: 'START TIME',
+            exportValue: (row) => row.startTime || '',
             render: (row) => <span className="font-mono font-medium text-xs text-text-main">{row.startTime || '-'}</span>
         },
         {
             header: 'END TIME',
+            exportValue: (row) => row.endTime || '',
             render: (row) => <span className="font-mono font-medium text-xs text-text-main">{row.endTime || '-'}</span>
         },
         {
             header: 'STANDARD HOURS',
+            exportValue: (row) => (row.standardHours != null ? row.standardHours : 8),
             render: (row) => `${row.standardHours || 8} hrs`
         },
         {
             header: 'GRACE PERIOD',
+            exportValue: (row) => (row.gracePeriodMinutes != null ? row.gracePeriodMinutes : 15),
             render: (row) => `${row.gracePeriodMinutes || 15} mins`
         },
         {
             header: 'STATUS',
+            exportValue: (row) => (row.isActive !== false ? 'Active' : 'Inactive'),
             render: (row) => (
                 <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-block ${row.isActive !== false ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-gray-100 text-gray-700 border border-gray-200'}`}>
                     {row.isActive !== false ? 'Active' : 'Inactive'}
@@ -378,6 +389,10 @@ export default function AttendancePage() {
     const biometricColumns = [
         {
             header: 'EMPLOYEE',
+            exportValue: (row) => {
+                const empObj = typeof row.employee === 'object' ? row.employee : null;
+                return empObj?.name || row.employeeName || row.name || '';
+            },
             render: (row) => {
                 const empObj = typeof row.employee === 'object' ? row.employee : null;
                 const empName = empObj?.name || row.employeeName || row.name || 'Plant Operator';
@@ -394,6 +409,10 @@ export default function AttendancePage() {
         },
         {
             header: 'DEPARTMENT',
+            exportValue: (row) => {
+                const empObj = typeof row.employee === 'object' ? row.employee : null;
+                return empObj?.department || row.department || 'Production';
+            },
             render: (row) => {
                 const empObj = typeof row.employee === 'object' ? row.employee : null;
                 return (
@@ -405,6 +424,7 @@ export default function AttendancePage() {
         },
         {
             header: 'DATE',
+            exportValue: (row) => row.date || row.createdAt || '',
             render: (row) => {
                 const dateVal = row.date || row.createdAt;
                 return (
@@ -417,6 +437,10 @@ export default function AttendancePage() {
         },
         {
             header: 'SHIFT',
+            exportValue: (row) => {
+                const shiftObj = typeof row.shift === 'object' ? row.shift : null;
+                return shiftObj?.name || row.shiftName || '';
+            },
             render: (row) => {
                 const shiftObj = typeof row.shift === 'object' ? row.shift : null;
                 const shiftName = shiftObj?.name || row.shiftName || 'Shift A (06:00-14:00)';
@@ -429,6 +453,19 @@ export default function AttendancePage() {
         },
         {
             header: 'CHECK IN / OUT',
+            exportValue: (row) => {
+                const formatTimeStr = (ts) => {
+                    if (!ts) return '';
+                    try {
+                        return new Date(ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+                    } catch {
+                        return '';
+                    }
+                };
+                const cin = formatTimeStr(row.checkIn);
+                const cout = formatTimeStr(row.checkOut);
+                return (cin || cout) ? `${cin || '--'} - ${cout || '--'}` : '';
+            },
             render: (row) => {
                 const formatTimeStr = (ts) => {
                     if (!ts) return '--:--';
@@ -451,6 +488,7 @@ export default function AttendancePage() {
         },
         {
             header: 'HOURS',
+            exportValue: (row) => (row.hoursWorked !== undefined ? row.hoursWorked : 8),
             render: (row) => (
                 <span className="font-semibold text-text-main text-xs">
                     {row.hoursWorked !== undefined ? `${row.hoursWorked} hrs` : '8 hrs'}
@@ -459,6 +497,7 @@ export default function AttendancePage() {
         },
         {
             header: 'OVERTIME',
+            exportValue: (row) => row.overtimeHours || 0,
             render: (row) => {
                 const ot = row.overtimeHours || 0;
                 return ot > 0 ? (
@@ -472,6 +511,7 @@ export default function AttendancePage() {
         },
         {
             header: 'ATTENDANCE STATUS',
+            exportValue: (row) => row.status || 'PRESENT',
             render: (row) => {
                 const raw = row.status || 'PRESENT';
                 const st = String(raw).toUpperCase();
@@ -511,6 +551,10 @@ export default function AttendancePage() {
     const rosterColumns = [
         {
             header: 'EMPLOYEE',
+            exportValue: (row) => {
+                const empObj = typeof row.employee === 'object' ? row.employee : null;
+                return empObj?.name || row.employeeName || '';
+            },
             render: (row) => {
                 const empObj = typeof row.employee === 'object' ? row.employee : null;
                 const nameStr = empObj?.name || row.employeeName || 'Ramesh Patel';
@@ -527,6 +571,13 @@ export default function AttendancePage() {
         },
         {
             header: 'ASSIGNED SHIFT',
+            exportValue: (row) => {
+                const shiftObj = typeof row.shift === 'object' ? row.shift : null;
+                if (shiftObj) {
+                    return `${shiftObj.name || ''} (${shiftObj.startTime || ''}-${shiftObj.endTime || ''})`;
+                }
+                return row.shiftName || '';
+            },
             render: (row) => {
                 const shiftObj = typeof row.shift === 'object' ? row.shift : null;
                 const name = shiftObj?.name || row.shiftName || 'Shift A';
@@ -542,6 +593,11 @@ export default function AttendancePage() {
         },
         {
             header: 'EFFECTIVE DATES',
+            exportValue: (row) => {
+                const startStr = row.startDate ? new Date(row.startDate).toLocaleDateString('en-IN') : '';
+                const endStr = row.endDate ? new Date(row.endDate).toLocaleDateString('en-IN') : '';
+                return (startStr || endStr) ? `${startStr} - ${endStr}` : '';
+            },
             render: (row) => {
                 const startStr = row.startDate ? new Date(row.startDate).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }) : 'Aug 01';
                 const endStr = row.endDate ? new Date(row.endDate).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : 'Aug 31, 2026';
@@ -555,6 +611,7 @@ export default function AttendancePage() {
         },
         {
             header: 'ACCUMULATED OVERTIME',
+            exportValue: (row) => (row.accumulatedOvertime !== undefined ? row.accumulatedOvertime : (row.overtimeHours || 0)),
             render: (row) => {
                 const ot = row.accumulatedOvertime !== undefined ? row.accumulatedOvertime : (row.overtimeHours || 12.5);
                 return (
@@ -566,6 +623,7 @@ export default function AttendancePage() {
         },
         {
             header: 'STATUS',
+            exportValue: (row) => row.status || 'ACTIVE',
             render: (row) => {
                 const st = (row.status || 'ACTIVE').toUpperCase();
                 let badgeClass = 'bg-emerald-50 text-emerald-800 border-emerald-200';

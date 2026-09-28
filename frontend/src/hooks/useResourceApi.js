@@ -21,6 +21,10 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
     const extraParamsRef = useRef(extraParams);
     extraParamsRef.current = extraParams;
 
+    const activeFetchIdRef = useRef(0);
+    const activeResourcePathRef = useRef(resourcePath);
+    activeResourcePathRef.current = resourcePath;
+
     // Serialize extraParams to avoid infinite re-render loops when callers pass inline object literals
     const extraParamsKey = extraParams && typeof extraParams === 'object'
         ? JSON.stringify(extraParams)
@@ -28,6 +32,9 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
 
     const fetchData = useCallback(async () => {
         if (!resourcePath) return;
+        const fetchId = ++activeFetchIdRef.current;
+        const currentPath = resourcePath;
+
         setIsLoading(true);
         setError(null);
         try {
@@ -47,6 +54,11 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
             }
 
             const response = await axiosInstance.get(resourcePath, { params });
+            // If resourcePath changed or another request was triggered, discard this stale response
+            if (fetchId !== activeFetchIdRef.current || currentPath !== activeResourcePathRef.current) {
+                return;
+            }
+
             const result = response.data;
 
             if (result.success) {
@@ -77,15 +89,22 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
                 setError(result.message || 'Failed to fetch data');
             }
         } catch (err) {
-            setError(err.response?.data?.message || err.message || 'Error loading resources');
+            if (fetchId === activeFetchIdRef.current && currentPath === activeResourcePathRef.current) {
+                setData([]);
+                setError(err.response?.data?.message || err.message || 'Error loading resources');
+            }
         } finally {
-            setIsLoading(false);
+            if (fetchId === activeFetchIdRef.current && currentPath === activeResourcePathRef.current) {
+                setIsLoading(false);
+            }
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [resourcePath, search, page, limit, statusFilter, extraParamsKey]);
 
-    // Reset to page 1 whenever active resource path changes (e.g. switching tabs)
+    // Reset data and page whenever active resource path changes (e.g. switching tabs)
     useEffect(() => {
+        setData([]);
+        setError(null);
         setPage(1);
     }, [resourcePath]);
 
@@ -106,6 +125,9 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
 
             if (result.success) {
                 toast.success(result.message || 'Record created successfully!');
+                if (result.data && result.data._id) {
+                    setData((prev) => [result.data, ...prev.filter((i) => i._id !== result.data._id)]);
+                }
                 await fetchData();
                 return { success: true, data: result.data };
             } else {
@@ -133,6 +155,9 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
 
             if (result.success) {
                 toast.success(result.message || 'Record updated successfully!');
+                if (result.data && result.data._id) {
+                    setData((prev) => prev.map((item) => (item._id === id ? { ...item, ...result.data } : item)));
+                }
                 await fetchData();
                 return { success: true, data: result.data };
             } else {
@@ -160,6 +185,7 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
 
             if (result.success) {
                 toast.success('Record deactivated successfully');
+                setData((prev) => prev.filter((item) => item._id !== id));
                 await fetchData();
                 return { success: true };
             } else {
@@ -202,6 +228,7 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
                     }
                     if (successCount > 0) {
                         toast.success(`${successCount} record(s) deactivated successfully.`);
+                        setData((prev) => prev.filter((item) => !ids.includes(item._id)));
                         await fetchData();
                         return { success: true, count: successCount };
                     } else {
@@ -214,6 +241,7 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
 
             const result = response.data;
             if (result.success) {
+                setData((prev) => prev.filter((item) => !ids.includes(item._id)));
                 const deletedCount = result.deletedCount !== undefined ? result.deletedCount : (result.data?.deletedCount !== undefined ? result.data.deletedCount : ids.length);
                 const skippedCount = result.skippedCount || result.data?.skippedCount || 0;
                 const skippedReason = result.skippedReason || result.data?.skippedReason || '';
@@ -240,21 +268,28 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
         }
     };
 
+    // Stable setter references — wrapped in useCallback so their identity never changes
+    // between renders. This prevents useEffects that list these as deps from re-firing
+    // on every render (which was the root cause of the status filter always resetting).
+    const stableSetSearch = useCallback((newSearch) => {
+        setSearch(newSearch);
+        setPage(1); // Reset to page 1 on new search
+    }, []);
+
+    const stableSetStatusFilter = useCallback((newStatus) => {
+        setStatusFilter(newStatus);
+        setPage(1);
+    }, []);
+
     return {
         data,
         pagination,
         isLoading,
         error,
         search,
-        setSearch: (newSearch) => {
-            setSearch(newSearch);
-            setPage(1); // Reset to page 1 on new search
-        },
+        setSearch: stableSetSearch,
         statusFilter,
-        setStatusFilter: (newStatus) => {
-            setStatusFilter(newStatus);
-            setPage(1);
-        },
+        setStatusFilter: stableSetStatusFilter,
         page,
         setPage,
         limit,
