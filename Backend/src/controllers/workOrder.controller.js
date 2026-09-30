@@ -7,6 +7,10 @@ const Machine = require('../models/machine.model');
 const Tenant = require('../models/tenant.model');
 const ProductionLog = require('../models/productionLog.model');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
+const {
+    getStageProductionStatus,
+    getValidOperatorIds
+} = require('./productionLog.controller');
 
 const ALL_8_STAGES = [
     'TAPE_EXTRUSION',
@@ -384,17 +388,9 @@ const advanceStage = async (req, res) => {
         });
     }
 
-    const { goodOutputQty, rejectedQty, wastageKg, returnToStore, notes } = req.body;
+    const { goodOutputQty, rejectedQty, wastageKg, returnToStore, notes, operatorAllocations: rawAllocations, operatorBreakdown } = req.body;
 
-    const numGoodQty = Number(goodOutputQty || 0);
     const numRejectedQty = Number(rejectedQty || 0);
-
-    if (numGoodQty < 0 || numRejectedQty < 0) {
-        return res.status(400).json({
-            success: false,
-            message: 'Quantities cannot be negative.'
-        });
-    }
 
     let session = null;
     let useTransaction = true;
@@ -410,7 +406,17 @@ const advanceStage = async (req, res) => {
         const sessionOption = useTransaction ? { session } : {};
 
         // Find WorkOrder within tenant scope
-        const query = WorkOrder.findOne({ _id: req.params.id, tenant: tenantId });
+        const query = WorkOrder.findOne({ _id: req.params.id, tenant: tenantId })
+            .populate('assignedOperators', 'name employeeCode department')
+            .populate('jobOrderDetails.assignedOperators', 'name employeeCode department')
+            .populate({
+                path: 'assignedMachine',
+                populate: [
+                    { path: 'currentOperators', select: 'name employeeCode department' },
+                    { path: 'currentOperator', select: 'name employeeCode department' }
+                ]
+            })
+            .populate('stages.machine', 'name code currentOperators currentOperator');
         if (useTransaction && session) query.session(session);
         const workOrder = await query;
 
@@ -419,11 +425,13 @@ const advanceStage = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Work Order not found.' });
         }
 
-        if (workOrder.status === 'COMPLETED' || workOrder.status === 'CANCELLED') {
+        const woStatusUpper = String(workOrder.status || '').toUpperCase();
+        if (woStatusUpper === 'COMPLETED' || woStatusUpper === 'CANCELLED' || woStatusUpper === 'REJECTED') {
             if (useTransaction && session) { await session.abortTransaction(); session.endSession(); }
+            const statusLabel = woStatusUpper === 'COMPLETED' ? 'Completed' : (woStatusUpper === 'CANCELLED' ? 'Cancelled' : 'Rejected');
             return res.status(400).json({
                 success: false,
-                message: `Cannot advance stage on a Work Order with status '${workOrder.status}'.`
+                message: `Cannot advance stage on a ${statusLabel} Work Order.`
             });
         }
 
@@ -440,63 +448,36 @@ const advanceStage = async (req, res) => {
         const currentStage = workOrder.stages[activeStageIndex];
         const now = new Date();
 
-        // Calculate max available quantity passed from previous non-skipped completed stage (or targetQuantity if first active stage)
-        let maxAvailableQty = workOrder.targetQuantity;
-        for (let i = activeStageIndex - 1; i >= 0; i--) {
-            const prevStage = workOrder.stages[i];
-            if (prevStage && prevStage.status !== 'SKIPPED') {
-                maxAvailableQty = Number(prevStage.goodOutputQty || 0);
-                break;
-            }
-        }
+        // HARD LIMIT & VALIDATION: Get stage production status from single source of truth
+        const stageStatus = await getStageProductionStatus(
+            tenantId,
+            workOrder._id,
+            currentStage.stageName,
+            sessionOption
+        );
 
-        // Auto-calculate rejected quantity as remainder if not explicitly provided
-        const computedRejectedQty = Math.max(0, maxAvailableQty - numGoodQty);
-        const finalRejectedQty = req.body.rejectedQty !== undefined ? numRejectedQty : computedRejectedQty;
-        const totalEntered = numGoodQty + finalRejectedQty;
+        const totalStageQty = stageStatus ? stageStatus.totalProduced : 0;
 
-        // Strict Waterfall Quantity Validation: Total quantity (good + defect) cannot exceed previous stage available input
-        if (totalEntered > maxAvailableQty || numGoodQty > maxAvailableQty) {
+        if (totalStageQty <= 0) {
             if (useTransaction && session) { await session.abortTransaction(); session.endSession(); }
             return res.status(400).json({
                 success: false,
-                message: `Total quantity (${totalEntered}) cannot exceed the available input from the previous stage (${maxAvailableQty}).`
+                message: 'Cannot advance stage: No production has been logged for this stage yet. Log operator production in the tracker before advancing.'
             });
         }
 
+        const finalRejectedQty = Math.max(0, Number(req.body.rejectedQty) || 0);
+        const wastageKgVal = req.body.wastageKg !== undefined ? Math.max(0, Number(req.body.wastageKg) || 0) : (currentStage.wastageKg || 0);
+        const returnToStoreVal = req.body.returnToStore !== undefined ? Math.max(0, Number(req.body.returnToStore) || 0) : (currentStage.returnToStore || 0);
+
         // 1. Complete current stage
-        currentStage.goodOutputQty = numGoodQty;
+        currentStage.goodOutputQty = totalStageQty;
+        currentStage.completedQuantity = totalStageQty;
         currentStage.rejectedQty = finalRejectedQty;
-        if (wastageKg !== undefined) currentStage.wastageKg = Math.max(0, Number(wastageKg) || 0);
-        if (returnToStore !== undefined) currentStage.returnToStore = Math.max(0, Number(returnToStore) || 0);
+        currentStage.wastageKg = wastageKgVal;
+        currentStage.returnToStore = returnToStoreVal;
         currentStage.status = 'COMPLETED';
         currentStage.completedAt = now;
-
-        // Calculate Total Input KG from Job Order Rolls (or fallback)
-        let totalIssuedMaterial = 0;
-        if (Array.isArray(workOrder.jobOrderDetails?.rolls)) {
-            totalIssuedMaterial = workOrder.jobOrderDetails.rolls.reduce(
-                (sum, r) => sum + Number(r.netWeight || r.grossWeight || r.totalQuantityKg || 0),
-                0
-            );
-        }
-
-        // Record production log for analytics & yield metrics
-        await ProductionLog.create([{
-            tenant: tenantId,
-            workOrder: workOrder._id,
-            stageName: currentStage.stageName,
-            stageSequence: currentStage.sequence,
-            goodOutput: numGoodQty,
-            goodOutputQty: numGoodQty,
-            rejectedQty: finalRejectedQty,
-            wastageKg: currentStage.wastageKg || 0,
-            returnToStore: currentStage.returnToStore || 0,
-            issuedMaterialKg: totalIssuedMaterial,
-            totalInputKg: totalIssuedMaterial,
-            performedBy: req.user?._id || req.user?.id,
-            date: now
-        }], sessionOption);
 
         let outputTxn = null;
 
@@ -511,14 +492,14 @@ const advanceStage = async (req, res) => {
 
         // 2. Check if this was the final active stage
         if (nextStageIndex === -1 || currentStage.sequence === 8) {
-            if (numGoodQty > 0) {
+            if (totalStageQty > 0) {
                 const txnResult = await executeStockTransactionCore({
                     tenantId,
                     referenceNumber: workOrder.workOrderNumber,
                     itemType: 'FINISHED_GOOD',
                     item: workOrder.finishedGood,
                     transactionType: 'PRODUCTION_OUTPUT_PENDING_QC',
-                    quantity: numGoodQty,
+                    quantity: totalStageQty,
                     notes: notes || `Finished Good production output pending QC inspection from final stage (WorkOrder ${workOrder.workOrderNumber})`,
                     performedBy: req.user._id || req.user.id
                 }, sessionOption);
@@ -527,7 +508,7 @@ const advanceStage = async (req, res) => {
             }
 
             // Auto-complete Work Order on final stage completion
-            workOrder.completedQuantity = numGoodQty;
+            workOrder.completedQuantity = totalStageQty;
             workOrder.status = 'COMPLETED';
             workOrder.progressPercentage = 100;
         } else {
@@ -545,7 +526,10 @@ const advanceStage = async (req, res) => {
             ? 100
             : Math.min(100, Math.round((completedCount / activeOrCompleted.length) * 100));
 
-        await workOrder.save(sessionOption);
+        await workOrder.save({
+            validateModifiedOnly: true,
+            ...(sessionOption.session ? { session: sessionOption.session } : {})
+        });
 
         if (useTransaction && session) {
             await session.commitTransaction();
@@ -833,6 +817,8 @@ const getWorkOrderById = async (req, res) => {
             .populate('customer', 'companyName code contactPerson phone')
             .populate('finishedGood', 'name code uom currentStock')
             .populate('bom')
+            .populate('assignedOperators', 'name employeeCode department')
+            .populate('jobOrderDetails.assignedOperators', 'name employeeCode department')
             .populate({
                 path: 'assignedMachine',
                 select: 'name code section status currentOperators currentOperator',
@@ -841,13 +827,61 @@ const getWorkOrderById = async (req, res) => {
                     { path: 'currentOperator', select: 'name employeeCode department' }
                 ]
             })
-            .populate('stages.machine', 'name code section');
+            .populate('stages.machine', 'name code section currentOperators currentOperator');
 
         if (!workOrder) {
             return res.status(404).json({
                 success: false,
                 message: 'Work Order not found.'
             });
+        }
+
+        // Synchronize stage completedQuantity and goodOutputQty with ProductionLog entries
+        if (Array.isArray(workOrder.stages) && workOrder.stages.length > 0) {
+            const tenantObjId = new mongoose.Types.ObjectId(tenantId);
+            const stageLogsAgg = await ProductionLog.aggregate([
+                {
+                    $match: {
+                        tenant: tenantObjId,
+                        workOrder: workOrder._id
+                    }
+                },
+                {
+                    $group: {
+                        _id: { $ifNull: ['$stage', '$stageName'] },
+                        totalQty: { $sum: '$quantity' }
+                    }
+                }
+            ]);
+
+            const logMap = {};
+            stageLogsAgg.forEach((item) => {
+                if (item._id) logMap[item._id] = item.totalQty;
+            });
+
+            let hasChange = false;
+            workOrder.stages.forEach((st) => {
+                if (logMap[st.stageName] !== undefined) {
+                    const totalQty = logMap[st.stageName];
+                    if (st.completedQuantity !== totalQty || st.goodOutputQty !== totalQty) {
+                        st.completedQuantity = totalQty;
+                        st.goodOutputQty = totalQty;
+                        hasChange = true;
+                    }
+                }
+            });
+
+            const finalStage = workOrder.stages.find((s) => s.sequence === 8 || s.stageName === 'BALING_PACKING');
+            if (finalStage && logMap[finalStage.stageName] !== undefined) {
+                if (workOrder.completedQuantity !== logMap[finalStage.stageName]) {
+                    workOrder.completedQuantity = logMap[finalStage.stageName];
+                    hasChange = true;
+                }
+            }
+
+            if (hasChange) {
+                await workOrder.save();
+            }
         }
 
         return res.status(200).json({

@@ -198,6 +198,8 @@ app.use('/api/machines', machineRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/boms', bomRoutes);
 app.use('/api/work-orders', workOrderRoutes);
+app.use('/api/production/work-orders', workOrderRoutes);
+app.use('/production/work-orders', workOrderRoutes);
 app.use('/api/purchase-orders', purchaseOrderRoutes);
 app.use('/api/grns', grnRoutes);
 app.use('/api/sales-orders', salesOrderRoutes);

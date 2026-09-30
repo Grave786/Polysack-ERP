@@ -11,6 +11,27 @@ const StockTransaction = require('../models/stockTransaction.model');
 const Tenant = require('../models/tenant.model');
 const MaterialReceipt = require('../models/materialReceipt.model');
 const GstFiling = require('../models/gstFiling.model');
+const Employee = require('../models/employee.model');
+
+/**
+ * Format Date object / string to IST YYYY-MM-DD string without toISOString() timezone shift
+ */
+const getIstDateString = (dateVal) => {
+    if (!dateVal) return '';
+    try {
+        const d = (typeof dateVal === 'string' && dateVal.length === 10)
+            ? new Date(`${dateVal}T00:00:00.000+05:30`)
+            : new Date(dateVal);
+        return new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Kolkata',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        }).format(d);
+    } catch {
+        return String(dateVal);
+    }
+};
 
 /**
  * @desc    Get Financial P&L Analytics (Revenue, Cost, Profit aggregation per quarter/month)
@@ -1337,11 +1358,268 @@ const deleteGstFiling = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get Operator Productivity Analytics across Work Orders (Final stage finished bags)
+ * @route   GET /api/analytics/operator-productivity
+ * @access  Private (ANALYTICS:READ / PRODUCTION:READ)
+ */
+const getOperatorProductivityMetrics = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid.'
+            });
+        }
+
+        const tenantObjId = new mongoose.Types.ObjectId(tenantId);
+        const { startDate, endDate, operatorId } = req.query;
+
+        // 1. Calculate IST boundaries for requested date range
+        const hasCustomStartDate = Boolean(startDate && typeof startDate === 'string' && startDate.trim() !== '' && startDate !== 'undefined');
+        const hasCustomEndDate = Boolean(endDate && typeof endDate === 'string' && endDate.trim() !== '' && endDate !== 'undefined');
+
+        let rangeStart = null;
+        let rangeEnd = null;
+
+        if (hasCustomStartDate) {
+            rangeStart = new Date(`${startDate.trim()}T00:00:00.000+05:30`);
+        }
+        if (hasCustomEndDate) {
+            rangeEnd = new Date(`${endDate.trim()}T23:59:59.999+05:30`);
+        }
+
+        // 2. Fetch all Work Orders for this tenant to identify their final stage and metadata
+        const workOrders = await WorkOrder.find({
+            tenant: tenantObjId,
+            status: { $nin: ['CANCELLED', 'PENDING'] }
+        }).select('_id workOrderNumber status stages completedQuantity createdAt').lean();
+
+        const woMap = new Map();
+        workOrders.forEach((wo) => {
+            const nonSkipped = (wo.stages || []).filter((s) => s.status !== 'SKIPPED');
+            const finalStage = nonSkipped.find((s) => s.sequence === 8 || s.stageName === 'BALING_PACKING') || nonSkipped[nonSkipped.length - 1];
+            const finalStageName = finalStage?.stageName || 'BALING_PACKING';
+
+            woMap.set(String(wo._id), {
+                workOrderId: wo._id,
+                workOrderNumber: wo.workOrderNumber,
+                status: wo.status,
+                finalStageName,
+                createdAt: wo.createdAt,
+                completedQuantity: Number(wo.completedQuantity || finalStage?.completedQuantity || finalStage?.goodOutputQty || 0),
+                loggedFinalQty: 0
+            });
+        });
+
+        // 3. Query ProductionLog documents
+        const logFilter = {
+            tenant: tenantObjId
+        };
+
+        if (rangeStart && rangeEnd) {
+            logFilter.date = { $gte: rangeStart, $lte: rangeEnd };
+        } else if (rangeStart) {
+            logFilter.date = { $gte: rangeStart };
+        } else if (rangeEnd) {
+            logFilter.date = { $lte: rangeEnd };
+        }
+
+        if (operatorId && mongoose.isValidObjectId(operatorId)) {
+            logFilter.operator = new mongoose.Types.ObjectId(operatorId);
+        }
+
+        const logs = await ProductionLog.find(logFilter)
+            .populate('operator', 'name employeeCode department designation')
+            .populate('workOrder', 'workOrderNumber status')
+            .sort({ date: 1 })
+            .lean();
+
+        // 4. Process logs on Final Stages (to prevent double counting across stages)
+        const operatorAgg = new Map();
+        let totalFinalBagsProduced = 0;
+        let unattributedBags = 0;
+
+        logs.forEach((log) => {
+            const woIdStr = String(log.workOrder?._id || log.workOrder);
+            const woInfo = woMap.get(woIdStr);
+            const stageName = log.stage || log.stageName;
+
+            // Check if this log is on the final stage of this Work Order
+            const isFinalStage = woInfo
+                ? (stageName === woInfo.finalStageName || log.stageSequence === 8 || stageName === 'BALING_PACKING')
+                : (log.stageSequence === 8 || stageName === 'BALING_PACKING');
+
+            if (!isFinalStage) {
+                return; // Exclude non-final stages from finished goods count
+            }
+
+            const qty = Number(log.quantity || 0);
+            if (qty <= 0) return;
+
+            totalFinalBagsProduced += qty;
+            if (woInfo) {
+                woInfo.loggedFinalQty += qty;
+            }
+
+            const op = log.operator;
+            const isUnassigned = !op || log.remarks?.includes('legacy');
+
+            if (isUnassigned) {
+                unattributedBags += qty;
+            }
+
+            const opId = op?._id ? String(op._id) : 'legacy-unassigned';
+            const opName = op?.name || (isUnassigned ? 'Legacy / Unassigned' : 'Unknown Operator');
+            const opCode = op?.employeeCode || (isUnassigned ? 'LEGACY' : '');
+            const dept = op?.department || 'PRODUCTION';
+
+            if (!operatorAgg.has(opId)) {
+                operatorAgg.set(opId, {
+                    operatorId: opId,
+                    operatorName: opName,
+                    employeeCode: opCode,
+                    department: dept,
+                    totalBags: 0,
+                    workOrdersMap: new Map(),
+                    dailyMap: new Map(),
+                    isLegacy: isUnassigned
+                });
+            }
+
+            const record = operatorAgg.get(opId);
+            record.totalBags += qty;
+
+            // Work order breakdown
+            const woNum = log.workOrder?.workOrderNumber || woInfo?.workOrderNumber || 'WO-Unknown';
+            const dateStr = getIstDateString(log.date);
+
+            if (!record.workOrdersMap.has(woIdStr)) {
+                record.workOrdersMap.set(woIdStr, {
+                    workOrderId: woIdStr,
+                    workOrderNumber: woNum,
+                    totalQuantity: 0,
+                    lastDate: dateStr
+                });
+            }
+            const woEntry = record.workOrdersMap.get(woIdStr);
+            woEntry.totalQuantity += qty;
+            woEntry.lastDate = dateStr;
+
+            // Date breakdown
+            record.dailyMap.set(dateStr, (record.dailyMap.get(dateStr) || 0) + qty);
+        });
+
+        // 5. Check for legacy Work Orders in range with 0 ProductionLog entries
+        let legacyWosWithoutLogsBags = 0;
+        let legacyWosCount = 0;
+
+        workOrders.forEach((wo) => {
+            const woInfo = woMap.get(String(wo._id));
+            if (!woInfo) return;
+
+            // Check if WO creation date is in range
+            let inDateRange = true;
+            if (rangeStart && wo.createdAt < rangeStart) inDateRange = false;
+            if (rangeEnd && wo.createdAt > rangeEnd) inDateRange = false;
+
+            if (inDateRange && woInfo.loggedFinalQty === 0 && woInfo.completedQuantity > 0) {
+                legacyWosWithoutLogsBags += woInfo.completedQuantity;
+                legacyWosCount += 1;
+            }
+        });
+
+        // 6. Format operator records for table output
+        const operatorsResult = [];
+
+        operatorAgg.forEach((op) => {
+            // Find best single day
+            let bestDay = null;
+            let maxDayQty = 0;
+
+            op.dailyMap.forEach((q, d) => {
+                if (q > maxDayQty) {
+                    maxDayQty = q;
+                    bestDay = { date: d, quantity: q };
+                }
+            });
+
+            const dailyBreakdown = Array.from(op.dailyMap.entries())
+                .map(([d, q]) => ({ date: d, quantity: q }))
+                .sort((a, b) => a.date.localeCompare(b.date));
+
+            const workOrdersList = Array.from(op.workOrdersMap.values())
+                .sort((a, b) => b.totalQuantity - a.totalQuantity);
+
+            operatorsResult.push({
+                operatorId: op.operatorId,
+                operatorName: op.operatorName,
+                employeeCode: op.employeeCode,
+                department: op.department,
+                totalBags: op.totalBags,
+                workOrderCount: workOrdersList.length,
+                workOrders: workOrdersList,
+                bestSingleDay: bestDay || { date: '-', quantity: op.totalBags },
+                dailyBreakdown,
+                isLegacy: op.isLegacy
+            });
+        });
+
+        // Sort operators by total bags produced descending
+        operatorsResult.sort((a, b) => b.totalBags - a.totalBags);
+
+        const totalActiveOperators = operatorsResult.filter((o) => !o.isLegacy && o.totalBags > 0).length;
+        const totalLegacyUnattributed = unattributedBags + legacyWosWithoutLogsBags;
+
+        const topOperator = operatorsResult.find((o) => !o.isLegacy && o.totalBags > 0);
+
+        // Fetch all active employees for filter dropdown
+        const allEmployees = await Employee.find({
+            tenant: tenantObjId,
+            isActive: { $ne: false }
+        }).select('_id name employeeCode department').lean();
+
+        const availableOperators = allEmployees.map((e) => ({
+            operatorId: String(e._id),
+            name: e.name,
+            employeeCode: e.employeeCode || '',
+            department: e.department || ''
+        }));
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                summary: {
+                    totalOperatorsActive: totalActiveOperators,
+                    totalBagsProduced: totalFinalBagsProduced,
+                    legacyUnattributedBags: totalLegacyUnattributed,
+                    legacyWosCount,
+                    topOperatorName: topOperator?.operatorName || 'N/A',
+                    topOperatorBags: topOperator?.totalBags || 0,
+                    avgBagsPerOperator: totalActiveOperators > 0 ? Math.round(totalFinalBagsProduced / totalActiveOperators) : 0
+                },
+                operators: operatorsResult,
+                availableOperators
+            }
+        });
+    } catch (error) {
+        console.error('Error in getOperatorProductivityMetrics:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve operator productivity metrics.',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     getFinancialSummary,
     getProductionYieldMetrics,
     getInventoryValuation,
     getGstTaxRegister,
+    getOperatorProductivityMetrics,
     saveGstFiling,
     deleteGstFiling
 };
+

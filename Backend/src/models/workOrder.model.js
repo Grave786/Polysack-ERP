@@ -31,6 +31,11 @@ const WorkOrderStageSchema = new mongoose.Schema({
         ref: 'Machine',
         default: null
     },
+    completedQuantity: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
     goodOutputQty: {
         type: Number,
         default: 0,

@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { CheckCircle2, Play, ArrowRight, AlertCircle, RefreshCw, Ban, Search, ChevronDown, Check, X } from 'lucide-react';
+import { CheckCircle2, Play, ArrowRight, AlertCircle, RefreshCw, Ban, Search, ChevronDown, Check, X, AlertTriangle } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import OperatorWiseProductionTracker from './OperatorWiseProductionTracker';
+import WorkOrderOverallProductionSummary from './WorkOrderOverallProductionSummary';
 
 const STAGE_CONFIG = [
     { sequence: 1, key: 'TAPE_EXTRUSION', label: 'Tape Extrusion' },
@@ -18,9 +20,9 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
     const [workOrder, setWorkOrder] = useState(null);
     const [allWorkOrders, setAllWorkOrders] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [goodOutputQty, setGoodOutputQty] = useState('');
     const [stageForm, setStageForm] = useState({ rejectedQty: '', wastageKg: '', returnToStore: '' });
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [showPartialAdvanceModal, setShowPartialAdvanceModal] = useState(false);
 
     // Searchable combobox & status filter states for Select Job
     const [jobStatusFilter, setJobStatusFilter] = useState('ALL');
@@ -66,7 +68,6 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                 const list = res.data.data || [];
                 setAllWorkOrders(list);
 
-                // If no specific workOrderId provided, pick first IN_PROGRESS or first item
                 if (!workOrderId && list.length > 0) {
                     const inProgress = list.find((w) => w.status === 'IN_PROGRESS') || list[0];
                     if (onSelectWorkOrder && inProgress?._id) {
@@ -117,49 +118,75 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
     const activeStageIndex = workOrder?.stages?.findIndex((s) => s.status === 'ACTIVE') ?? -1;
     const activeStage = activeStageIndex !== -1 ? workOrder.stages[activeStageIndex] : null;
 
-    // Determine max available quantity passed from previous non-skipped completed stage (or targetQuantity if first active stage)
-    let maxAvailableQty = Number(workOrder?.targetQuantity || 0);
-    if (workOrder?.stages && activeStageIndex > 0) {
-        for (let i = activeStageIndex - 1; i >= 0; i--) {
-            const prevStage = workOrder.stages[i];
-            if (prevStage && prevStage.status !== 'SKIPPED') {
-                maxAvailableQty = Number(prevStage.goodOutputQty || 0);
-                break;
-            }
+    // Reset form on stage change
+    useEffect(() => {
+        setStageForm({ rejectedQty: '', wastageKg: '', returnToStore: '' });
+        setShowPartialAdvanceModal(false);
+    }, [activeStage?.stageName, workOrder?._id]);
+
+    // Calculate dynamic stage target from preceding non-skipped stage
+    const nonSkippedStages = useMemo(() => {
+        return (workOrder?.stages || []).filter(s => s.status !== 'SKIPPED');
+    }, [workOrder?.stages]);
+
+    const currentStageIndexInActive = useMemo(() => {
+        if (!activeStage) return -1;
+        return nonSkippedStages.findIndex(s => s.stageName === activeStage.stageName);
+    }, [nonSkippedStages, activeStage]);
+
+    const isFirstActiveStage = currentStageIndexInActive <= 0;
+    const workOrderOriginalTarget = Number(workOrder?.targetQuantity || 0);
+
+    const previousStage = useMemo(() => {
+        if (!isFirstActiveStage && currentStageIndexInActive > 0) {
+            return nonSkippedStages[currentStageIndexInActive - 1];
         }
-    }
+        return null;
+    }, [isFirstActiveStage, currentStageIndexInActive, nonSkippedStages]);
 
-    const numGoodOutput = goodOutputQty !== '' ? Number(goodOutputQty) : '';
-    const isExceedingCap = typeof numGoodOutput === 'number' && numGoodOutput > maxAvailableQty;
+    const stageTargetQty = useMemo(() => {
+        if (isFirstActiveStage) return workOrderOriginalTarget;
+        return Number(previousStage?.completedQuantity || previousStage?.goodOutputQty || 0);
+    }, [isFirstActiveStage, workOrderOriginalTarget, previousStage]);
 
-    // Handle Advance Stage submit
-    const handleAdvanceStage = async (e) => {
-        e.preventDefault();
+    const stageCompletedQty = Number(activeStage?.completedQuantity || activeStage?.goodOutputQty || 0);
+    const stageRemainingQty = Math.max(0, stageTargetQty - stageCompletedQty);
+    const hasNoTarget = stageTargetQty === 0;
+    const hasNoProductionLogged = stageCompletedQty === 0;
+
+    // Handle Form Submit / Click Advance
+    const handleAdvanceClick = (e) => {
+        if (e) e.preventDefault();
         if (!workOrder?._id || !activeStage) return;
 
-        const numGood = Number(goodOutputQty);
-        const numDefect = stageForm.rejectedQty !== '' ? Number(stageForm.rejectedQty) : 0;
-        const totalEntered = numGood + numDefect;
-
-        if (isNaN(numGood) || numGood < 0) {
-            toast.error('Please enter a valid Good Output quantity >= 0');
+        const woStatusUpper = String(workOrder.status || '').toUpperCase();
+        if (woStatusUpper === 'COMPLETED' || woStatusUpper === 'CANCELLED' || woStatusUpper === 'REJECTED') {
+            const statusLabel = woStatusUpper === 'COMPLETED' ? 'Completed' : (woStatusUpper === 'CANCELLED' ? 'Cancelled' : 'Rejected');
+            toast.error(`Cannot advance stage on a ${statusLabel} Work Order.`);
             return;
         }
 
-        if (isNaN(numDefect) || numDefect < 0) {
-            toast.error('Please enter a valid Rejected / Defect quantity >= 0');
+        if (hasNoProductionLogged) {
+            toast.error('Log production in the Operator-wise Tracker below before advancing this stage.');
             return;
         }
 
-        if (totalEntered > maxAvailableQty) {
-            toast.error(`Total quantity (${totalEntered}) cannot exceed the available input from the previous stage (${maxAvailableQty}).`);
+        // If partially produced (< target), prompt for confirmation
+        if (stageCompletedQty < stageTargetQty && stageTargetQty > 0) {
+            setShowPartialAdvanceModal(true);
             return;
         }
 
+        // If target reached or no target set, execute immediately
+        executeAdvanceStage();
+    };
+
+    // Execute actual API call to advance stage
+    const executeAdvanceStage = async () => {
         try {
             setIsSubmitting(true);
+            const numDefect = stageForm.rejectedQty !== '' ? Number(stageForm.rejectedQty) : 0;
             const res = await axiosInstance.patch(`/work-orders/${workOrder._id}/advance-stage`, {
-                goodOutputQty: numGood,
                 rejectedQty: numDefect,
                 wastageKg: stageForm.wastageKg ? Number(stageForm.wastageKg) : 0,
                 returnToStore: stageForm.returnToStore ? Number(stageForm.returnToStore) : 0
@@ -169,13 +196,13 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                 if (activeStage?.sequence === 8 || res.data?.data?.workOrder?.status === 'COMPLETED') {
                     toast.success('Final stage completed! Batch output routed to Pending QC inspection.');
                 } else {
-                    toast.success(`Stage advanced successfully! Next stage activated.`);
+                    toast.success(`Stage '${activeStage.stageName.replace(/_/g, ' ')}' completed! Next stage activated.`);
                 }
 
-                setGoodOutputQty('');
                 setStageForm({ rejectedQty: '', wastageKg: '', returnToStore: '' });
+                setShowPartialAdvanceModal(false);
 
-                // Refetch details to reflect newly active/completed stage
+                // Refetch work order details
                 await fetchWorkOrderDetail(workOrder._id);
             }
         } catch (err) {
@@ -224,146 +251,115 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
         : 'Unassigned';
 
     return (
-        <div className="space-y-5 font-sans">
-            {/* Header Card Block */}
-            <div className="bg-card-bg border border-border rounded-xl p-5 shadow-2xs space-y-3 font-sans">
-                <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-border pb-3">
-                    {/* Left: WO Number + Badges + Product Spec Title + Meta String */}
-                    <div>
-                        {/* Line 1: Single line with WO Number and Badges */}
+        <div className="space-y-4 font-sans">
+            {/* Header: Work Order Overview & Searchable Job Selector */}
+            <div className="bg-card-bg border border-border rounded-xl p-4 shadow-2xs">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1">
                         <div className="flex items-center gap-2.5 flex-wrap">
-                            <h2 className="text-lg font-bold text-text-main font-mono">
-                                {workOrder.workOrderNumber}
-                            </h2>
-
-                            {/* Minimal Status Badge */}
-                            <span
-                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                                    workOrder.status === 'IN_PROGRESS'
-                                        ? 'bg-orange-100 text-orange-700 border border-orange-200'
-                                        : workOrder.status === 'COMPLETED'
-                                        ? 'bg-green-100 text-green-700 border border-green-200'
-                                        : workOrder.status === 'CANCELLED'
-                                        ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                                        : 'bg-gray-100 text-gray-700 border border-gray-200'
-                                }`}
-                            >
-                                • {workOrder.status === 'IN_PROGRESS' ? 'In Progress' : workOrder.status || 'Pending'}
-                            </span>
-
-                            {/* Minimal Priority Badge */}
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-transparent border border-gray-300 text-gray-700">
-                                Priority: {workOrder.priority || 'NORMAL'}
+                            <span className="text-xs font-bold uppercase tracking-wider text-primary">Live Monitor</span>
+                            <span className="text-xs text-text-muted">•</span>
+                            <h2 className="text-base font-bold text-text-main font-mono">{workOrder.workOrderNumber}</h2>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                                workOrder.status === 'COMPLETED'
+                                    ? 'bg-green-100 text-green-700'
+                                    : workOrder.status === 'IN_PROGRESS'
+                                    ? 'bg-orange-100 text-orange-700'
+                                    : 'bg-gray-100 text-gray-700'
+                            }`}>
+                                {workOrder.status === 'IN_PROGRESS' ? 'In Progress' : workOrder.status || 'Draft'}
                             </span>
                         </div>
-
-                        {/* Line 2: Prominent Product Title */}
-                        <h3 className="text-base font-semibold text-text-main mt-1">
-                            {workOrder.finishedGood?.name || 'Mesh Sack Bag Spec'}
-                        </h3>
-
-                        {/* Line 3: Meta String */}
-                        <p className="text-xs text-text-muted mt-1 flex items-center gap-2 flex-wrap">
+                        <div className="flex items-center gap-4 text-xs text-text-muted flex-wrap">
                             <span>Client: <strong className="text-text-main font-medium">{clientName}</strong></span>
-                            <span>|</span>
-                            <span>Assigned Machine: <strong className="text-text-main font-medium">{machineName}</strong></span>
-                            <span>|</span>
-                            <span>Operator: <strong className="text-text-main font-medium">{operatorName}</strong></span>
-                        </p>
+                            <span>Machine: <strong className="text-text-main font-medium">{machineName}</strong></span>
+                            <span>Operators: <strong className="text-text-main font-medium">{operatorName}</strong></span>
+                        </div>
                     </div>
 
-                    {/* Right side: Stacked Select Job (TOP) & Target vs Completed Stat Block (BOTTOM) */}
-                    <div className="flex flex-col items-start md:items-end gap-2 shrink-0">
+                    {/* Searchable Combobox & Completed / Target Metric */}
+                    <div className="flex flex-col md:flex-row items-start md:items-center gap-3">
+                        {/* Searchable Combobox Dropdown */}
                         {allWorkOrders.length > 0 && (
-                            <div className="relative" ref={jobDropdownRef}>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider whitespace-nowrap">
-                                        Select Job:
-                                    </span>
-                                    <button
-                                        type="button"
-                                        onClick={() => setIsJobDropdownOpen((prev) => !prev)}
-                                        className="flex items-center justify-between gap-2 text-xs font-semibold border border-border rounded-lg py-1.5 px-3 bg-card-bg hover:bg-app-bg text-text-main shadow-2xs transition-all cursor-pointer min-w-[240px] max-w-[320px]"
-                                        title="Click to search and change active Work Order"
-                                    >
-                                        <div className="flex items-center gap-1.5 truncate">
-                                            <span className="font-mono font-bold text-primary shrink-0">
-                                                {workOrder.workOrderNumber}
-                                            </span>
-                                            <span className="text-text-muted truncate">
-                                                • {workOrder.customer?.companyName || workOrder.customer?.name || 'Customer'}
-                                            </span>
-                                        </div>
-                                        <ChevronDown size={14} className={`text-text-muted shrink-0 transition-transform duration-150 ${isJobDropdownOpen ? 'rotate-180' : ''}`} />
-                                    </button>
-                                </div>
+                            <div className="relative w-full md:w-64" ref={jobDropdownRef}>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsJobDropdownOpen((prev) => !prev)}
+                                    className="w-full flex items-center justify-between gap-2 px-3 py-2 bg-app-bg border border-border rounded-lg text-xs font-medium text-text-main hover:border-primary/50 transition-colors shadow-2xs cursor-pointer text-left"
+                                >
+                                    <div className="truncate min-w-0">
+                                        <span className="block font-mono font-bold truncate">
+                                            {workOrder?.workOrderNumber || 'Select Job'}
+                                        </span>
+                                        <span className="block text-[10px] text-text-muted truncate">
+                                            {workOrder?.customer?.companyName || workOrder?.customer?.name || 'Switch Job Order...'}
+                                        </span>
+                                    </div>
+                                    <ChevronDown
+                                        size={14}
+                                        className={`text-text-muted shrink-0 transition-transform duration-200 ${
+                                            isJobDropdownOpen ? 'rotate-180 text-primary' : ''
+                                        }`}
+                                    />
+                                </button>
 
-                                {/* Custom Combobox Dropdown Panel */}
                                 {isJobDropdownOpen && (
-                                    <div className="absolute right-0 top-full mt-1.5 z-50 w-80 sm:w-96 bg-card-bg border border-border rounded-xl shadow-xl p-3 font-sans space-y-2.5 animate-in fade-in zoom-in-95 duration-100">
-                                        {/* Status Filter Pill Buttons */}
-                                        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-                                            {[
-                                                { key: 'ALL', label: 'All' },
-                                                { key: 'IN_PROGRESS', label: 'In Progress' },
-                                                { key: 'COMPLETED', label: 'Completed' },
-                                                { key: 'CANCELLED', label: 'Cancelled' }
-                                            ].map((f) => (
-                                                <button
-                                                    key={f.key}
-                                                    type="button"
-                                                    onClick={() => setJobStatusFilter(f.key)}
-                                                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase transition-colors shrink-0 cursor-pointer ${
-                                                        jobStatusFilter === f.key
-                                                            ? 'bg-primary text-white shadow-2xs'
-                                                            : 'bg-app-bg text-text-muted hover:text-text-main border border-border'
-                                                    }`}
-                                                >
-                                                    {f.label}
-                                                </button>
-                                            ))}
+                                    <div className="absolute right-0 top-full mt-1.5 w-80 bg-card-bg border border-border rounded-xl shadow-xl z-50 overflow-hidden font-sans animate-in fade-in zoom-in-95 duration-150">
+                                        <div className="p-2 border-b border-border bg-app-bg/50 space-y-1.5">
+                                            <div className="relative">
+                                                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+                                                <input
+                                                    type="text"
+                                                    autoFocus
+                                                    placeholder="Search WO #, Customer, Product..."
+                                                    value={jobSearchQuery}
+                                                    onChange={(e) => setJobSearchQuery(e.target.value)}
+                                                    className="w-full pl-7 pr-7 py-1 text-xs bg-card-bg border border-border rounded-md text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary"
+                                                />
+                                                {jobSearchQuery && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setJobSearchQuery('')}
+                                                        className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-main"
+                                                    >
+                                                        <X size={12} />
+                                                    </button>
+                                                )}
+                                            </div>
+
+                                            <div className="flex items-center gap-1">
+                                                {['ALL', 'IN_PROGRESS', 'DRAFT', 'COMPLETED'].map((st) => (
+                                                    <button
+                                                        key={st}
+                                                        type="button"
+                                                        onClick={() => setJobStatusFilter(st)}
+                                                        className={`text-[10px] px-2 py-0.5 rounded-md font-bold transition-colors cursor-pointer ${
+                                                            jobStatusFilter === st
+                                                                ? 'bg-primary text-sidebar-bg'
+                                                                : 'bg-card-bg border border-border text-text-muted hover:text-text-main'
+                                                        }`}
+                                                    >
+                                                        {st === 'ALL' ? 'All' : st === 'IN_PROGRESS' ? 'Active' : st.charAt(0) + st.slice(1).toLowerCase()}
+                                                    </button>
+                                                ))}
+                                            </div>
                                         </div>
 
-                                        {/* Search Input Box */}
-                                        <div className="relative">
-                                            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-                                            <input
-                                                type="text"
-                                                placeholder="Search WO# or Client..."
-                                                value={jobSearchQuery}
-                                                onChange={(e) => setJobSearchQuery(e.target.value)}
-                                                className="w-full pl-8 pr-7 py-1.5 text-xs bg-app-bg border border-border rounded-lg text-text-main focus:outline-none focus:border-primary font-sans"
-                                                autoFocus
-                                            />
-                                            {jobSearchQuery && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setJobSearchQuery('')}
-                                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-main p-0.5 cursor-pointer"
-                                                >
-                                                    <X size={12} />
-                                                </button>
-                                            )}
-                                        </div>
-
-                                        {/* Filtered Options List */}
-                                        <ul className="max-h-56 overflow-y-auto divide-y divide-border/50 text-xs">
+                                        <ul className="max-h-56 overflow-y-auto divide-y divide-border/60 text-xs">
                                             {filteredWorkOrders.length === 0 ? (
-                                                <li className="py-4 text-center text-xs text-text-muted font-medium">
-                                                    No Work Orders match filters
+                                                <li className="p-3 text-center text-text-muted text-[11px]">
+                                                    No work orders match filter
                                                 </li>
                                             ) : (
                                                 filteredWorkOrders.map((w) => {
-                                                    const isSelected = w._id === workOrder._id;
-                                                    const cName = w.customer?.companyName || w.customer?.name || 'Customer';
+                                                    const isSelected = w._id === workOrder?._id;
+                                                    const cName = w.customer?.companyName || w.customer?.name || 'No Customer';
                                                     const badgeClass =
-                                                        w.status === 'IN_PROGRESS'
+                                                        w.status === 'COMPLETED'
+                                                            ? 'bg-green-100 text-green-700 border-green-200'
+                                                            : w.status === 'IN_PROGRESS'
                                                             ? 'bg-orange-100 text-orange-700 border-orange-200'
-                                                            : w.status === 'COMPLETED'
-                                                            ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                                                            : w.status === 'CANCELLED'
-                                                            ? 'bg-rose-100 text-rose-700 border-rose-200'
-                                                            : 'bg-gray-100 text-gray-700 border-gray-200';
+                                                            : 'bg-gray-100 text-gray-600 border-gray-200';
 
                                                     return (
                                                         <li
@@ -372,7 +368,7 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                                                                 if (onSelectWorkOrder) onSelectWorkOrder(w._id);
                                                                 setIsJobDropdownOpen(false);
                                                             }}
-                                                            className={`p-2 rounded-lg cursor-pointer transition-colors flex items-center justify-between gap-2 ${
+                                                            className={`p-2.5 flex items-center justify-between gap-2 cursor-pointer transition-colors ${
                                                                 isSelected
                                                                     ? 'bg-primary/10 text-primary font-bold'
                                                                     : 'hover:bg-app-bg text-text-main'
@@ -402,7 +398,7 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
 
                         <div className="bg-app-bg border border-border rounded-lg px-3 py-2 text-right shrink-0 w-full md:w-auto">
                             <span className="block text-[10px] font-bold uppercase tracking-wider text-text-muted">
-                                COMPLETED / TARGET
+                                COMPLETED / WO TARGET
                             </span>
                             <div className="mt-0.5 font-mono">
                                 <span className="text-base font-bold text-primary">{workOrder.completedQuantity || 0}</span>
@@ -490,7 +486,7 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                 </div>
             </div>
 
-            {/* Panel: Record Live Stage Output & Defect Scrap */}
+            {/* Panel: Stage Advance & Scrap Logging */}
             {isFinishedOrCancelled ? (
                 (workOrder.status === 'COMPLETED' || (workOrder?.stages && workOrder.stages.filter(s => s.status !== 'SKIPPED').every(s => s.status === 'COMPLETED'))) ? (
                     <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-6 text-center shadow-2xs space-y-2 font-sans">
@@ -522,47 +518,66 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-sidebar-hover pb-2.5 gap-2">
                         <div>
                             <h3 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-2">
-                                Record Live Stage Output & Defect Scrap
+                                Stage Transition & Defect Scrap
                             </h3>
                             <p className="text-xs text-sidebar-text mt-0.5">
                                 Currently Processing: <strong className="text-amber-400">STEP 0{activeStage.sequence} — {STAGE_CONFIG.find(c => c.key === activeStage.stageName)?.label || activeStage.stageName}</strong>
                             </p>
                         </div>
 
-                        {/* Maximum Available Quantity Badge */}
-                        <div className="bg-amber-400/10 border border-amber-400/30 text-amber-300 px-3 py-1 rounded-lg text-xs font-semibold">
-                            Max Available Input: <strong className="font-mono text-white">{maxAvailableQty} Bags</strong>
+                        {/* Read-Only Status Badge with Dynamic Preceding Stage Info */}
+                        <div className="flex flex-col items-end gap-0.5">
+                            {hasNoTarget ? (
+                                <div className="bg-amber-400/10 border border-amber-400/30 text-amber-300 px-3 py-1 rounded-lg text-xs font-semibold">
+                                    Stage Cap: <strong className="text-white">0 Bags ({isFirstActiveStage ? 'WO Target Not Set' : 'Waiting for Preceding Stage'})</strong>
+                                </div>
+                            ) : (
+                                <div className="bg-card-bg/40 border border-sidebar-hover text-white px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-2">
+                                    <span className="text-sidebar-text text-[11px]">Logged Output:</span>
+                                    <strong className="font-mono text-primary">{stageCompletedQty.toLocaleString('en-IN')}</strong>
+                                    <span className="text-sidebar-text text-[11px]">/ {stageTargetQty.toLocaleString('en-IN')} Bags</span>
+                                </div>
+                            )}
+                            <span className="text-[10px] text-sidebar-text">
+                                {isFirstActiveStage
+                                    ? `Overall WO Target: ${workOrderOriginalTarget.toLocaleString('en-IN')} Bags`
+                                    : `Limited by ${previousStage?.stageName?.replace(/_/g, ' ') || 'previous stage'} (${stageTargetQty.toLocaleString('en-IN')} Bags)`}
+                            </span>
                         </div>
                     </div>
 
-                    <form onSubmit={handleAdvanceStage} className="space-y-3 font-sans">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-white mb-1">
-                                    Good Output Bags Produced *
-                                </label>
-                                <input
-                                    type="number"
-                                    min="0"
-                                    max={maxAvailableQty}
-                                    required
-                                    placeholder={`Max ${maxAvailableQty} bags`}
-                                    value={goodOutputQty}
-                                    onChange={(e) => setGoodOutputQty(e.target.value)}
-                                    className={`w-full border rounded-lg p-2 bg-card-bg text-text-main text-xs font-bold focus:outline-none ${
-                                        isExceedingCap ? 'border-rose-500 focus:border-rose-500' : 'border-sidebar-hover focus:border-primary'
-                                    }`}
-                                />
-                                {isExceedingCap && (
-                                    <p className="text-[11px] font-bold text-rose-400 mt-1">
-                                        ⚠️ Good output cannot exceed previous stage passed quantity of {maxAvailableQty} bags.
-                                    </p>
-                                )}
+                    <form onSubmit={handleAdvanceClick} className="space-y-3 font-sans">
+                        {/* Status Notice Banner */}
+                        {hasNoProductionLogged ? (
+                            <div className="bg-amber-500/15 border border-amber-500/30 rounded-lg p-3 text-center">
+                                <p className="text-xs font-bold text-amber-300 flex items-center justify-center gap-1.5">
+                                    <AlertTriangle size={14} />
+                                    <span>0 Bags logged for this stage.</span>
+                                </p>
+                                <p className="text-[11px] text-amber-200/80 mt-0.5">
+                                    Log operator production using the <strong>+ Log Production</strong> button in the Operator Tracker below before advancing this stage.
+                                </p>
                             </div>
+                        ) : stageCompletedQty >= stageTargetQty && stageTargetQty > 0 ? (
+                            <div className="bg-emerald-500/15 border border-emerald-500/30 rounded-lg p-2.5 text-center">
+                                <p className="text-xs font-bold text-emerald-300 flex items-center justify-center gap-1.5">
+                                    <CheckCircle2 size={14} />
+                                    <span>Stage target fully achieved ({stageCompletedQty.toLocaleString('en-IN')} / {stageTargetQty.toLocaleString('en-IN')} Bags). Ready to advance.</span>
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-2.5 text-center">
+                                <p className="text-xs font-medium text-blue-300">
+                                    <strong>{stageCompletedQty.toLocaleString('en-IN')} Bags</strong> produced so far ({stageRemainingQty.toLocaleString('en-IN')} remaining of {stageTargetQty.toLocaleString('en-IN')} available).
+                                </p>
+                            </div>
+                        )}
 
+                        {/* Defect, Wastage & Return Inputs */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
                             <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-white mb-1">
-                                    Rejected / Defect Qty
+                                <label className="block text-[10px] font-bold text-sidebar-text mb-1 uppercase tracking-wider">
+                                    Rejected / Defect Qty (Bags)
                                 </label>
                                 <input
                                     type="number"
@@ -571,12 +586,13 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                                     value={stageForm.rejectedQty === 0 ? '' : stageForm.rejectedQty}
                                     onChange={(e) => setStageForm(p => ({ ...p, rejectedQty: e.target.value }))}
                                     placeholder="e.g. 2"
-                                    className="w-full border border-sidebar-hover rounded-lg p-2 bg-card-bg text-text-main text-xs font-bold focus:outline-none focus:border-primary"
+                                    className="w-full border border-sidebar-hover rounded-md p-2 bg-card-bg text-text-main text-xs font-bold focus:outline-none focus:border-primary"
                                 />
+                                <span className="text-[10px] text-sidebar-text mt-1 block">
+                                    Damaged or non-compliant bags
+                                </span>
                             </div>
-                        </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
                             <div>
                                 <label className="block text-[10px] font-bold text-sidebar-text mb-1 uppercase tracking-wider">
                                     Wastage / Scrap (Kg)
@@ -591,9 +607,10 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                                     className="w-full border border-sidebar-hover rounded-md p-2 bg-card-bg text-text-main text-xs focus:outline-none focus:border-primary"
                                 />
                                 <span className="text-[10px] text-sidebar-text mt-1 block">
-                                    Lumps, chindi, or unrecoverable machine scrap
+                                    Lumps or unrecoverable scrap
                                 </span>
                             </div>
+
                             <div>
                                 <label className="block text-[10px] font-bold text-sidebar-text mb-1 uppercase tracking-wider">
                                     Return to Store (Kg / Rolls)
@@ -608,24 +625,87 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                                     className="w-full border border-sidebar-hover rounded-md p-2 bg-card-bg text-text-main text-xs focus:outline-none focus:border-primary"
                                 />
                                 <span className="text-[10px] text-sidebar-text mt-1 block">
-                                    Unused raw material sent back to inventory
+                                    Unused material returned to inventory
                                 </span>
                             </div>
                         </div>
 
-                        <div className="pt-1 flex justify-end">
+                        <div className="pt-2 flex justify-end">
                             <button
                                 type="submit"
-                                disabled={isSubmitting || isExceedingCap}
-                                className="bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold px-5 py-2 rounded-lg text-xs flex items-center gap-2 transition-all shadow-md cursor-pointer disabled:opacity-50"
+                                disabled={isSubmitting || hasNoProductionLogged}
+                                title={hasNoProductionLogged ? 'Log production in the Operator-wise Tracker below before advancing this stage.' : undefined}
+                                className="bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold px-5 py-2.5 rounded-lg text-xs flex items-center gap-2 transition-all shadow-md cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                             >
-                                <span>{isSubmitting ? 'Advancing Stage...' : 'Advance Stage & Update Stock'}</span>
+                                <span>
+                                    {isSubmitting
+                                        ? 'Advancing Stage...'
+                                        : hasNoProductionLogged
+                                        ? 'Log Production Below to Advance'
+                                        : 'Advance to Next Stage'}
+                                </span>
                                 <ArrowRight size={15} />
                             </button>
                         </div>
                     </form>
                 </div>
             )}
+
+            {/* Partial Production Confirmation Modal */}
+            {showPartialAdvanceModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
+                    <div className="bg-card-bg border border-border rounded-xl shadow-2xl p-5 max-w-md w-full font-sans space-y-3 animate-in zoom-in-95 duration-150">
+                        <div className="flex items-center gap-2.5 text-amber-500">
+                            <div className="p-2 bg-amber-500/10 rounded-lg">
+                                <AlertTriangle size={20} />
+                            </div>
+                            <h4 className="text-sm font-bold text-text-main">Advance with Partial Quantity?</h4>
+                        </div>
+                        <p className="text-xs text-text-muted leading-relaxed">
+                            Only <strong className="text-text-main font-mono">{stageCompletedQty.toLocaleString('en-IN')}</strong> of <strong className="text-text-main font-mono">{stageTargetQty.toLocaleString('en-IN')} Bags</strong> have been logged for this stage (<strong className="text-amber-600 font-mono">{stageRemainingQty.toLocaleString('en-IN')} remaining</strong>).
+                        </p>
+                        <p className="text-xs text-text-muted">
+                            Are you sure you want to complete this stage and activate the next stage anyway?
+                        </p>
+                        <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
+                            <button
+                                type="button"
+                                onClick={() => setShowPartialAdvanceModal(false)}
+                                className="px-3.5 py-1.5 text-xs font-semibold text-text-muted hover:text-text-main bg-app-bg border border-border rounded-lg transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={isSubmitting}
+                                onClick={executeAdvanceStage}
+                                className="px-4 py-1.5 text-xs font-bold text-sidebar-bg bg-primary hover:bg-primary-hover rounded-lg transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                            >
+                                {isSubmitting ? 'Advancing...' : 'Confirm & Advance'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Operator-wise, Day-wise Production Tracking Section */}
+            {workOrder && (
+                <div className="pt-2 space-y-5">
+                    <OperatorWiseProductionTracker
+                        workOrder={workOrder}
+                        workOrderId={workOrder._id}
+                        selectedStageName={activeStage?.stageName}
+                        onProductionLogged={() => fetchWorkOrderDetail(workOrder._id)}
+                    />
+
+                    {/* Consolidated Overall Production Summary Matrix */}
+                    <WorkOrderOverallProductionSummary
+                        workOrderId={workOrder._id}
+                        lastUpdated={workOrder.updatedAt}
+                    />
+                </div>
+            )}
         </div>
     );
 }
+

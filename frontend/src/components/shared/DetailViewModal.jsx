@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Eye, Calendar, Layers, ShieldCheck, Tag, Edit3, Building, MapPin, Hash, CheckCircle2, XCircle, FileText, Download, ZoomIn, Paperclip, FileSpreadsheet } from 'lucide-react';
+import OperatorWiseProductionTracker from '../production/OperatorWiseProductionTracker';
 
 /**
  * Helper to safely extract value or nested property
@@ -1024,6 +1025,19 @@ const MASTER_SCHEMAS = {
                 // Lightbox component (rendered inline, controlled by parent state via closure)
                 // We use a module-level helper to avoid hooks-in-callbacks restriction
                 return <PoAttachmentViewer images={images} pdfs={pdfs} others={others} />;
+            }
+        },
+        {
+            title: 'Operator-wise & Day-wise Production Tracking',
+            renderCustom: (record) => {
+                return (
+                    <div className="pt-1">
+                        <OperatorWiseProductionTracker
+                            workOrder={record}
+                            workOrderId={record._id}
+                        />
+                    </div>
+                );
             }
         },
         {

@@ -5,6 +5,7 @@ const {
     getProductionYieldMetrics,
     getInventoryValuation,
     getGstTaxRegister,
+    getOperatorProductivityMetrics,
     saveGstFiling,
     deleteGstFiling
 } = require('../controllers/analytics.controller');
@@ -18,7 +19,9 @@ router.get('/production-yield-metrics', authenticate, checkPermission('ANALYTICS
 router.get('/production-yield', authenticate, checkPermission('ANALYTICS', 'READ'), getProductionYieldMetrics);
 router.get('/inventory-valuation', authenticate, checkPermission('ANALYTICS', 'READ'), getInventoryValuation);
 router.get('/gst-register', authenticate, checkPermission('ANALYTICS', 'READ'), getGstTaxRegister);
+router.get('/operator-productivity', authenticate, checkPermission('ANALYTICS', 'READ'), getOperatorProductivityMetrics);
 router.post('/gst-filing', authenticate, checkPermission('ANALYTICS', 'CREATE'), saveGstFiling);
 router.delete('/gst-filing/:id', authenticate, checkPermission('ANALYTICS', 'DELETE'), deleteGstFiling);
 
 module.exports = router;
+

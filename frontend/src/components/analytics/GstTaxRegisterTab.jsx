@@ -1,9 +1,23 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { FileText, Receipt, CheckCircle, Percent, RefreshCw, X } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
-export default function GstTaxRegisterTab() {
+const escapeCsvCell = (val) => {
+    if (val === undefined || val === null) return '""';
+    const s = String(val);
+    return `"${s.replace(/"/g, '""')}"`;
+};
+
+const getTodayDdMmYyyy = () => {
+    const today = new Date();
+    const dd = String(today.getDate()).padStart(2, '0');
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const yyyy = today.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+};
+
+const GstTaxRegisterTab = forwardRef(function GstTaxRegisterTab(props, ref) {
     // Current IST Indian Financial Year (April 1 - March 31)
     const getIstCurrentFy = () => {
         const now = new Date();
@@ -119,6 +133,74 @@ export default function GstTaxRegisterTab() {
         summary.inputTaxCredit === 0 &&
         months.every((m) => m.taxableSales === 0 && m.itc === 0)
     );
+
+    const exportCsv = () => {
+        const todayStr = getTodayDdMmYyyy();
+        const filename = `executive-audit-report-gst-tax-register-${todayStr}.csv`;
+
+        const csvLines = [
+            [escapeCsvCell('EXECUTIVE AUDIT REPORT - SALES & GST TAX REGISTER')],
+            [escapeCsvCell('Generated Date'), escapeCsvCell(todayStr)],
+            [escapeCsvCell('Financial Year'), escapeCsvCell(selectedFyLabel)],
+            [escapeCsvCell('Company GSTIN'), escapeCsvCell(companyGstin || 'Not Configured')],
+            [],
+            [escapeCsvCell('--- SUMMARY KPI CARDS ---')],
+            [escapeCsvCell('Metric'), escapeCsvCell('Amount (INR)'), escapeCsvCell('Notes')],
+            [escapeCsvCell('Total Taxable Turnover'), escapeCsvCell(`₹${Number(summary.totalTaxableTurnover || 0).toLocaleString('en-IN')}`), escapeCsvCell('Output Sales Turnover')],
+            [escapeCsvCell('Total GST Collected'), escapeCsvCell(`₹${Number(summary.totalGstCollected || 0).toLocaleString('en-IN')}`), escapeCsvCell('CGST + SGST + IGST Output')],
+            [escapeCsvCell('Input Tax Credit (ITC)'), escapeCsvCell(`₹${Number(summary.inputTaxCredit || 0).toLocaleString('en-IN')}`), escapeCsvCell('Purchases & Expenses ITC')],
+            [escapeCsvCell('Net GST Payable / (Credit)'), escapeCsvCell(`₹${Number(summary.netTaxPayable || 0).toLocaleString('en-IN')}`), escapeCsvCell(summary.netTaxPayable > 0 ? 'Net Tax Payable' : 'Excess ITC Available')],
+            [],
+            [escapeCsvCell('--- MONTHLY GST TAX BREAKDOWN & FILING STATUS ---')],
+            [
+                escapeCsvCell('Return Period'),
+                escapeCsvCell('Taxable Sales (INR)'),
+                escapeCsvCell('CGST (INR)'),
+                escapeCsvCell('SGST (INR)'),
+                escapeCsvCell('IGST (INR)'),
+                escapeCsvCell('Total GST Liability (INR)'),
+                escapeCsvCell('Input Tax Credit (INR)'),
+                escapeCsvCell('Net Tax Payable (INR)'),
+                escapeCsvCell('GSTR-1 Status'),
+                escapeCsvCell('GSTR-3B Status')
+            ]
+        ];
+
+        if (months.length === 0) {
+            csvLines.push([escapeCsvCell('No GST register records found for selected financial year')]);
+        } else {
+            months.forEach((m) => {
+                csvLines.push([
+                    escapeCsvCell(m.returnPeriod || m.monthName || '-'),
+                    escapeCsvCell(`₹${Number(m.taxableSales || 0).toLocaleString('en-IN')}`),
+                    escapeCsvCell(`₹${Number(m.cgst || 0).toLocaleString('en-IN')}`),
+                    escapeCsvCell(`₹${Number(m.sgst || 0).toLocaleString('en-IN')}`),
+                    escapeCsvCell(`₹${Number(m.igst || 0).toLocaleString('en-IN')}`),
+                    escapeCsvCell(`₹${Number(m.totalGstLiability || 0).toLocaleString('en-IN')}`),
+                    escapeCsvCell(`₹${Number(m.itc || 0).toLocaleString('en-IN')}`),
+                    escapeCsvCell(`₹${Number(m.netPayable || 0).toLocaleString('en-IN')}`),
+                    escapeCsvCell(m.gstr1?.status || '-'),
+                    escapeCsvCell(m.gstr3b?.status || '-')
+                ]);
+            });
+        }
+
+        const csvContent = '\uFEFF' + csvLines.map((line) => line.join(',')).join('\r\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        toast.success('GST Tax Register executive audit report exported to CSV!');
+    };
+
+    useImperativeHandle(ref, () => ({
+        exportCsv
+    }));
 
     // Open Filing Modal
     const handleOpenFilingModal = (returnType, info, row) => {
@@ -505,4 +587,6 @@ export default function GstTaxRegisterTab() {
             )}
         </div>
     );
-}
+});
+
+export default GstTaxRegisterTab;

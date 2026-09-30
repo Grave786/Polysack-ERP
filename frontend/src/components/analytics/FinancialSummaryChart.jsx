@@ -1,8 +1,22 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { ResponsiveContainer, BarChart, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Bar } from 'recharts';
 import { DollarSign, TrendingUp, TrendingDown, PieChart, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+
+const escapeCsvCell = (val) => {
+    if (val === undefined || val === null) return '""';
+    const s = String(val);
+    return `"${s.replace(/"/g, '""')}"`;
+};
+
+const getTodayDdMmYyyy = () => {
+    const today = new Date();
+    const dd = String(today.getDate()).padStart(2, '0');
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const yyyy = today.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+};
 
 const formatCurrencyYAxis = (val) => {
     if (val >= 10000000) {
@@ -36,7 +50,7 @@ const CustomTooltip = ({ active, payload, label }) => {
     return null;
 };
 
-export default function FinancialSummaryChart() {
+const FinancialSummaryChart = forwardRef(function FinancialSummaryChart(props, ref) {
     const [chartData, setChartData] = useState([]);
     const [summaryData, setSummaryData] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -68,6 +82,60 @@ export default function FinancialSummaryChart() {
     const marginPct = summaryData?.netMarginPercent !== undefined
         ? summaryData.netMarginPercent
         : (totalRev > 0 ? ((netProf / totalRev) * 100).toFixed(1) : 0);
+
+    const exportCsv = () => {
+        const todayStr = getTodayDdMmYyyy();
+        const filename = `executive-audit-report-financial-pnl-${todayStr}.csv`;
+
+        const csvLines = [
+            [escapeCsvCell('EXECUTIVE AUDIT REPORT - FINANCIAL P&L SUMMARY')],
+            [escapeCsvCell('Generated Date'), escapeCsvCell(todayStr)],
+            [escapeCsvCell('Audit Status'), escapeCsvCell(isLiveFromDb ? 'Live DB Aggregated' : 'Audited Baseline')],
+            [],
+            [escapeCsvCell('--- SUMMARY KPI CARDS ---')],
+            [escapeCsvCell('Metric'), escapeCsvCell('Amount (INR)'), escapeCsvCell('Notes')],
+            [escapeCsvCell('Gross Revenue'), escapeCsvCell(`₹${Number(totalRev || 0).toLocaleString('en-IN')}`), escapeCsvCell('Live Invoices Sum')],
+            [escapeCsvCell('Operating Expenses (COGS)'), escapeCsvCell(`₹${Number(totalCost || 0).toLocaleString('en-IN')}`), escapeCsvCell('Purchases & Material POs')],
+            [escapeCsvCell('Net EBITDA Profit'), escapeCsvCell(`₹${Number(netProf || 0).toLocaleString('en-IN')}`), escapeCsvCell(`${marginPct}% Net Margin`)],
+            [],
+            [escapeCsvCell('--- FINANCIAL PERFORMANCE TREND BREAKDOWN ---')],
+            [
+                escapeCsvCell('Period'),
+                escapeCsvCell('Gross Revenue (INR)'),
+                escapeCsvCell('Operational Cost (INR)'),
+                escapeCsvCell('Net EBITDA Profit (INR)')
+            ]
+        ];
+
+        if (chartData.length === 0) {
+            csvLines.push([escapeCsvCell('No financial data available for selected period')]);
+        } else {
+            chartData.forEach((row) => {
+                csvLines.push([
+                    escapeCsvCell(row.period || '-'),
+                    escapeCsvCell(`₹${Number(row.revenue || 0).toLocaleString('en-IN')}`),
+                    escapeCsvCell(`₹${Number(row.cost || 0).toLocaleString('en-IN')}`),
+                    escapeCsvCell(`₹${Number(row.profit || 0).toLocaleString('en-IN')}`)
+                ]);
+            });
+        }
+
+        const csvContent = '\uFEFF' + csvLines.map((line) => line.join(',')).join('\r\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        toast.success('Financial P&L executive audit report exported to CSV!');
+    };
+
+    useImperativeHandle(ref, () => ({
+        exportCsv
+    }));
 
     return (
         <div className="space-y-6 font-sans">
@@ -215,4 +283,6 @@ export default function FinancialSummaryChart() {
             </div>
         </div>
     );
-}
+});
+
+export default FinancialSummaryChart;

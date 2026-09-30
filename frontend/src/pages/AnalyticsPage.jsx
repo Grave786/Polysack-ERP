@@ -1,24 +1,28 @@
-import { useState } from 'react';
-import { Download, BarChart2, Activity, Package, Receipt, Printer } from 'lucide-react';
+import { useState, useRef } from 'react';
+import { Download, BarChart2, Activity, Package, Receipt, Users } from 'lucide-react';
 import FinancialSummaryChart from '../components/analytics/FinancialSummaryChart';
 import ProductionYieldTab from '../components/analytics/ProductionYieldTab';
+import OperatorProductivityTab from '../components/analytics/OperatorProductivityTab';
 import InventoryValuationTab from '../components/analytics/InventoryValuationTab';
 import GstTaxRegisterTab from '../components/analytics/GstTaxRegisterTab';
 import toast from 'react-hot-toast';
 
 export default function AnalyticsPage() {
-    const [activeTab, setActiveTab] = useState('pnl');
+    const [activeTab, setActiveTab] = useState('yield');
+    const tabRef = useRef(null);
 
     const handleExportAuditReport = () => {
-        toast.success('Opening print dialog for A4 Executive Audit Report...');
-        setTimeout(() => {
-            window.print();
-        }, 500);
+        if (tabRef.current?.exportCsv) {
+            tabRef.current.exportCsv();
+        } else {
+            toast.error('Export is currently unavailable for this tab.');
+        }
     };
 
     const tabs = [
         { id: 'pnl', label: 'Financial P&L Summary', icon: BarChart2 },
         { id: 'yield', label: 'Production Yield & Scrap', icon: Activity },
+        { id: 'operator-productivity', label: 'Operator Productivity', icon: Users },
         { id: 'valuation', label: 'Inventory Valuation', icon: Package },
         { id: 'gst', label: 'Sales & GST Tax Register', icon: Receipt }
     ];
@@ -32,18 +36,19 @@ export default function AnalyticsPage() {
                         Executive Analytics & Financial Audit Reports
                     </h1>
                     <p className="text-xs text-text-muted mt-0.5">
-                        P&L Financial Summaries, Production Yield, Material Consumption & GST Register
+                        P&L Financial Summaries, Production Yield, Operator Productivity, Material Consumption & GST Register
                     </p>
                 </div>
 
-                {/* Primary Action Button (Export A4 HTML Audit Report) */}
+                {/* Primary Action Button (Export Executive Audit Report) */}
                 <button
                     type="button"
                     onClick={handleExportAuditReport}
                     className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer shrink-0"
+                    title="Export full executive audit report in CSV format"
                 >
                     <Download size={16} />
-                    <span>Export A4 HTML Executive Audit Report</span>
+                    <span>Export Executive Audit Report (CSV)</span>
                 </button>
             </div>
 
@@ -73,11 +78,13 @@ export default function AnalyticsPage() {
 
             {/* Active Tab Component Render */}
             <div className="pt-2">
-                {activeTab === 'pnl' && <FinancialSummaryChart />}
-                {activeTab === 'yield' && <ProductionYieldTab />}
-                {activeTab === 'valuation' && <InventoryValuationTab />}
-                {activeTab === 'gst' && <GstTaxRegisterTab />}
+                {activeTab === 'pnl' && <FinancialSummaryChart ref={tabRef} />}
+                {activeTab === 'yield' && <ProductionYieldTab ref={tabRef} />}
+                {activeTab === 'operator-productivity' && <OperatorProductivityTab ref={tabRef} />}
+                {activeTab === 'valuation' && <InventoryValuationTab ref={tabRef} />}
+                {activeTab === 'gst' && <GstTaxRegisterTab ref={tabRef} />}
             </div>
         </div>
     );
 }
+

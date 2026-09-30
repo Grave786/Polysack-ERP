@@ -1,8 +1,23 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Package, Layers, Boxes, ShieldAlert, Loader2, RefreshCw } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
+import toast from 'react-hot-toast';
 
-export default function InventoryValuationTab() {
+const escapeCsvCell = (val) => {
+    if (val === undefined || val === null) return '""';
+    const s = String(val);
+    return `"${s.replace(/"/g, '""')}"`;
+};
+
+const getTodayDdMmYyyy = () => {
+    const today = new Date();
+    const dd = String(today.getDate()).padStart(2, '0');
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const yyyy = today.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+};
+
+const InventoryValuationTab = forwardRef(function InventoryValuationTab(props, ref) {
     const [data, setData] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -60,6 +75,67 @@ export default function InventoryValuationTab() {
     const summary = data?.summary;
     const ledgerList = data?.ledgerList || [];
     const slowMovingVal = summary?.slowMovingValue || 0;
+
+    const exportCsv = () => {
+        const todayStr = getTodayDdMmYyyy();
+        const filename = `executive-audit-report-inventory-valuation-${todayStr}.csv`;
+
+        const csvLines = [
+            [escapeCsvCell('EXECUTIVE AUDIT REPORT - INVENTORY VALUATION')],
+            [escapeCsvCell('Generated Date'), escapeCsvCell(todayStr)],
+            [escapeCsvCell('Valuation Method'), escapeCsvCell('Weighted Average Cost Method')],
+            [],
+            [escapeCsvCell('--- SUMMARY KPI CARDS ---')],
+            [escapeCsvCell('Metric'), escapeCsvCell('Amount (INR)'), escapeCsvCell('Notes')],
+            [escapeCsvCell('Total Inventory Asset Value'), escapeCsvCell(`₹${Number(summary?.totalInventoryAssetValue || 0).toLocaleString('en-IN')}`), escapeCsvCell('Audited Asset Valuation')],
+            [escapeCsvCell('Raw Material Valuation'), escapeCsvCell(`₹${Number(summary?.rawMaterialValuation || 0).toLocaleString('en-IN')}`), escapeCsvCell(summary?.rawMaterialSubtitle || 'Raw Material Stock')],
+            [escapeCsvCell('Finished Bags Valuation'), escapeCsvCell(`₹${Number(summary?.finishedBagsValuation || 0).toLocaleString('en-IN')}`), escapeCsvCell(`${Number(summary?.finishedBagsCount || 0).toLocaleString('en-IN')} Finished Bags`)],
+            [escapeCsvCell('Slow Moving Stock Valuation'), escapeCsvCell(`₹${Number(slowMovingVal || 0).toLocaleString('en-IN')}`), escapeCsvCell(slowMovingVal > 0 ? 'Requires Clearance' : 'No slow moving stock')],
+            [],
+            [escapeCsvCell('--- STOCK ASSET VALUATION LEDGER ---')],
+            [
+                escapeCsvCell('Stock Item / Name'),
+                escapeCsvCell('Stock Code'),
+                escapeCsvCell('Item Classification'),
+                escapeCsvCell('Current Quantity'),
+                escapeCsvCell('Unit'),
+                escapeCsvCell('Unit Rate (INR)'),
+                escapeCsvCell('Total Valuation (INR)')
+            ]
+        ];
+
+        if (ledgerList.length === 0) {
+            csvLines.push([escapeCsvCell('No stock records found')]);
+        } else {
+            ledgerList.forEach((r) => {
+                csvLines.push([
+                    escapeCsvCell(r.name || r.category || '-'),
+                    escapeCsvCell(r.code || '-'),
+                    escapeCsvCell(r.type || '-'),
+                    escapeCsvCell(Number(r.currentQuantity || 0)),
+                    escapeCsvCell(r.unit || 'Kg'),
+                    escapeCsvCell(Number(r.unitRate || 0)),
+                    escapeCsvCell(`₹${Number(r.totalValuation || 0).toLocaleString('en-IN')}`)
+                ]);
+            });
+        }
+
+        const csvContent = '\uFEFF' + csvLines.map((line) => line.join(',')).join('\r\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        toast.success('Inventory Valuation executive audit report exported to CSV!');
+    };
+
+    useImperativeHandle(ref, () => ({
+        exportCsv
+    }));
 
     if (isLoading) {
         return (
@@ -214,4 +290,6 @@ export default function InventoryValuationTab() {
             </div>
         </div>
     );
-}
+});
+
+export default InventoryValuationTab;
