@@ -255,6 +255,29 @@ export default function ProcurementPage() {
                             </button>
                         )}
 
+                        {isAdmin && (row.status === 'PENDING_APPROVAL' || row.status === 'SENT_TO_SUPPLIER') && (
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    try {
+                                        const res = await axiosInstance.get(`/purchase-orders/${row._id}`);
+                                        if (res.data?.success && res.data.data) {
+                                            setEditPo(res.data.data);
+                                        } else {
+                                            setEditPo(row);
+                                        }
+                                    } catch {
+                                        setEditPo(row);
+                                    }
+                                    setIsCreatePoOpen(true);
+                                }}
+                                className="text-gray-500 hover:text-amber-600 mr-1.5 cursor-pointer"
+                                title={row.status === 'PENDING_APPROVAL' ? "Edit Pending Approval PO" : "Edit Sent to Supplier PO"}
+                            >
+                                <Pencil size={14} />
+                            </button>
+                        )}
+
                         {isAdmin && (row.status === 'PARTIALLY_RECEIVED' || row.status === 'FULLY_RECEIVED') && (
                             <button
                                 type="button"

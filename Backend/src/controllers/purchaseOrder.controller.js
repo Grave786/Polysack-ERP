@@ -357,10 +357,27 @@ const updatePurchaseOrder = async (req, res) => {
             });
         }
 
-        if (purchaseOrder.status !== 'DRAFT') {
+        // Prevent editing if any items have already been received, or if CANCELLED
+        const hasReceivedQty = Array.isArray(purchaseOrder.items) && purchaseOrder.items.some((it) => Number(it.receivedQuantity || 0) > 0);
+        if (hasReceivedQty || ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'].includes(purchaseOrder.status)) {
             return res.status(400).json({
                 success: false,
-                message: `Cannot edit Purchase Order with status '${purchaseOrder.status}'. Only 'DRAFT' purchase orders can be modified. Cancel and create a new PO if needed.`
+                message: `Cannot edit Purchase Order with status '${purchaseOrder.status}' or with received items. Please use GRN to adjust receipts.`
+            });
+        }
+
+        // Restrict PENDING_APPROVAL and SENT_TO_SUPPLIER PO editing to Tenant Admin
+        if (['PENDING_APPROVAL', 'SENT_TO_SUPPLIER'].includes(purchaseOrder.status)) {
+            if (!isTenantAdmin(req.user)) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Only Tenant Admins can edit Purchase Orders that are Pending Approval or Sent to Supplier.'
+                });
+            }
+        } else if (purchaseOrder.status !== 'DRAFT') {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot edit Purchase Order with status '${purchaseOrder.status}'.`
             });
         }
 
@@ -408,16 +425,17 @@ const updatePurchaseOrder = async (req, res) => {
         if (expectedDelivery) purchaseOrder.expectedDelivery = expectedDelivery;
         if (notes !== undefined) purchaseOrder.notes = notes;
         if (status) {
-            if (status === 'SENT_TO_SUPPLIER') {
+            if (status === 'SENT_TO_SUPPLIER' && purchaseOrder.status !== 'SENT_TO_SUPPLIER') {
                 return res.status(400).json({
                     success: false,
                     message: 'Direct transition to SENT_TO_SUPPLIER is not allowed. Purchase Orders must be approved by Tenant Admin through the central Approvals module.'
                 });
             }
-            const validStatuses = ['DRAFT', 'PENDING_APPROVAL', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'];
+            const validStatuses = ['DRAFT', 'PENDING_APPROVAL', 'SENT_TO_SUPPLIER', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'];
             if (validStatuses.includes(status)) {
+                const oldStatus = purchaseOrder.status;
                 purchaseOrder.status = status;
-                if (status === 'PENDING_APPROVAL') {
+                if (status === 'PENDING_APPROVAL' && oldStatus === 'DRAFT') {
                     await createPoApprovalRequest(purchaseOrder, req.user);
                 }
             }
@@ -483,6 +501,35 @@ const updatePurchaseOrder = async (req, res) => {
         }
 
         await purchaseOrder.save();
+
+        // If PO is PENDING_APPROVAL, ensure linked Approval record reflects updated summary and value
+        if (purchaseOrder.status === 'PENDING_APPROVAL') {
+            try {
+                const Approval = require('../models/approval.model');
+                const supplierDoc = await Supplier.findById(purchaseOrder.supplier).lean();
+                const supplierName = supplierDoc?.companyName || supplierDoc?.name || 'Supplier';
+                const formattedTotal = Number(purchaseOrder.totalValue || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+                const summary = `${supplierName} | ₹${formattedTotal}`;
+
+                await Approval.updateOne(
+                    {
+                        tenant: tenantId,
+                        type: 'PO',
+                        referenceId: purchaseOrder._id,
+                        status: 'Pending'
+                    },
+                    {
+                        $set: {
+                            summary,
+                            title: `PO Approval: ${purchaseOrder.poNumber}`,
+                            referenceNo: purchaseOrder.poNumber
+                        }
+                    }
+                );
+            } catch (apprErr) {
+                console.warn('[updatePurchaseOrder] Approval sync note:', apprErr.message);
+            }
+        }
 
         await purchaseOrder.populate([
             { path: 'supplier', select: 'name contactPerson phone' },

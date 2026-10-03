@@ -162,6 +162,18 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                 toast.error(`Item #${i + 1} rate per unit must be non-negative`);
                 return;
             }
+        // Determine target status when editing existing PO
+        let statusToSend = targetStatus;
+        if (editPo?._id) {
+            if (editPo.status === 'SENT_TO_SUPPLIER') {
+                const confirmed = window.confirm(
+                    'This PO was already sent to the supplier. Editing it may require re-communicating changes to them. Continue?'
+                );
+                if (!confirmed) return;
+                statusToSend = 'SENT_TO_SUPPLIER';
+            } else if (editPo.status === 'PENDING_APPROVAL') {
+                statusToSend = 'PENDING_APPROVAL';
+            }
         }
 
         try {
@@ -173,7 +185,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                 expectedDelivery,
                 deliveryLocation: deliveryLocation || undefined,
                 notes: notes.trim() || undefined,
-                status: targetStatus,
+                status: statusToSend,
                 items: items.map((i) => ({
                     rawMaterial: i.rawMaterial,
                     orderedQuantity: Number(i.orderedQuantity),
@@ -191,9 +203,22 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
 
             if (res.data?.success) {
                 const poNum = res.data.data?.poNumber || editPo?.poNumber || '';
-                const actionMsg = targetStatus === 'DRAFT'
-                    ? (editPo ? `Draft PO ${poNum} updated successfully!` : `Purchase Order ${poNum} saved as Draft!`)
-                    : 'Sent for Tenant Admin approval';
+                let actionMsg;
+                if (editPo) {
+                    if (editPo.status === 'SENT_TO_SUPPLIER') {
+                        actionMsg = `Purchase Order ${poNum} updated successfully! Remember to notify the supplier.`;
+                    } else if (editPo.status === 'PENDING_APPROVAL') {
+                        actionMsg = `Pending Purchase Order ${poNum} updated successfully!`;
+                    } else if (targetStatus === 'DRAFT') {
+                        actionMsg = `Draft PO ${poNum} updated successfully!`;
+                    } else {
+                        actionMsg = `Purchase Order ${poNum} updated and submitted for approval!`;
+                    }
+                } else {
+                    actionMsg = targetStatus === 'DRAFT'
+                        ? `Purchase Order ${poNum} saved as Draft!`
+                        : 'Sent for Tenant Admin approval';
+                }
                 toast.success(actionMsg);
                 if (onSuccess) onSuccess();
                 onClose();
@@ -211,9 +236,15 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
             isOpen={isOpen}
             onClose={onClose}
             title={editPo ? `Edit Purchase Order (${editPo.poNumber || ''})` : "Create Purchase Order"}
-            subtitle={editPo ? "Modify draft purchase order details" : "Create purchase order for Tenant Admin approval"}
+            subtitle={editPo
+                ? (editPo.status === 'SENT_TO_SUPPLIER'
+                    ? "Correct PO details before delivery arrives (Sent to Supplier)"
+                    : editPo.status === 'PENDING_APPROVAL'
+                        ? "Correct PO details while awaiting Tenant Admin approval"
+                        : "Modify draft purchase order details")
+                : "Create purchase order for Tenant Admin approval"}
         >
-            <form onSubmit={(e) => { e.preventDefault(); submitOrder('PENDING_APPROVAL'); }} className="space-y-4 font-sans text-xs">
+            <form onSubmit={(e) => { e.preventDefault(); submitOrder(editPo?.status || 'PENDING_APPROVAL'); }} className="space-y-4 font-sans text-xs">
                 {/* Supplier Selection */}
                 <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
@@ -403,23 +434,35 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                     >
                         Cancel
                     </button>
-                    <button
-                        type="button"
-                        disabled={isSubmitting}
-                        onClick={() => submitOrder('DRAFT')}
-                        className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-lg text-xs transition-colors cursor-pointer disabled:opacity-50"
-                    >
-                        {isSubmitting
-                            ? (editPo ? 'Updating Draft...' : 'Saving Draft...')
-                            : (editPo ? 'Update Draft' : 'Save as Draft')}
-                    </button>
+                    {(!editPo || editPo.status === 'DRAFT') && (
+                        <button
+                            type="button"
+                            disabled={isSubmitting}
+                            onClick={() => submitOrder('DRAFT')}
+                            className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-lg text-xs transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                            {isSubmitting
+                                ? (editPo ? 'Updating Draft...' : 'Saving Draft...')
+                                : (editPo ? 'Update Draft' : 'Save as Draft')}
+                        </button>
+                    )}
                     <button
                         type="submit"
                         disabled={isSubmitting}
                         className="px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
                         <ShoppingBag size={15} />
-                        <span>{isSubmitting ? (editPo ? 'Updating PO...' : 'Submitting PO...') : (editPo ? 'Update & Submit for Approval' : 'Submit for Approval')}</span>
+                        <span>
+                            {isSubmitting
+                                ? (editPo ? 'Saving Changes...' : 'Submitting PO...')
+                                : (editPo
+                                    ? (editPo.status === 'SENT_TO_SUPPLIER'
+                                        ? 'Save & Update Sent PO'
+                                        : editPo.status === 'PENDING_APPROVAL'
+                                            ? 'Update Pending PO'
+                                            : 'Update & Submit for Approval')
+                                    : 'Submit for Approval')}
+                        </span>
                     </button>
                 </div>
             </form>
