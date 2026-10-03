@@ -47,6 +47,9 @@ export default function Topbar({ onToggleSidebar }) {
     const roleDisplayName = getRoleDisplayName(user);
     const userEmail = user?.email || 'user@polysack.com';
 
+    const tenant = user?.tenant || user?.tenantData || {};
+    const tenantCompanyName = tenant?.companyName || tenant?.name || user?.companyName || 'PP Poly & Paper Products';
+
     // Detect Super Admin to hide tenant-only elements like tenant notifications
     const isSuperAdmin = checkIsSuperAdmin(user);
 
@@ -237,8 +240,7 @@ export default function Topbar({ onToggleSidebar }) {
                     <img src="logo.png" alt="logo.png" />
                 </div>
                 <div className="text-sm sm:text-base font-bold tracking-tight text-sidebar-text-active whitespace-nowrap">
-
-                    PP Poly & Paper Products <span className="text-primary font-semibold hidden xs:inline">ERP</span>
+                    {tenantCompanyName} <span className="text-primary font-semibold hidden xs:inline">ERP</span>
                 </div>
             </div>
 

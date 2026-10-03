@@ -12,6 +12,14 @@ const Tenant = require('../models/tenant.model');
 const MaterialReceipt = require('../models/materialReceipt.model');
 const GstFiling = require('../models/gstFiling.model');
 const Employee = require('../models/employee.model');
+const Customer = require('../models/customer.model');
+const Supplier = require('../models/supplier.model');
+const SalesOrder = require('../models/salesOrder.model');
+const BOM = require('../models/bom.model');
+const UOM = require('../models/uom.model');
+const Location = require('../models/location.model');
+const Machine = require('../models/machine.model');
+const User = require('../models/user.model');
 
 /**
  * Format Date object / string to IST YYYY-MM-DD string without toISOString() timezone shift
@@ -330,6 +338,27 @@ const getProductionYieldMetrics = async (req, res) => {
         // 4. Fetch all matching WorkOrders within date range
         const workOrders = await WorkOrder.find(woMatch).sort({ createdAt: -1 }).lean();
 
+        // 4b. Fetch all Baling & Packing production logs for these work orders
+        const woIds = workOrders.map((wo) => wo._id);
+        const balingLogs = await ProductionLog.find({
+            tenant: { $in: [tenantObjId, tenantId] },
+            workOrder: { $in: woIds },
+            $or: [
+                { stage: 'BALING_PACKING' },
+                { stageName: 'BALING_PACKING' },
+                { stageSequence: 8 }
+            ]
+        }).sort({ date: 1, createdAt: 1 }).lean();
+
+        const balingLogsByWo = {};
+        for (const log of balingLogs) {
+            const woIdStr = String(log.workOrder);
+            if (!balingLogsByWo[woIdStr]) {
+                balingLogsByWo[woIdStr] = [];
+            }
+            balingLogsByWo[woIdStr].push(log);
+        }
+
         const tableData = workOrders.map((wo) => {
             // Actual material issued from job order rolls (or fallback to targetQuantity)
             let inputKg = 0;
@@ -372,24 +401,90 @@ const getProductionYieldMetrics = async (req, res) => {
                 }
             }
 
+            // Baling & Packing specific logs aggregation
+            const woIdStr = String(wo._id);
+            const woBalingLogs = balingLogsByWo[woIdStr] || [];
+
+            let totalBalingStr = null;
+            let weightPerBalingKg = null;
+            let totalNetWeightKg = null;
+            let totalBalingPcs = 0;
+
+            if (woBalingLogs.length > 0) {
+                const qtyGroups = {};
+                let sumNetWeight = 0;
+                let validWeightCount = 0;
+
+                woBalingLogs.forEach((log) => {
+                    const qty = Number(log.quantity || 0);
+                    totalBalingPcs += qty;
+                    if (qty > 0) {
+                        qtyGroups[qty] = (qtyGroups[qty] || 0) + 1;
+                    }
+
+                    const nw = Number(log.netWeight);
+                    if (!isNaN(nw) && nw > 0) {
+                        sumNetWeight += nw;
+                        validWeightCount++;
+                    }
+                });
+
+                const groupEntries = Object.entries(qtyGroups);
+                if (groupEntries.length > 0) {
+                    groupEntries.sort((a, b) => Number(b[0]) - Number(a[0]));
+                    totalBalingStr = groupEntries
+                        .map(([qty, count]) => `${count} × ${Number(qty).toLocaleString('en-IN')} pcs`)
+                        .join(', ');
+                } else {
+                    totalBalingStr = `${woBalingLogs.length} bales`;
+                }
+
+                if (sumNetWeight > 0) {
+                    totalNetWeightKg = Number(sumNetWeight.toFixed(3));
+                    const divisor = validWeightCount > 0 ? validWeightCount : woBalingLogs.length;
+                    weightPerBalingKg = Number((sumNetWeight / divisor).toFixed(3));
+                }
+            }
+
             // Bags produced = completedQuantity of the final stage only (no summing across stages)
-            const completedBags = Number(wo.completedQuantity || lastStageGood || 0);
+            const completedBags = Number(wo.completedQuantity || lastStageGood || totalBalingPcs || 0);
             const netKg = Math.max(0, inputKg - sumReturn);
+
+            // Compute Qty Rejected (Kg) from Total Net Weight / Final Bags Produced * sumDefect (or fallback to bagWeightGms)
+            let qtyRejectedKg = 0;
+            if (sumDefect > 0) {
+                if (totalNetWeightKg && totalNetWeightKg > 0 && completedBags > 0) {
+                    const avgBagWeightKg = totalNetWeightKg / completedBags;
+                    qtyRejectedKg = Number((avgBagWeightKg * sumDefect).toFixed(3));
+                } else if (wo.jobOrderDetails?.bagWeightGms && Number(wo.jobOrderDetails.bagWeightGms) > 0) {
+                    const bagWeightKg = Number(wo.jobOrderDetails.bagWeightGms) / 1000;
+                    qtyRejectedKg = Number((bagWeightKg * sumDefect).toFixed(3));
+                }
+            }
 
             return {
                 workOrderId: wo._id,
                 workOrderNumber: wo.workOrderNumber,
-                targetQuantity: wo.targetQuantity,
+                targetQuantity: Number(wo.targetQuantity || 0),
+                targetBags: Number(wo.targetQuantity || 0),
                 totalInputKg: inputKg,
                 returnToStore: sumReturn,
                 netInput: netKg,
                 netKgUsed: netKg,
+                finalBagsProduced: completedBags,
                 bagsProduced: completedBags,
                 totalBagsProduced: completedBags,
-                wastageKg: sumWastage,
-                totalWastageKg: sumWastage,
+                totalBaling: totalBalingStr,
+                totalBalingCount: woBalingLogs.length,
+                weightPerBalingKg: weightPerBalingKg,
+                totalNetWeightKg: totalNetWeightKg,
+                qtyRejectedPcs: sumDefect,
                 rejects: sumDefect,
                 totalRejectedBags: sumDefect,
+                qtyRejectedKg: qtyRejectedKg,
+                scrapKg: sumWastage,
+                wastageKg: sumWastage,
+                totalWastageKg: sumWastage,
                 date: wo.createdAt
             };
         });
@@ -1613,12 +1708,358 @@ const getOperatorProductivityMetrics = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get Consolidated Monthly Business Report (Sales, Purchases, Production, Margin)
+ * @route   GET /api/analytics/monthly-report
+ * @access  Private (ANALYTICS:READ)
+ */
+const getMonthlyBusinessReport = async (req, res) => {
+    try {
+        const rawTenant = req.user?.tenant;
+        if (!rawTenant) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid.'
+            });
+        }
+
+        const tenantStr = typeof rawTenant === 'object' && rawTenant?._id ? String(rawTenant._id) : String(rawTenant);
+        const tenantObjId = mongoose.Types.ObjectId.isValid(tenantStr) ? new mongoose.Types.ObjectId(tenantStr) : null;
+        const tenantMatch = tenantObjId ? { $in: [tenantObjId, tenantStr] } : tenantStr;
+
+        // 1. Resolve Month & Year in IST
+        const now = new Date();
+        const istDate = new Date(now.getTime() + (now.getTimezoneOffset() * 60000) + (5.5 * 3600000));
+        const currentYear = istDate.getFullYear();
+        const currentMonth = istDate.getMonth() + 1; // 1 to 12
+
+        let year = parseInt(req.query.year, 10);
+        if (isNaN(year) || year < 2000 || year > 2100) {
+            year = currentYear;
+        }
+
+        let month = parseInt(req.query.month, 10);
+        if (isNaN(month) || month < 1 || month > 12) {
+            month = currentMonth;
+        }
+
+        const monthStr = String(month).padStart(2, '0');
+        const lastDay = new Date(year, month, 0).getDate();
+        const lastDayStr = String(lastDay).padStart(2, '0');
+
+        // IST boundaries (no toISOString() timezone shift)
+        const monthStart = new Date(`${year}-${monthStr}-01T00:00:00.000+05:30`);
+        const monthEnd = new Date(`${year}-${monthStr}-${lastDayStr}T23:59:59.999+05:30`);
+
+        const monthNames = [
+            'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'
+        ];
+        const monthLabel = `${monthNames[month - 1]} ${year}`;
+
+        // 2. Query Sales / Invoices (Exclude Cancelled, Draft, Void - matching GST Register rules)
+        const invoices = await Invoice.find({
+            tenant: tenantMatch,
+            isActive: { $ne: false },
+            status: { $nin: ['CANCELLED', 'Cancelled', 'cancelled', 'DRAFT', 'Draft', 'draft', 'VOID', 'Void', 'void'] },
+            invoiceDate: { $gte: monthStart, $lte: monthEnd }
+        })
+            .populate('customer', 'name companyName code gstin phone')
+            .populate('salesOrder', 'soNumber orderNumber')
+            .populate('items.finishedGood', 'name code bagType size')
+            .sort({ invoiceDate: -1, createdAt: -1 })
+            .lean();
+
+        let totalSalesValue = 0;
+        let totalBagsSold = 0;
+        const salesDetails = [];
+
+        (invoices || []).forEach((inv) => {
+            const invVal = Number(inv.grandTotal || 0);
+            totalSalesValue += invVal;
+
+            const custName = inv.customer?.companyName || inv.customer?.name || inv.walkInCustomer?.name || 'Walk-in Customer';
+            const soNum = inv.salesOrder?.soNumber || inv.salesOrder?.orderNumber || '';
+            const docNumber = soNum ? `${inv.invoiceNumber} / ${soNum}` : inv.invoiceNumber;
+            const invDate = inv.invoiceDate;
+
+            if (Array.isArray(inv.items) && inv.items.length > 0) {
+                inv.items.forEach((item) => {
+                    if (!item) return;
+                    const qty = Number(item.quantity || 0);
+                    const rate = Number(item.ratePerUnit || 0);
+                    const totalVal = Number(item.taxableValue != null ? item.taxableValue : (qty * rate) || 0);
+                    const itemName = item.description || item.finishedGood?.name || item.finishedGood?.code || 'Bag / Finished Good';
+
+                    totalBagsSold += qty;
+
+                    salesDetails.push({
+                        invoiceId: inv._id,
+                        invoiceNumber: inv.invoiceNumber,
+                        soNumber: soNum,
+                        docNumber,
+                        date: invDate,
+                        customerName: custName,
+                        itemName,
+                        quantity: qty,
+                        unit: 'Bags',
+                        rate: rate,
+                        taxableValue: totalVal,
+                        totalValue: totalVal,
+                        invoiceTotal: invVal,
+                        status: inv.status || 'FINALIZED'
+                    });
+                });
+            } else {
+                salesDetails.push({
+                    invoiceId: inv._id,
+                    invoiceNumber: inv.invoiceNumber,
+                    soNumber: soNum,
+                    docNumber,
+                    date: invDate,
+                    customerName: custName,
+                    itemName: 'Finished Goods',
+                    quantity: 0,
+                    unit: 'Bags',
+                    rate: 0,
+                    taxableValue: invVal,
+                    totalValue: invVal,
+                    invoiceTotal: invVal,
+                    status: inv.status || 'FINALIZED'
+                });
+            }
+        });
+
+        // 3. Query Purchases / POs & GRNs (Exclude Cancelled, Draft, Void, Rejected)
+        const purchaseOrders = await PurchaseOrder.find({
+            tenant: tenantMatch,
+            isActive: { $ne: false },
+            status: { $nin: ['CANCELLED', 'Cancelled', 'cancelled', 'DRAFT', 'Draft', 'draft', 'VOID', 'Void', 'void', 'REJECTED', 'Rejected'] },
+            poDate: { $gte: monthStart, $lte: monthEnd }
+        })
+            .populate('supplier', 'name code companyName')
+            .populate('items.rawMaterial', 'name code materialDescription')
+            .sort({ poDate: -1, createdAt: -1 })
+            .lean();
+
+        // Also fetch GRNs to provide PO/GRN No cross-references
+        const poIds = (purchaseOrders || []).map((p) => p._id).filter(Boolean);
+        let grnQuery = {
+            tenant: tenantMatch,
+            receivedDate: { $gte: monthStart, $lte: monthEnd }
+        };
+        if (poIds.length > 0) {
+            grnQuery = {
+                tenant: tenantMatch,
+                $or: [
+                    { purchaseOrder: { $in: poIds } },
+                    { receivedDate: { $gte: monthStart, $lte: monthEnd } }
+                ]
+            };
+        }
+
+        let grns = [];
+        try {
+            grns = await GRN.find(grnQuery).select('grnNumber purchaseOrder receivedDate items').lean();
+        } catch (e) {
+            console.warn('GRN cross-reference lookup note in monthly report:', e.message);
+        }
+
+        const poGrnMap = {};
+        (grns || []).forEach((g) => {
+            if (g.purchaseOrder) {
+                const pId = String(g.purchaseOrder);
+                if (!poGrnMap[pId]) {
+                    poGrnMap[pId] = [];
+                }
+                if (g.grnNumber && !poGrnMap[pId].includes(g.grnNumber)) {
+                    poGrnMap[pId].push(g.grnNumber);
+                }
+            }
+        });
+
+        let totalPurchaseValue = 0;
+        let totalRawMaterialPurchasedKg = 0;
+        const purchaseDetails = [];
+
+        (purchaseOrders || []).forEach((po) => {
+            const poVal = Number(po.totalValue || 0);
+            totalPurchaseValue += poVal;
+
+            const suppName = po.supplier?.name || po.supplier?.companyName || 'Unknown Supplier';
+            const grnNums = poGrnMap[String(po._id)] || [];
+            const docNumber = grnNums.length > 0 ? `${po.poNumber} / ${grnNums.join(', ')}` : po.poNumber;
+            const poDate = po.poDate;
+
+            if (Array.isArray(po.items) && po.items.length > 0) {
+                po.items.forEach((item) => {
+                    if (!item) return;
+                    const qty = Number(item.orderedQuantity || 0);
+                    const rate = Number(item.ratePerUnit || 0);
+                    const totalVal = Number((qty * rate) || 0);
+
+                    // Safely extract unit as string
+                    let unitStr = 'Kg';
+                    if (typeof item.unit === 'string' && item.unit.trim()) {
+                        unitStr = item.unit.trim();
+                    }
+                    const itemName = item.rawMaterial?.name || item.rawMaterial?.materialDescription || item.rawMaterial?.code || 'Raw Material';
+
+                    const unitLower = unitStr.toLowerCase();
+                    if (unitLower === 'kg' || unitLower === 'kgs') {
+                        totalRawMaterialPurchasedKg += qty;
+                    }
+
+                    purchaseDetails.push({
+                        poId: po._id,
+                        poNumber: po.poNumber,
+                        grnNumbers: grnNums,
+                        docNumber,
+                        date: poDate,
+                        supplierName: suppName,
+                        itemName,
+                        quantity: qty,
+                        unit: unitStr,
+                        rate: rate,
+                        totalValue: totalVal,
+                        poTotal: poVal,
+                        status: po.status || 'CONFIRMED'
+                    });
+                });
+            } else {
+                purchaseDetails.push({
+                    poId: po._id,
+                    poNumber: po.poNumber,
+                    grnNumbers: grnNums,
+                    docNumber,
+                    date: poDate,
+                    supplierName: suppName,
+                    itemName: 'Raw Materials',
+                    quantity: 0,
+                    unit: 'Kg',
+                    rate: 0,
+                    totalValue: poVal,
+                    poTotal: poVal,
+                    status: po.status || 'CONFIRMED'
+                });
+            }
+        });
+
+        // 4. Query Production Yield & Final-stage output across active WOs that month
+        // Reuses exact same final-stage logic without double-counting
+        const workOrders = await WorkOrder.find({
+            tenant: tenantMatch,
+            status: { $nin: ['CANCELLED', 'PENDING'] },
+            $or: [
+                { createdAt: { $gte: monthStart, $lte: monthEnd } },
+                { updatedAt: { $gte: monthStart, $lte: monthEnd } }
+            ]
+        })
+            .populate('customer', 'companyName name code')
+            .populate('finishedGood', 'name code baseName specification bagType')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        let netProductionBags = 0;
+        const productionSummary = [];
+
+        (workOrders || []).forEach((wo) => {
+            let lastStageGood = 0;
+            if (Array.isArray(wo.stages)) {
+                // Final stage output (sequence 8 or BALING_PACKING, or last completed stage in flow)
+                const finalStage = wo.stages.find((s) => s && (s.sequence === 8 || s.stageName === 'BALING_PACKING'));
+                if (finalStage && finalStage.goodOutputQty != null) {
+                    lastStageGood = Number(finalStage.goodOutputQty || 0);
+                } else {
+                    const completedStages = wo.stages.filter((s) => s && s.status === 'COMPLETED');
+                    if (completedStages.length > 0) {
+                        const lastCompleted = completedStages.reduce(
+                            (prev, curr) => (Number(curr.sequence || 0) > Number(prev.sequence || 0) ? curr : prev),
+                            completedStages[0]
+                        );
+                        lastStageGood = Number(lastCompleted.goodOutputQty || 0);
+                    }
+                }
+            }
+
+            const completedBags = Number(wo.completedQuantity || wo.completedBags || lastStageGood || 0);
+            netProductionBags += completedBags;
+
+            const custName = wo.customer?.companyName || wo.customer?.name || (typeof wo.customer === 'string' ? wo.customer : '-');
+            const prodName = wo.finishedGood?.specification || wo.finishedGood?.name || wo.finishedGood?.code || wo.product?.specification || wo.product?.name || wo.productName || 'PP Woven Bags';
+
+            productionSummary.push({
+                workOrderId: wo._id,
+                workOrderNumber: wo.workOrderNumber || '-',
+                customerName: custName,
+                finishedGoodName: prodName,
+                productName: prodName,
+                product: wo.finishedGood || wo.product || { name: prodName, specification: prodName },
+                targetQuantity: Number(wo.targetQuantity || 0),
+                unit: wo.unit || wo.jobOrderDetails?.totalOrderQuantityUnit || 'Bags',
+                bagsProduced: completedBags,
+                producedQuantity: completedBags,
+                producedQty: completedBags,
+                completedQuantity: completedBags,
+                completedBags: completedBags,
+                status: wo.status || 'IN_PROGRESS',
+                createdAt: wo.createdAt,
+                updatedAt: wo.updatedAt
+            });
+        });
+
+        // 5. Summary KPI Cards aggregation
+        totalSalesValue = Number(totalSalesValue.toFixed(2));
+        totalPurchaseValue = Number(totalPurchaseValue.toFixed(2));
+        totalBagsSold = Math.round(totalBagsSold);
+        totalRawMaterialPurchasedKg = Number(totalRawMaterialPurchasedKg.toFixed(2));
+        netProductionBags = Math.round(netProductionBags);
+        const grossMargin = Number((totalSalesValue - totalPurchaseValue).toFixed(2));
+        const grossMarginPercent = totalSalesValue > 0 ? Number(((grossMargin / totalSalesValue) * 100).toFixed(1)) : 0;
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                period: {
+                    month,
+                    year,
+                    monthLabel,
+                    startDate: `${year}-${monthStr}-01`,
+                    endDate: `${year}-${monthStr}-${lastDayStr}`
+                },
+                summary: {
+                    totalSalesValue,
+                    totalPurchaseValue,
+                    totalBagsSold,
+                    totalRawMaterialPurchasedKg,
+                    netProductionBags,
+                    grossMargin,
+                    grossMarginPercent
+                },
+                salesDetails,
+                purchaseDetails,
+                productionSummary
+            }
+        });
+    } catch (error) {
+        console.error('Error in getMonthlyBusinessReport:', error);
+        console.error(error.stack);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to retrieve monthly business report.',
+            error: error.message,
+            stack: error.stack
+        });
+    }
+};
+
 module.exports = {
     getFinancialSummary,
     getProductionYieldMetrics,
     getInventoryValuation,
     getGstTaxRegister,
     getOperatorProductivityMetrics,
+    getMonthlyBusinessReport,
     saveGstFiling,
     deleteGstFiling
 };

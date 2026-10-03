@@ -23,7 +23,8 @@ export default function DataTable({
     onBulkDelete = null,
     isEditable = true,
     isDeletable = true,
-    onExportCsv = null
+    onExportCsv = null,
+    extraFilterControls = null
 }) {
     // State to manage visible columns dynamically
     const [visibleColumns, setVisibleColumns] = useState({});
@@ -164,8 +165,11 @@ export default function DataTable({
                     />
                 </div>
 
-                {/* Right Action Controls: Status Filter, Columns & Export CSV */}
+                {/* Right Action Controls: Extra Filter Controls, Status Filter, Columns & Export CSV */}
                 <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end shrink-0 flex-wrap sm:flex-nowrap">
+                    {/* Optional Custom Extra Filter Controls (e.g. Date Range) */}
+                    {extraFilterControls}
+
                     {/* Dynamic Status Filter Dropdown */}
                     <div className="flex items-center gap-1.5 bg-card-bg border border-border rounded-lg px-2.5 py-1.5 text-xs text-text-main shadow-2xs select-none">
                         <Filter size={14} className="text-text-muted shrink-0" />

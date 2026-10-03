@@ -51,7 +51,7 @@ const QcInspectionSchema = new mongoose.Schema({
     sampleSize: {
         type: Number,
         default: 1,
-        min: [1, 'Sample size must be at least 1']
+        min: [0.001, 'Sample size must be at least 0.001']
     },
     passedQty: {
         type: Number,

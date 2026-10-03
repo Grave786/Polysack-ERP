@@ -249,10 +249,10 @@ export default function PackingSlipRollsSection({
                                         </label>
                                         <input
                                             type="number"
-                                            step="0.01"
-                                            min="1"
+                                            step="0.001"
+                                            min="0.001"
                                             max="50000"
-                                            placeholder="1–50,000"
+                                            placeholder="0.001–50,000"
                                             value={(roll.fabricLength !== undefined && roll.fabricLength !== null && roll.fabricLength !== '') ? roll.fabricLength : (roll.length ?? '')}
                                             onChange={(e) => handleRollChange(idx, 'length', e.target.value)}
                                             className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary"
@@ -266,8 +266,8 @@ export default function PackingSlipRollsSection({
                                         </label>
                                         <input
                                             type="number"
-                                            step="0.01"
-                                            min="0.01"
+                                            step="0.001"
+                                            min="0.001"
                                             placeholder="e.g. 58"
                                             value={roll.width !== undefined && roll.width !== null ? roll.width : ''}
                                             onChange={(e) => handleRollChange(idx, 'width', e.target.value)}
@@ -282,8 +282,8 @@ export default function PackingSlipRollsSection({
                                         </label>
                                         <input
                                             type="number"
-                                            step="0.01"
-                                            min="0.01"
+                                            step="0.001"
+                                            min="0.001"
                                             max="10000"
                                             placeholder="Max 10,000"
                                             value={roll.grossWeight !== undefined && roll.grossWeight !== null ? roll.grossWeight : ''}
@@ -302,8 +302,8 @@ export default function PackingSlipRollsSection({
                                         </div>
                                         <input
                                             type="number"
-                                            step="0.01"
-                                            min="0.01"
+                                            step="0.001"
+                                            min="0.001"
                                             max="10000"
                                             placeholder="Net Wt"
                                             value={roll.netWeight !== undefined && roll.netWeight !== null ? roll.netWeight : ''}
@@ -321,7 +321,7 @@ export default function PackingSlipRollsSection({
                                         </label>
                                         <input
                                             type="number"
-                                            step="any"
+                                            step="0.001"
                                             min="0"
                                             placeholder="Roll Wt"
                                             value={(roll.totalQuantityKg !== undefined && roll.totalQuantityKg !== null && roll.totalQuantityKg !== '') ? roll.totalQuantityKg : (roll.qtyKgs ?? '')}
@@ -353,7 +353,7 @@ export default function PackingSlipRollsSection({
                                         </label>
                                         <input
                                             type="number"
-                                            step="0.01"
+                                            step="0.001"
                                             placeholder="e.g. 120.5"
                                             value={roll.fabricAverage || ''}
                                             onChange={(e) => handleRollChange(idx, 'fabricAverage', e.target.value)}

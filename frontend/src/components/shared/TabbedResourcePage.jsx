@@ -366,6 +366,10 @@ export default function TabbedResourcePage({
     onEdit = null,
     headerActions = null,
     tabBarActions = null,
+    filterSlot = null,
+    extraFilterControls = null,
+    extraParams = null,
+    extraFilterParams = null,
     activeTabKey: controlledActiveTabKey,
     onTabChange
 }) {
@@ -591,9 +595,22 @@ export default function TabbedResourcePage({
         }
     }, [isCustomersTab]);
 
-    const customerExtraParams = useMemo(() => {
-        return isCustomersTab && showInactive ? { showInactive: 'true' } : undefined;
-    }, [isCustomersTab, showInactive]);
+    const mergedExtraParams = useMemo(() => {
+        const extra = {};
+        if (isCustomersTab && showInactive) {
+            extra.showInactive = 'true';
+        }
+        if (extraFilterParams && typeof extraFilterParams === 'object') {
+            Object.assign(extra, extraFilterParams);
+        }
+        if (extraParams && typeof extraParams === 'object') {
+            Object.assign(extra, extraParams);
+        }
+        if (activeTab?.extraParams && typeof activeTab.extraParams === 'object') {
+            Object.assign(extra, activeTab.extraParams);
+        }
+        return Object.keys(extra).length > 0 ? extra : undefined;
+    }, [isCustomersTab, showInactive, extraFilterParams, extraParams, activeTab?.extraParams]);
 
     const {
         data,
@@ -615,7 +632,7 @@ export default function TabbedResourcePage({
         (activeTab?.defaultStatus && activeTab.defaultStatus !== 'All Statuses' && activeTab.defaultStatus !== 'All')
             ? { status: activeTab.defaultStatus }
             : undefined,
-        customerExtraParams
+        mergedExtraParams
     );
 
     // When the user switches tabs, reset the status filter to that tab's defaultStatus.
@@ -1421,6 +1438,9 @@ export default function TabbedResourcePage({
             const isAllStatus = !statusFilter || statusFilter === 'All Statuses' || statusFilter === 'All' || statusFilter === 'ALL';
             if (!isAllStatus) {
                 baseParams.status = statusFilter;
+            }
+            if (mergedExtraParams && typeof mergedExtraParams === 'object') {
+                Object.assign(baseParams, mergedExtraParams);
             }
 
             // 3. Fetch all matching records across all pages
@@ -2826,6 +2846,8 @@ export default function TabbedResourcePage({
                             </label>
                             <input
                                 type="number"
+                                step="0.001"
+                                min="0"
                                 placeholder="e.g. 450"
                                 value={formData.capacityPerHour || formData.capacity || ''}
                                 onChange={(e) => {
@@ -3228,6 +3250,8 @@ export default function TabbedResourcePage({
                                 <div className="mt-auto">
                                     <input
                                         type="number"
+                                        step="0.001"
+                                        min="0"
                                         placeholder="1000"
                                         value={formData.moq || ''}
                                         onChange={(e) => handleInputChange('moq', e.target.value)}
@@ -3307,6 +3331,8 @@ export default function TabbedResourcePage({
                             <div className="mt-auto">
                                 <input
                                     type="number"
+                                    step="0.001"
+                                    min="0"
                                     placeholder="1000"
                                     value={formData.reorderLevel || ''}
                                     onChange={(e) => handleInputChange('reorderLevel', e.target.value)}
@@ -3631,6 +3657,8 @@ export default function TabbedResourcePage({
                             </label>
                             <input
                                 type="number"
+                                step="0.001"
+                                min="0"
                                 placeholder="50"
                                 value={formData.bagCapacity || formData.capacity || ''}
                                 onChange={(e) => handleInputChange('bagCapacity', e.target.value)}
@@ -3644,6 +3672,8 @@ export default function TabbedResourcePage({
                             </label>
                             <input
                                 type="number"
+                                step="0.001"
+                                min="0"
                                 placeholder="e.g. 75"
                                 value={formData.bagWeightGms || formData.tareWeightGram || ''}
                                 onChange={(e) => {
@@ -4293,6 +4323,7 @@ export default function TabbedResourcePage({
                         onSearchChange={setSearch}
                         statusFilter={statusFilter}
                         onStatusFilterChange={setStatusFilter}
+                        extraFilterControls={filterSlot || extraFilterControls || activeTab?.filterSlot || activeTab?.extraFilterControls}
                         availableStatuses={activeTab?.availableStatuses || (() => {
                             const k = (activeTabKey || '').toLowerCase();
                             if (k === 'dispatches' || k === 'dispatch') return ['IN_TRANSIT', 'DELIVERED'];

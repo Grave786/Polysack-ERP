@@ -1,7 +1,8 @@
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { Users, Package, Award, Calendar, Download, RefreshCw, AlertCircle, TrendingUp, ChevronRight, X } from 'lucide-react';
+import { Users, Package, Award, Calendar, Download, Printer, RefreshCw, AlertCircle, TrendingUp, ChevronRight, X } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { generatePdfReport } from '../../utils/pdfExportUtils';
 
 const escapeCsvCell = (val) => {
     if (val === undefined || val === null) return '""';
@@ -138,11 +139,48 @@ const OperatorProductivityTab = forwardRef(function OperatorProductivityTab(prop
         toast.success('Operator Productivity executive audit report exported to CSV!');
     };
 
+    const exportPdf = () => {
+        const todayStr = getTodayDdMmYyyy();
+        const dateRangeStr = `From: ${startDate ? formatCsvDate(startDate) : 'All Beginning'} To: ${endDate ? formatCsvDate(endDate) : 'Today'}`;
+        const filename = `executive-audit-report-operator-productivity-${todayStr}.pdf`;
+
+        generatePdfReport({
+            title: 'Operator Productivity Audit Report',
+            subtitle: dateRangeStr,
+            generatedDate: todayStr,
+            filename,
+            summaryCards: [
+                { label: 'Active Operators', value: String(summary.totalOperatorsActive || 0), notes: 'Operators with output' },
+                { label: 'Total Bags Produced', value: `${Number(summary.totalBagsProduced || 0).toLocaleString('en-IN')} Bags`, notes: 'Finished goods output' },
+                { label: 'Top Contributor', value: summary.topOperatorName || 'N/A', notes: `${Number(summary.topOperatorBags || 0).toLocaleString('en-IN')} Bags` },
+                { label: 'Average per Operator', value: `${Number(summary.avgBagsPerOperator || 0).toLocaleString('en-IN')} Bags`, notes: 'Per active operator' }
+            ],
+            sections: [
+                {
+                    title: 'OPERATOR PRODUCTIVITY RANKINGS & METRICS',
+                    headers: ['Operator Name', 'Employee Code', 'Department', 'Total Bags Produced', 'Work Orders', 'Best Single Day Date', 'Best Day Qty'],
+                    rows: operators.map((op) => [
+                        op.operatorName || 'Unknown',
+                        op.employeeCode || '-',
+                        op.department || '-',
+                        Number(op.totalBags || 0).toLocaleString('en-IN'),
+                        Number(op.workOrderCount || 0).toLocaleString('en-IN'),
+                        op.bestSingleDay?.date ? formatCsvDate(op.bestSingleDay.date) : '-',
+                        Number(op.bestSingleDay?.quantity || 0).toLocaleString('en-IN')
+                    ])
+                }
+            ]
+        });
+        toast.success('Operator Productivity audit report exported to PDF!');
+    };
+
     useImperativeHandle(ref, () => ({
-        exportCsv
+        exportCsv,
+        exportPdf
     }));
 
     const handleExportCsv = exportCsv;
+    const handleExportPdf = exportPdf;
 
     return (
         <div className="space-y-5 font-sans">
@@ -256,15 +294,25 @@ const OperatorProductivityTab = forwardRef(function OperatorProductivityTab(prop
                             />
                         </div>
 
-                        {/* CSV Export Button */}
+                        {/* CSV & PDF Export Buttons */}
                         <button
                             type="button"
                             onClick={handleExportCsv}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-card-bg hover:bg-app-bg text-text-main border border-border font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
                             title="Export operator productivity records to CSV"
                         >
                             <Download size={13} />
                             <span>Export CSV</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={handleExportPdf}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+                            title="Export operator productivity records to PDF"
+                        >
+                            <Printer size={13} />
+                            <span>Export PDF</span>
                         </button>
 
                         {isLoading && (

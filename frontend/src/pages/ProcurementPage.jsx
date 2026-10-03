@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { Plus, Download, Truck, FileText, Check, ClipboardList, Eye, Pencil, X } from 'lucide-react';
+import { Plus, Download, Truck, FileText, Check, Eye, Pencil, X } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreatePurchaseOrderPanel from '../components/procurement/CreatePurchaseOrderPanel';
 import CreateGRNPanel from '../components/procurement/CreateGRNPanel';
-import CreateMaterialReceiptPanel from '../components/procurement/CreateMaterialReceiptPanel';
 import PrintPOModal from '../components/procurement/PrintPOModal';
 import DetailViewModal from '../components/shared/DetailViewModal';
 import axiosInstance from '../api/axiosInstance';
@@ -17,8 +16,8 @@ export default function ProcurementPage() {
     const [isCreatePoOpen, setIsCreatePoOpen] = useState(false);
     const [editPo, setEditPo] = useState(null);
     const [selectedPoForGrn, setSelectedPoForGrn] = useState(null);
+    const [editGrn, setEditGrn] = useState(null);
     const [isGrnPanelOpen, setIsGrnPanelOpen] = useState(false);
-    const [isMatReceiptOpen, setIsMatReceiptOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [activeTab, setActiveTab] = useState('purchase-orders');
 
@@ -75,6 +74,15 @@ export default function ProcurementPage() {
         }
     };
 
+    // Format quantity string and filter out raw 24-character hexadecimal MongoDB ObjectIds
+    const formatQty = (qty, unit) => {
+        if (!unit) return `${qty} Kg`;
+        if (typeof unit === 'string' && /^[0-9a-fA-F]{24}$/.test(unit.trim())) {
+            return `${qty} Kg`;
+        }
+        return `${qty} ${unit}`;
+    };
+
     // ─── Purchase Orders columns ─────────────────────────────────────────────
     const poColumns = [
         {
@@ -119,6 +127,46 @@ export default function ProcurementPage() {
                     ₹{(row.totalValue || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                 </span>
             )
+        },
+        {
+            header: 'ORDERED vs RECEIVED',
+            exportValue: (row) => {
+                const items = Array.isArray(row.items) ? row.items : [];
+                const ord = items.reduce((s, i) => s + Number(i.orderedQuantity || 0), 0);
+                const rcv = items.reduce((s, i) => s + Number(i.receivedQuantity || 0), 0);
+                return `${rcv} / ${ord}`;
+            },
+            render: (row) => {
+                const items = Array.isArray(row.items) ? row.items : [];
+                const totalOrdered = items.reduce((sum, i) => sum + Number(i.orderedQuantity || 0), 0);
+                const totalReceived = items.reduce((sum, i) => sum + Number(i.receivedQuantity || 0), 0);
+                const remaining = Math.max(0, totalOrdered - totalReceived);
+                const rawUnit = items[0]?.unit;
+                const primaryUnit = (typeof rawUnit === 'string' && !/^[0-9a-fA-F]{24}$/.test(rawUnit.trim())) ? rawUnit : 'Kg';
+                const pct = totalOrdered > 0 ? Math.min(100, Math.round((totalReceived / totalOrdered) * 100)) : 0;
+
+                return (
+                    <div className="space-y-1 min-w-[130px]">
+                        <div className="flex items-center justify-between text-[11px] font-mono">
+                            <span className="font-bold text-text-main">
+                                {totalReceived.toLocaleString('en-IN')} / {totalOrdered.toLocaleString('en-IN')} {primaryUnit}
+                            </span>
+                            <span className={`text-[10px] font-bold ${pct === 100 ? 'text-emerald-600' : pct > 0 ? 'text-blue-600' : 'text-text-muted'}`}>
+                                {pct}%
+                            </span>
+                        </div>
+                        <div className="w-full bg-border rounded-full h-1.5 overflow-hidden">
+                            <div
+                                className={`h-full rounded-full transition-all duration-300 ${pct === 100 ? 'bg-emerald-500' : 'bg-primary'}`}
+                                style={{ width: `${pct}%` }}
+                            />
+                        </div>
+                        <div className="text-[10px] text-text-muted flex justify-between font-mono">
+                            <span>Remaining: <strong className={remaining > 0 ? 'text-amber-600' : 'text-emerald-600'}>{remaining.toLocaleString('en-IN')} {primaryUnit}</strong></span>
+                        </div>
+                    </div>
+                );
+            }
         },
         {
             header: 'STATUS',
@@ -174,8 +222,17 @@ export default function ProcurementPage() {
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
-                            onClick={() => {
-                                setViewRecord(row);
+                            onClick={async () => {
+                                try {
+                                    const res = await axiosInstance.get(`/purchase-orders/${row._id}`);
+                                    if (res.data?.success && res.data.data) {
+                                        setViewRecord(res.data.data);
+                                    } else {
+                                        setViewRecord(row);
+                                    }
+                                } catch {
+                                    setViewRecord(row);
+                                }
                                 setIsDetailModalOpen(true);
                             }}
                             className="text-gray-500 hover:text-blue-600 mr-1.5 cursor-pointer"
@@ -198,6 +255,31 @@ export default function ProcurementPage() {
                             </button>
                         )}
 
+                        {isAdmin && (row.status === 'PARTIALLY_RECEIVED' || row.status === 'FULLY_RECEIVED') && (
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    try {
+                                        const grnRes = await axiosInstance.get(`/grns?purchaseOrder=${row._id}`);
+                                        const grnList = grnRes.data?.data || [];
+                                        if (grnList.length > 0) {
+                                            setEditGrn(grnList[0]);
+                                        } else {
+                                            setEditGrn(null);
+                                        }
+                                    } catch (err) {
+                                        setEditGrn(null);
+                                    }
+                                    setSelectedPoForGrn(row);
+                                    setIsGrnPanelOpen(true);
+                                }}
+                                className="text-gray-500 hover:text-amber-600 mr-1.5 cursor-pointer"
+                                title="Edit GRN Item Receipts (Tenant Admin Only)"
+                            >
+                                <Pencil size={14} />
+                            </button>
+                        )}
+
                         {isPendingApproval && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
                                 Pending Approval
@@ -208,6 +290,7 @@ export default function ProcurementPage() {
                             <button
                                 type="button"
                                 onClick={() => {
+                                    setEditGrn(null);
                                     setSelectedPoForGrn(row);
                                     setIsGrnPanelOpen(true);
                                 }}
@@ -231,94 +314,490 @@ export default function ProcurementPage() {
                         >
                             <Download size={15} />
                         </button>
-
-
                     </div>
                 );
             }
         }
     ];
 
-    // ─── Material Receipts columns ────────────────────────────────────────────
-    const mrColumns = [
+    // ─── Goods Receipt Notes (GRN) columns ───────────────────────────────────
+    const grnColumns = [
         {
-            header: 'RECEIPT #',
-            exportValue: (row) => row.receiptNumber || '',
-            render: (row) => <span className="font-mono font-bold text-primary uppercase">{row.receiptNumber || '-'}</span>,
+            header: 'GRN #',
+            exportValue: (row) => row.grnNumber || '',
+            render: (row) => <span className="font-mono font-bold text-primary uppercase">{row.grnNumber || '-'}</span>,
             sortable: true
         },
         {
-            header: 'DATE',
-            exportValue: (row) => row.date || '',
+            header: 'RECEIVED DATE',
+            exportValue: (row) => row.receivedDate || '',
             render: (row) => (
                 <span className="font-mono text-xs text-text-muted">
-                    {row.date ? new Date(row.date).toLocaleDateString('en-IN') : '-'}
-                </span>
-            )
-        },
-        {
-            header: 'CUSTOMER',
-            exportValue: (row) => (typeof row.customer === 'object' ? (row.customer?.companyName || row.customer?.name) : row.customer) || '',
-            render: (row) => (
-                <span className="font-semibold text-text-main">
-                    {typeof row.customer === 'object'
-                        ? (row.customer?.companyName || row.customer?.name || '-')
-                        : (row.customer || '-')}
+                    {row.receivedDate ? new Date(row.receivedDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-'}
                 </span>
             ),
             sortable: true
         },
         {
-            header: 'MATERIAL',
-            exportValue: (row) => [row.materialDescription, row.laminationType].filter(Boolean).join(' / ') || '',
+            header: 'PO NUMBER',
+            exportValue: (row) => (typeof row.purchaseOrder === 'object' ? row.purchaseOrder?.poNumber : row.purchaseOrder) || '',
+            render: (row) => (
+                <span className="font-mono font-semibold text-text-main">
+                    {(typeof row.purchaseOrder === 'object' ? row.purchaseOrder?.poNumber : row.purchaseOrder) || '-'}
+                </span>
+            ),
+            sortable: true
+        },
+        {
+            header: 'SUPPLIER',
+            exportValue: (row) => (typeof row.supplier === 'object' ? (row.supplier?.companyName || row.supplier?.name) : row.supplier) || '',
+            render: (row) => (
+                <span className="font-semibold text-text-main">
+                    {typeof row.supplier === 'object' ? (row.supplier?.companyName || row.supplier?.name || '-') : (row.supplier || '-')}
+                </span>
+            ),
+            sortable: true
+        },
+        {
+            header: 'LOCATION',
+            exportValue: (row) => (typeof row.receivingLocation === 'object' ? row.receivingLocation?.name : row.receivingLocation) || '',
             render: (row) => (
                 <span className="text-xs text-text-muted">
-                    {[row.materialDescription, row.laminationType].filter(Boolean).join(' / ') || '-'}
+                    {typeof row.receivingLocation === 'object' ? row.receivingLocation?.name || '-' : (row.receivingLocation || '-')}
                 </span>
             )
         },
         {
-            header: 'QTY (KG)',
-            exportValue: (row) => (row.totalQuantityKg != null ? row.totalQuantityKg : 0),
-            render: (row) => (
-                <span className="font-mono text-xs font-semibold text-text-main">
-                    {row.totalQuantityKg != null ? row.totalQuantityKg.toLocaleString('en-IN') : '-'}
-                </span>
-            )
-        },
-        {
-            header: 'QTY (PCS)',
-            exportValue: (row) => (row.totalQuantityPcs != null ? row.totalQuantityPcs : 0),
-            render: (row) => (
-                <span className="font-mono text-xs font-semibold text-text-main">
-                    {row.totalQuantityPcs != null ? row.totalQuantityPcs.toLocaleString('en-IN') : '-'}
-                </span>
-            )
-        },
-        {
-            header: 'TOTAL AMOUNT (₹)',
-            exportValue: (row) => (row.totalInvoiceAmount != null ? row.totalInvoiceAmount : 0),
-            render: (row) => (
-                <span className="font-mono font-bold text-text-main">
-                    ₹{(row.totalInvoiceAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                </span>
-            )
-        },
-        {
-            header: 'PRINT/PLAIN',
-            exportValue: (row) => row.printOrPlain || 'PLAIN',
+            header: 'RECEIVED ITEMS & ROLLS',
+            exportValue: (row) => (row.items || []).map(i => `${i.receivedQuantity || 0} Kg`).join(', '),
             render: (row) => {
-                const v = row.printOrPlain || 'PLAIN';
+                const totalQty = (row.items || []).reduce((sum, it) => sum + (Number(it.receivedQuantity) || 0), 0);
+                const rollCount = Array.isArray(row.rolls) ? row.rolls.length : 0;
                 return (
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${v === 'PRINT'
-                        ? 'bg-violet-100 text-violet-800 border-violet-300'
-                        : 'bg-slate-100 text-slate-700 border-slate-300'}`}>
-                        {v}
+                    <div className="text-xs">
+                        <span className="font-mono font-bold text-emerald-800">{totalQty.toFixed(3)} Kg</span>
+                        {rollCount > 0 && (
+                            <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                                {rollCount} Roll{rollCount > 1 ? 's' : ''}
+                            </span>
+                        )}
+                    </div>
+                );
+            }
+        },
+        {
+            header: 'AUDIT',
+            exportValue: (row) => row.lastEditedAt ? `Last edited by ${row.lastEditedBy?.name || 'Admin'} on ${new Date(row.lastEditedAt).toLocaleDateString('en-GB').replace(/\//g, '-')}` : '',
+            render: (row) => {
+                if (!row.lastEditedAt) return <span className="text-text-muted text-[11px]">-</span>;
+                const editorName = typeof row.lastEditedBy === 'object' ? (row.lastEditedBy?.name || 'Admin') : 'Admin';
+                const dateStr = new Date(row.lastEditedAt).toLocaleDateString('en-GB').replace(/\//g, '-');
+                return (
+                    <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-900 border border-amber-300"
+                        title={`Last edited by ${editorName} on ${dateStr}`}
+                    >
+                        Edited: {dateStr}
+                    </span>
+                );
+            }
+        },
+        {
+            header: 'ACTIONS',
+            render: (row) => (
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setViewRecord(row);
+                            setIsDetailModalOpen(true);
+                        }}
+                        className="text-gray-500 hover:text-blue-600 mr-1.5 cursor-pointer"
+                        title="View GRN Details"
+                    >
+                        <Eye size={14} />
+                    </button>
+                    {isAdmin && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setEditGrn(row);
+                                setSelectedPoForGrn(row.purchaseOrder);
+                                setIsGrnPanelOpen(true);
+                            }}
+                            className="text-gray-500 hover:text-amber-600 mr-1.5 cursor-pointer"
+                            title="Edit Goods Receipt Note (Tenant Admin Only)"
+                        >
+                            <Pencil size={14} />
+                        </button>
+                    )}
+                </div>
+            )
+        }
+    ];
+
+    // ─── Tabs config ──────────────────────────────────────────────────────────
+    // ─── Purchase Register line-item columns ─────────────────────────────────
+    const purchaseRegisterColumns = [
+        {
+            header: 'PO #',
+            exportValue: (row) => row.poNumber || '',
+            render: (row) => <span className="font-mono font-bold text-primary uppercase text-xs">{row.poNumber || '-'}</span>,
+            sortable: true
+        },
+        {
+            header: 'PO DATE',
+            exportValue: (row) => row.poDate ? new Date(row.poDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '',
+            render: (row) => (
+                <span className="font-mono text-xs text-text-main whitespace-nowrap">
+                    {row.poDate ? new Date(row.poDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-'}
+                </span>
+            ),
+            sortable: true
+        },
+        {
+            header: 'SUPPLIER NAME & GSTIN',
+            exportValue: (row) => `${row.supplierName || ''} (${row.supplierGstin || ''})`,
+            render: (row) => (
+                <div className="space-y-0.5">
+                    <div className="font-bold text-xs text-text-main">{row.supplierName || '-'}</div>
+                    <div className="text-[10.5px] font-mono text-text-muted flex items-center gap-1">
+                        <span>GSTIN: {row.supplierGstin || '-'}</span>
+                        {row.supplierCity && row.supplierCity !== '-' && <span>• {row.supplierCity}</span>}
+                    </div>
+                </div>
+            ),
+            sortable: true
+        },
+        {
+            header: 'MATERIAL / QUALITY / GRADE',
+            exportValue: (row) => `${row.materialName || ''} (${row.materialCode || ''}) - ${row.materialGrade || ''}`,
+            render: (row) => (
+                <div className="flex flex-col max-w-full overflow-hidden">
+                    <span className="font-bold text-gray-900 text-sm whitespace-normal break-words">
+                        {row.materialName || '-'}
+                    </span>
+                    <span className="text-xs text-gray-500 mt-0.5 whitespace-normal break-words line-clamp-2">
+                        • {row.materialCode !== '-' ? row.materialCode : ''} {row.materialGrade !== '-' ? `• ${row.materialGrade}` : ''} {row.grammage !== '-' ? `• ${row.grammage}` : ''}
+                    </span>
+                </div>
+            ),
+            sortable: true
+        },
+        {
+            header: 'HSN CODE',
+            exportValue: (row) => row.hsnCode || '39012000',
+            render: (row) => <span className="font-mono text-xs text-text-muted">{row.hsnCode || '39012000'}</span>
+        },
+        {
+            header: 'ORDERED QTY',
+            exportValue: (row) => formatQty(Number(row.orderedQuantity || 0).toLocaleString('en-IN'), row.unit),
+            render: (row) => (
+                <span className="font-mono font-bold text-xs text-text-main">
+                    {formatQty(Number(row.orderedQuantity || 0).toLocaleString('en-IN'), row.unit)}
+                </span>
+            )
+        },
+        {
+            header: 'RECEIVED QTY',
+            exportValue: (row) => formatQty(Number(row.receivedQuantity || 0).toLocaleString('en-IN'), row.unit),
+            render: (row) => (
+                <span className="font-mono font-bold text-xs text-emerald-600 dark:text-emerald-400">
+                    {formatQty(Number(row.receivedQuantity || 0).toLocaleString('en-IN'), row.unit)}
+                </span>
+            )
+        },
+        {
+            header: 'PENDING QTY',
+            exportValue: (row) => formatQty(Number(row.pendingQuantity || 0).toLocaleString('en-IN'), row.unit),
+            render: (row) => (
+                <span className={`font-mono font-bold text-xs ${Number(row.pendingQuantity || 0) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-text-muted'}`}>
+                    {formatQty(Number(row.pendingQuantity || 0).toLocaleString('en-IN'), row.unit)}
+                </span>
+            )
+        },
+        {
+            header: 'RATE / UNIT (₹)',
+            exportValue: (row) => row.ratePerUnit || 0,
+            render: (row) => (
+                <span className="font-mono text-xs text-text-main">
+                    ₹{Number(row.ratePerUnit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
+            header: 'TAXABLE VALUE (₹)',
+            exportValue: (row) => row.taxableValue || 0,
+            render: (row) => (
+                <span className="font-mono font-semibold text-xs text-text-main">
+                    ₹{Number(row.taxableValue || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
+            header: 'GST (18%) (₹)',
+            exportValue: (row) => row.gstAmount || 0,
+            render: (row) => (
+                <span className="font-mono text-xs text-text-muted">
+                    ₹{Number(row.gstAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
+            header: 'TOTAL VALUE (₹)',
+            exportValue: (row) => row.totalValueWithTax || 0,
+            render: (row) => (
+                <span className="font-mono font-bold text-xs text-primary">
+                    ₹{Number(row.totalValueWithTax || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
+            header: 'EXPECTED / RECD DATE',
+            exportValue: (row) => {
+                const exp = row.expectedDelivery ? new Date(row.expectedDelivery).toLocaleDateString('en-GB').replace(/\//g, '-') : '-';
+                const act = row.actualReceivedDate ? new Date(row.actualReceivedDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-';
+                return `Exp: ${exp} | Recd: ${act}`;
+            },
+            render: (row) => (
+                <div className="text-[11px] font-mono space-y-0.5 whitespace-nowrap">
+                    <div className="text-text-main">Exp: {row.expectedDelivery ? new Date(row.expectedDelivery).toLocaleDateString('en-GB').replace(/\//g, '-') : '-'}</div>
+                    <div className="text-emerald-700 dark:text-emerald-400">Recd: {row.actualReceivedDate ? new Date(row.actualReceivedDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-'}</div>
+                </div>
+            )
+        },
+        {
+            header: 'LINKED GRN(s)',
+            exportValue: (row) => row.linkedGrns || '-',
+            render: (row) => (
+                <span className="font-mono text-xs text-text-muted font-medium">
+                    {row.linkedGrns || '-'}
+                </span>
+            )
+        },
+        {
+            header: 'TERMS & REMARKS',
+            exportValue: (row) => `${row.paymentTerms || '-'} | ${row.remarks || '-'}`,
+            render: (row) => (
+                <div className="text-[11px] space-y-0.5 max-w-[180px]">
+                    <div className="font-semibold text-text-main truncate" title={row.paymentTerms}>{row.paymentTerms || '-'}</div>
+                    <div className="text-text-muted truncate text-[10px]" title={row.remarks}>{row.remarks || '-'}</div>
+                </div>
+            )
+        },
+        {
+            header: 'STATUS',
+            exportValue: (row) => row.status || 'DRAFT',
+            render: (row) => {
+                const status = row.status || 'DRAFT';
+                let badgeStyle = 'bg-gray-100 text-gray-800 border-gray-300';
+                if (status === 'FULLY_RECEIVED') badgeStyle = 'bg-emerald-100 text-emerald-800 border-emerald-300';
+                else if (status === 'PARTIALLY_RECEIVED') badgeStyle = 'bg-blue-100 text-blue-800 border-blue-300';
+                else if (status === 'SENT_TO_SUPPLIER') badgeStyle = 'bg-amber-100 text-amber-800 border-amber-300';
+                else if (status === 'CANCELLED') badgeStyle = 'bg-rose-100 text-rose-800 border-rose-300';
+                return (
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${badgeStyle}`}>
+                        • {status.replace(/_/g, ' ')}
                     </span>
                 );
             }
         }
     ];
+
+    // Date range filter state for Purchase Register (IST YYYY-MM-DD)
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
+
+    const extraFilterParams = {
+        ...(startDate && startDate.trim() ? { startDate: startDate.trim() } : {}),
+        ...(endDate && endDate.trim() ? { endDate: endDate.trim() } : {})
+    };
+
+    // Date filter controls slot
+    const dateFilterControls = (
+        <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="flex items-center gap-1.5 bg-card-bg px-2.5 py-1 border border-border rounded-lg text-xs shadow-2xs">
+                <label className="text-[10px] font-bold text-text-muted uppercase">From:</label>
+                <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="bg-transparent text-xs font-mono text-text-main focus:outline-none cursor-pointer"
+                />
+            </div>
+            <div className="flex items-center gap-1.5 bg-card-bg px-2.5 py-1 border border-border rounded-lg text-xs shadow-2xs">
+                <label className="text-[10px] font-bold text-text-muted uppercase">To:</label>
+                <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="bg-transparent text-xs font-mono text-text-main focus:outline-none cursor-pointer"
+                />
+            </div>
+            {(startDate || endDate) && (
+                <button
+                    type="button"
+                    onClick={() => {
+                        setStartDate('');
+                        setEndDate('');
+                    }}
+                    className="px-2 py-1 text-[11px] text-text-muted hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition-colors font-semibold cursor-pointer"
+                    title="Clear Date Filter"
+                >
+                    Clear
+                </button>
+            )}
+        </div>
+    );
+
+    // Purchase Register Export Handlers (CSV + PDF)
+    const handleExportPurchaseRegisterCsv = async () => {
+        try {
+            toast.loading('Generating Purchase Register CSV export...', { id: 'pr-csv-export' });
+            const params = new URLSearchParams();
+            if (startDate) params.append('startDate', startDate);
+            if (endDate) params.append('endDate', endDate);
+
+            const res = await axiosInstance.get(`/purchase-orders/purchase-register?${params.toString()}`);
+            if (res.data?.success && Array.isArray(res.data.data) && res.data.data.length > 0) {
+                const list = res.data.data;
+                const headers = [
+                    'PO_NUMBER',
+                    'PO_DATE',
+                    'SUPPLIER_NAME',
+                    'SUPPLIER_GSTIN',
+                    'SUPPLIER_CITY',
+                    'MATERIAL_NAME',
+                    'MATERIAL_CODE',
+                    'MATERIAL_GRADE',
+                    'HSN_CODE',
+                    'ORDERED_QTY',
+                    'RECEIVED_QTY',
+                    'PENDING_QTY',
+                    'UNIT',
+                    'RATE_PER_UNIT_INR',
+                    'TAXABLE_VALUE_INR',
+                    'GST_RATE_PCT',
+                    'GST_AMOUNT_INR',
+                    'TOTAL_VALUE_INR',
+                    'EXPECTED_DELIVERY',
+                    'ACTUAL_RECEIVED_DATE',
+                    'LINKED_GRNS',
+                    'PAYMENT_TERMS',
+                    'STATUS',
+                    'REMARKS'
+                ];
+
+                const csvRows = [headers.join(',')];
+                list.forEach((r) => {
+                    const row = [
+                        `"${(r.poNumber || '').replace(/"/g, '""')}"`,
+                        `"${r.poDate ? new Date(r.poDate).toLocaleDateString('en-GB').replace(/\//g, '-') : ''}"`,
+                        `"${(r.supplierName || '').replace(/"/g, '""')}"`,
+                        `"${(r.supplierGstin || '').replace(/"/g, '""')}"`,
+                        `"${(r.supplierCity || '').replace(/"/g, '""')}"`,
+                        `"${(r.materialName || '').replace(/"/g, '""')}"`,
+                        `"${(r.materialCode || '').replace(/"/g, '""')}"`,
+                        `"${(r.materialGrade || '').replace(/"/g, '""')}"`,
+                        `"${(r.hsnCode || '').replace(/"/g, '""')}"`,
+                        `"${Number(r.orderedQuantity || 0).toLocaleString('en-IN')}"`,
+                        `"${Number(r.receivedQuantity || 0).toLocaleString('en-IN')}"`,
+                        `"${Number(r.pendingQuantity || 0).toLocaleString('en-IN')}"`,
+                        `"${(r.unit || 'Kg').replace(/"/g, '""')}"`,
+                        `"${Number(r.ratePerUnit || 0).toFixed(2)}"`,
+                        `"${Number(r.taxableValue || 0).toFixed(2)}"`,
+                        `"${r.gstRate || 18}"`,
+                        `"${Number(r.gstAmount || 0).toFixed(2)}"`,
+                        `"${Number(r.totalValueWithTax || 0).toFixed(2)}"`,
+                        `"${r.expectedDelivery ? new Date(r.expectedDelivery).toLocaleDateString('en-GB').replace(/\//g, '-') : ''}"`,
+                        `"${r.actualReceivedDate ? new Date(r.actualReceivedDate).toLocaleDateString('en-GB').replace(/\//g, '-') : ''}"`,
+                        `"${(r.linkedGrns || '').replace(/"/g, '""')}"`,
+                        `"${(r.paymentTerms || '').replace(/"/g, '""')}"`,
+                        `"${(r.status || '').replace(/"/g, '""')}"`,
+                        `"${(r.remarks || '').replace(/"/g, '""')}"`
+                    ];
+                    csvRows.push(row.join(','));
+                });
+
+                const blob = new Blob(['\uFEFF' + csvRows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.setAttribute('download', `Purchase_Register_${Date.now()}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                toast.success(`Exported ${list.length} Purchase line items to CSV!`, { id: 'pr-csv-export' });
+            } else {
+                toast.error('No Purchase Register data found to export', { id: 'pr-csv-export' });
+            }
+        } catch (err) {
+            console.error('Error exporting Purchase Register CSV:', err);
+            toast.error(err.response?.data?.message || 'Failed to export Purchase Register CSV', { id: 'pr-csv-export' });
+        }
+    };
+
+    const handleExportPurchaseRegisterPdf = async () => {
+        try {
+            toast.loading('Generating Purchase Register PDF report...', { id: 'pr-pdf-export' });
+            const { generatePdfReport } = await import('../utils/pdfExportUtils');
+            const params = new URLSearchParams();
+            if (startDate) params.append('startDate', startDate);
+            if (endDate) params.append('endDate', endDate);
+
+            const res = await axiosInstance.get(`/purchase-orders/purchase-register?${params.toString()}`);
+            if (res.data?.success && Array.isArray(res.data.data) && res.data.data.length > 0) {
+                const list = res.data.data;
+                const totalTaxable = list.reduce((sum, r) => sum + Number(r.taxableValue || 0), 0);
+                const totalGst = list.reduce((sum, r) => sum + Number(r.gstAmount || 0), 0);
+                const totalAmount = list.reduce((sum, r) => sum + Number(r.totalValueWithTax || 0), 0);
+
+                const summaryCards = [
+                    { label: 'Total Purchase Line Items', value: list.length.toLocaleString('en-IN'), notes: 'Granular material line items' },
+                    { label: 'Total Taxable Value', value: `₹${totalTaxable.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, notes: 'Before GST tax' },
+                    { label: 'Total Input GST (18%)', value: `₹${totalGst.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, notes: 'Eligible ITC credit' },
+                    { label: 'Total Gross Value', value: `₹${totalAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, notes: 'Invoice gross payable' }
+                ];
+
+                const headers = ['PO #', 'Date', 'Supplier', 'Material Spec', 'Ordered', 'Recd', 'Rate (₹)', 'Taxable (₹)', 'GST (₹)', 'Total (₹)', 'Status'];
+                const rows = list.map((r) => [
+                    r.poNumber || '-',
+                    r.poDate ? new Date(r.poDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-',
+                    r.supplierName || '-',
+                    `${r.materialName || '-'}${r.materialGrade !== '-' ? ' (' + r.materialGrade + ')' : ''}`,
+                    `${Number(r.orderedQuantity || 0).toLocaleString('en-IN')} ${r.unit || 'Kg'}`,
+                    `${Number(r.receivedQuantity || 0).toLocaleString('en-IN')} ${r.unit || 'Kg'}`,
+                    `₹${Number(r.ratePerUnit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                    `₹${Number(r.taxableValue || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                    `₹${Number(r.gstAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                    `₹${Number(r.totalValueWithTax || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                    r.status?.replace(/_/g, ' ') || 'DRAFT'
+                ]);
+
+                generatePdfReport({
+                    title: 'Detailed Purchase Register',
+                    subtitle: `Item-Wise Procurement & Vendor Tax Register • Period: ${startDate ? new Date(startDate).toLocaleDateString('en-GB').replace(/\//g, '-') : 'All'} to ${endDate ? new Date(endDate).toLocaleDateString('en-GB').replace(/\//g, '-') : 'Today'}`,
+                    generatedDate: new Date().toLocaleDateString('en-GB').replace(/\//g, '-'),
+                    filename: `Purchase_Register_${Date.now()}.pdf`,
+                    summaryCards,
+                    sections: [
+                        {
+                            title: 'ITEM-WISE PURCHASE ORDERS & GRN INWARD REGISTER',
+                            subtitle: 'One row per purchase line item with complete pricing, tax, and inward status',
+                            headers,
+                            rows
+                        }
+                    ]
+                });
+                toast.success('Generated Purchase Register PDF report!', { id: 'pr-pdf-export' });
+            } else {
+                toast.error('No Purchase Register data found to export', { id: 'pr-pdf-export' });
+            }
+        } catch (err) {
+            console.error('Error generating Purchase Register PDF:', err);
+            toast.error('Failed to generate Purchase Register PDF report', { id: 'pr-pdf-export' });
+        }
+    };
 
     // ─── Tabs config ──────────────────────────────────────────────────────────
     const tabs = [
@@ -329,47 +808,72 @@ export default function ProcurementPage() {
             columns: poColumns
         },
         {
-            key: 'material-receipts',
-            label: 'Job-Work Material Receipts',
-            resourcePath: '/material-receipts',
-            columns: mrColumns,
+            key: 'grns',
+            label: 'Goods Receipt Notes (GRN)',
+            resourcePath: '/grns',
+            columns: grnColumns,
+            isDeletable: false,
+            isEditable: false
+        },
+        {
+            key: 'purchase-register',
+            label: 'Purchase Register (Detailed)',
+            resourcePath: '/purchase-orders/purchase-register',
+            columns: purchaseRegisterColumns,
             isDeletable: false,
             isEditable: false
         }
     ];
 
-    // ─── Dynamic header actions (depend on active tab) ─────────────────────────
-    const headerActions = activeTab === 'material-receipts' ? (
-        <button
-            type="button"
-            onClick={() => setIsMatReceiptOpen(true)}
-            className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
-        >
-            <ClipboardList size={15} />
-            <span>Log New Material Receipt</span>
-        </button>
-    ) : (
-        <button
-            type="button"
-            onClick={() => {
-                setEditPo(null);
-                setIsCreatePoOpen(true);
-            }}
-            className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
-        >
-            <Plus size={15} />
-            <span>+ Issue New Purchase Order</span>
-        </button>
+    // ─── Dynamic header actions ───────────────────────────────────────────────
+    const headerActions = (
+        <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
+            {activeTab === 'purchase-register' ? (
+                <>
+                    <button
+                        type="button"
+                        onClick={handleExportPurchaseRegisterCsv}
+                        className="flex items-center gap-1.5 px-3 py-2 bg-card-bg hover:bg-app-bg text-text-main border border-border font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+                        title="Export item-wise Purchase Register in CSV format"
+                    >
+                        <Download size={14} />
+                        <span>Export CSV</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleExportPurchaseRegisterPdf}
+                        className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+                        title="Export item-wise Purchase Register in PDF format"
+                    >
+                        <FileText size={14} />
+                        <span>Export PDF</span>
+                    </button>
+                </>
+            ) : null}
+            <button
+                type="button"
+                onClick={() => {
+                    setEditPo(null);
+                    setIsCreatePoOpen(true);
+                }}
+                className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+            >
+                <Plus size={15} />
+                <span>+ Issue New Purchase Order</span>
+            </button>
+        </div>
     );
 
     return (
         <>
             <TabbedResourcePage
                 key={refreshKey}
-                title="Purchase & Job-Work Procurement"
-                description="Manage Purchase Orders, GRN inward stock, and Job-Work Material Receipts"
+                title="Purchase & GRN Management"
+                description="Manage Purchase Orders, Goods Receipt Notes (GRN) and Item-Wise Detailed Purchase Register"
                 tabs={tabs}
                 headerActions={headerActions}
+                filterSlot={activeTab === 'purchase-register' ? dateFilterControls : null}
+                extraFilterParams={activeTab === 'purchase-register' ? extraFilterParams : null}
                 activeTabKey={activeTab}
                 onTabChange={setActiveTab}
             />
@@ -385,21 +889,16 @@ export default function ProcurementPage() {
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />
 
-            {/* Create GRN Panel */}
+            {/* Create / Edit GRN Panel */}
             <CreateGRNPanel
                 isOpen={isGrnPanelOpen}
                 onClose={() => {
                     setIsGrnPanelOpen(false);
                     setSelectedPoForGrn(null);
+                    setEditGrn(null);
                 }}
                 po={selectedPoForGrn}
-                onSuccess={() => setRefreshKey((prev) => prev + 1)}
-            />
-
-            {/* Job-Work Material Receipt Panel */}
-            <CreateMaterialReceiptPanel
-                isOpen={isMatReceiptOpen}
-                onClose={() => setIsMatReceiptOpen(false)}
+                editGrn={editGrn}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />
 
@@ -419,7 +918,7 @@ export default function ProcurementPage() {
                 }}
                 record={viewRecord}
                 tabKey={activeTab}
-                tabLabel={activeTab === 'purchase-orders' ? 'Purchase Order' : 'Material Receipt'}
+                tabLabel={activeTab === 'purchase-orders' ? 'Purchase Order' : 'Goods Receipt Note'}
             />
         </>
     );

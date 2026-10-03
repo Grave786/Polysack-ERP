@@ -40,7 +40,7 @@ const ALL_STAGE_KEYS = [
     'BALING_PACKING'
 ];
 
-export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
+export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workOrderToEdit = null }) {
     // Dropdown master lists
     const [customers, setCustomers] = useState([]);
     const [finishedGoods, setFinishedGoods] = useState([]);
@@ -82,7 +82,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
     const [contactPersonName, setContactPersonName] = useState('');
     const [contactPersonDesignation, setContactPersonDesignation] = useState('');
     const [totalOrderQuantity, setTotalOrderQuantity] = useState('');
-    const [totalOrderQuantityUnit, setTotalOrderQuantityUnit] = useState('Pcs');
+    const [totalOrderQuantityUnit, setTotalOrderQuantityUnit] = useState('Bags');
     const [orderConfirmed, setOrderConfirmed] = useState(false);
     const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
     const [purchaseOrderFiles, setPurchaseOrderFiles] = useState([]);
@@ -184,7 +184,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
             parts.push(`Print: Back Only (${backColours || 1}-Col${printingColour ? ` ${printingColour}` : ''})`);
         }
         if (targetQuantity) {
-            parts.push(`Target: ${Number(targetQuantity).toLocaleString('en-IN')} Bags`);
+            parts.push(`Target: ${Number(targetQuantity).toLocaleString('en-IN')} ${totalOrderQuantityUnit || 'Bags'}`);
         }
         return parts.join(' | ');
     };
@@ -203,6 +203,72 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
         fabricWidthInch, fabricLengthInch, printSides, frontColours, backColours,
         targetQuantity, isDescriptionManuallyEdited, finishedGoods
     ]);
+
+    // Populate form if in edit mode
+    useEffect(() => {
+        if (!isOpen) return;
+        if (workOrderToEdit) {
+            const custId = workOrderToEdit.customer?._id || workOrderToEdit.customer || '';
+            const fgId = workOrderToEdit.finishedGood?._id || workOrderToEdit.finishedGood || '';
+            const mchId = workOrderToEdit.assignedMachine?._id || workOrderToEdit.assignedMachine || '';
+            const ops = Array.isArray(workOrderToEdit.assignedOperators)
+                ? workOrderToEdit.assignedOperators.map(op => (typeof op === 'object' && op !== null ? op._id : op)).filter(Boolean)
+                : [];
+
+            setCustomer(custId);
+            setFinishedGood(fgId);
+            setTargetQuantity(workOrderToEdit.targetQuantity !== undefined && workOrderToEdit.targetQuantity !== null ? String(workOrderToEdit.targetQuantity) : '');
+            setPriority(workOrderToEdit.priority || 'MEDIUM');
+            setAssignedMachine(mchId);
+            setAssignedOperators(ops);
+            setDescription(workOrderToEdit.description || workOrderToEdit.remarks || '');
+            setIsDescriptionManuallyEdited(true);
+            setInks(Array.isArray(workOrderToEdit.inks) ? workOrderToEdit.inks : []);
+
+            const jod = workOrderToEdit.jobOrderDetails || {};
+            if (jod.orderDate) {
+                try {
+                    setOrderDate(new Date(jod.orderDate).toISOString().split('T')[0]);
+                } catch {
+                    setOrderDate(getTodayLocalDateString());
+                }
+            }
+            setProductCategory(jod.productCategory || 'Print');
+            setPrintSides(jod.printSides || (jod.printSpec?.printSides) || 'BOTH');
+            setFrontColours(jod.frontColours !== undefined && jod.frontColours !== null ? jod.frontColours : (jod.printSpec?.frontColours ?? 1));
+            setBackColours(jod.backColours !== undefined && jod.backColours !== null ? jod.backColours : (jod.printSpec?.backColours ?? 1));
+            setFrontColorsList(jod.frontColorsList || []);
+            setBackColorsList(jod.backColorsList || []);
+            setJobDescriptionPrintColours(jod.jobDescriptionPrintColours || 'One Colour');
+            setJobDescriptionPrintSide(jod.jobDescriptionPrintSide || 'Single Side');
+            setMaterialQualityFabric(jod.materialQualityFabric || '');
+            setFabricLaminationType(jod.fabricLaminationType || '');
+            setMaterialColour(jod.materialColour || '');
+            setPrintingColour(jod.printingColour || '');
+            setFabricGrammage(jod.fabricGrammage !== undefined && jod.fabricGrammage !== null ? String(jod.fabricGrammage) : '');
+            setBagWeightGms(jod.bagWeightGms !== undefined && jod.bagWeightGms !== null ? String(jod.bagWeightGms) : '');
+            setFabricAverage(jod.fabricAverage !== undefined && jod.fabricAverage !== null ? String(jod.fabricAverage) : '');
+            setFabricWidthInch(jod.fabricSizeInInch?.width !== undefined && jod.fabricSizeInInch?.width !== null ? String(jod.fabricSizeInInch.width) : '');
+            setFabricLengthInch(jod.fabricSizeInInch?.length !== undefined && jod.fabricSizeInInch?.length !== null ? String(jod.fabricSizeInInch.length) : '');
+            setCustomerContactNumber(jod.customerContactNumber || workOrderToEdit.customer?.phone || '');
+            setContactPersonName(jod.contactPersonName || workOrderToEdit.customer?.contactPerson || '');
+            setContactPersonDesignation(jod.contactPersonDesignation || '');
+            setTotalOrderQuantity(jod.totalOrderQuantity !== undefined && jod.totalOrderQuantity !== null ? String(jod.totalOrderQuantity) : '');
+            setTotalOrderQuantityUnit(jod.totalOrderQuantityUnit || 'Pcs');
+            setOrderConfirmed(Boolean(jod.orderConfirmed));
+            if (jod.expectedDeliveryDate) {
+                try {
+                    setExpectedDeliveryDate(new Date(jod.expectedDeliveryDate).toISOString().split('T')[0]);
+                } catch {
+                    setExpectedDeliveryDate('');
+                }
+            } else {
+                setExpectedDeliveryDate('');
+            }
+            setPurchaseOrderFiles(jod.purchaseOrderFiles || []);
+            setRolls(Array.isArray(jod.rolls) && jod.rolls.length > 0 ? jod.rolls : [createEmptyRoll(1)]);
+        }
+    }, [isOpen, workOrderToEdit]);
 
     // Fetch dropdown options & tenant production settings when modal opens
     useEffect(() => {
@@ -225,7 +291,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 if (custRes.data?.success) {
                     const list = custRes.data.data || [];
                     setCustomers(list);
-                    if (list.length > 0 && !customer) {
+                    if (!workOrderToEdit && list.length > 0 && !customer) {
                         setCustomer(list[0]._id);
                         if (list[0].contactPerson && !contactPersonName) {
                             setContactPersonName(list[0].contactPerson);
@@ -239,7 +305,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 if (fgRes.data?.success) {
                     const list = fgRes.data.data || [];
                     setFinishedGoods(list);
-                    if (list.length > 0 && !finishedGood) {
+                    if (!workOrderToEdit && list.length > 0 && !finishedGood) {
                         setFinishedGood(list[0]._id);
                     }
                 }
@@ -543,59 +609,62 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
         try {
             setIsSubmitting(true);
 
-            // Step 1: Pre-flight shortage check using backend BOM & Raw Material stocks
-            const [bomRes, rmRes] = await Promise.all([
-                axiosInstance.get(`/boms?finishedGood=${finishedGood}`).catch(() => ({ data: { data: [] } })),
-                axiosInstance.get('/raw-materials?limit=100').catch(() => ({ data: { data: [] } }))
-            ]);
+            if (!workOrderToEdit) {
+                // Step 1: Pre-flight shortage check using backend BOM & Raw Material stocks for new work orders
+                const [bomRes, rmRes] = await Promise.all([
+                    axiosInstance.get(`/boms?finishedGood=${finishedGood}`).catch(() => ({ data: { data: [] } })),
+                    axiosInstance.get('/raw-materials?limit=100').catch(() => ({ data: { data: [] } }))
+                ]);
 
-            const boms = bomRes.data?.data || [];
-            const rawMaterials = rmRes.data?.data || [];
-            const activeBom = boms.find((b) => b.isDefault || b.isActive) || boms[0];
+                const boms = bomRes.data?.data || [];
+                const rawMaterials = rmRes.data?.data || [];
+                const activeBom = boms.find((b) => b.isDefault || b.isActive) || boms[0];
 
-            if (activeBom && Array.isArray(activeBom.items) && activeBom.items.length > 0) {
-                const calculatedShortages = [];
+                if (activeBom && Array.isArray(activeBom.items) && activeBom.items.length > 0) {
+                    const calculatedShortages = [];
 
-                for (const item of activeBom.items) {
-                    const rmId = typeof item.rawMaterial === 'object' ? item.rawMaterial?._id : item.rawMaterial;
-                    const rmDoc = rawMaterials.find((r) => r._id === rmId) || (typeof item.rawMaterial === 'object' ? item.rawMaterial : null);
+                    for (const item of activeBom.items) {
+                        const rmId = typeof item.rawMaterial === 'object' ? item.rawMaterial?._id : item.rawMaterial;
+                        const rmDoc = rawMaterials.find((r) => r._id === rmId) || (typeof item.rawMaterial === 'object' ? item.rawMaterial : null);
 
-                    if (rmDoc) {
-                        const requiredQty = Number(item.quantityPerUnit || 0) * targetQtyNum;
-                        const inStockQty = Number(rmDoc.currentStock || 0);
+                        if (rmDoc) {
+                            const requiredQty = Number(item.quantityPerUnit || 0) * targetQtyNum;
+                            const inStockQty = Number(rmDoc.currentStock || 0);
 
-                        if (requiredQty > inStockQty) {
-                            const shortageGap = requiredQty - inStockQty;
-                            const suppObj = typeof rmDoc.defaultSupplier === 'object' ? rmDoc.defaultSupplier : null;
+                            if (requiredQty > inStockQty) {
+                                const shortageGap = requiredQty - inStockQty;
+                                const suppObj = typeof rmDoc.defaultSupplier === 'object' ? rmDoc.defaultSupplier : null;
 
-                            calculatedShortages.push({
-                                rawMaterialId: rmDoc._id,
-                                rawMaterialName: rmDoc.name,
-                                uom: rmDoc.uom?.name || rmDoc.uom?.symbol || 'KG',
-                                currentStock: inStockQty,
-                                requiredQty: Number(requiredQty.toFixed(2)),
-                                shortageQty: Number(shortageGap.toFixed(2)),
-                                unitPrice: rmDoc.pricePerUnit || 120,
-                                supplierId: suppObj?._id || (typeof rmDoc.defaultSupplier === 'string' ? rmDoc.defaultSupplier : null),
-                                supplierName: suppObj?.name || null
-                            });
+                                calculatedShortages.push({
+                                    rawMaterialId: rmDoc._id,
+                                    rawMaterialName: rmDoc.name,
+                                    uom: rmDoc.uom?.name || rmDoc.uom?.symbol || 'KG',
+                                    currentStock: inStockQty,
+                                    requiredQty: Number(requiredQty.toFixed(2)),
+                                    shortageQty: Number(shortageGap.toFixed(2)),
+                                    unitPrice: rmDoc.pricePerUnit || 120,
+                                    supplierId: suppObj?._id || (typeof rmDoc.defaultSupplier === 'string' ? rmDoc.defaultSupplier : null),
+                                    supplierName: suppObj?.name || null
+                                });
+                            }
                         }
                     }
-                }
 
-                if (calculatedShortages.length > 0) {
-                    setShortageList(calculatedShortages);
-                    setIsShortageModalOpen(true);
-                    setIsSubmitting(false);
-                    return; // Block WO creation until shortages resolved
+                    if (calculatedShortages.length > 0) {
+                        setShortageList(calculatedShortages);
+                        setIsShortageModalOpen(true);
+                        setIsSubmitting(false);
+                        return; // Block WO creation until shortages resolved
+                    }
                 }
             }
 
-            // Step 2: Proceed with WO creation with Job Order Details
+            // Step 2: Proceed with WO creation or update with Job Order Details
             const payload = {
                 customer,
                 finishedGood,
                 targetQuantity: targetQtyNum,
+                unit: totalOrderQuantityUnit || 'Bags',
                 priority: priority || 'MEDIUM',
                 assignedMachine: assignedMachine || null,
                 assignedOperators: assignedOperators || [],
@@ -652,19 +721,29 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                 }
             };
 
-            const res = await axiosInstance.post('/work-orders', payload);
-
-            if (res.data?.success) {
-                const woNum = res.data.data?.workOrderNumber || 'Work Order';
-                toast.success(`Work Order ${woNum} created successfully!`);
-
-                resetForm();
-                onClose();
-                if (onSuccess) onSuccess();
+            let res;
+            if (workOrderToEdit?._id) {
+                res = await axiosInstance.put(`/work-orders/${workOrderToEdit._id}`, payload);
+                if (res.data?.success) {
+                    const woNum = res.data.data?.workOrderNumber || workOrderToEdit.workOrderNumber || 'Work Order';
+                    toast.success(`Work Order ${woNum} updated successfully!`);
+                    resetForm();
+                    onClose();
+                    if (onSuccess) onSuccess();
+                }
+            } else {
+                res = await axiosInstance.post('/work-orders', payload);
+                if (res.data?.success) {
+                    const woNum = res.data.data?.workOrderNumber || 'Work Order';
+                    toast.success(`Work Order ${woNum} created successfully!`);
+                    resetForm();
+                    onClose();
+                    if (onSuccess) onSuccess();
+                }
             }
         } catch (err) {
-            console.error('Error creating work order:', err);
-            toast.error(err.response?.data?.message || 'Failed to create Work Order');
+            console.error('Error saving work order:', err);
+            toast.error(err.response?.data?.message || (workOrderToEdit ? 'Failed to update Work Order' : 'Failed to create Work Order'));
         } finally {
             setIsSubmitting(false);
         }
@@ -699,7 +778,9 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                     }}
                     className="px-5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer disabled:opacity-50"
                 >
-                    {isSubmitting ? 'Checking Stock & Launching...' : 'Launch Work Order'}
+                    {isSubmitting
+                        ? (workOrderToEdit ? 'Updating Work Order...' : 'Checking Stock & Launching...')
+                        : (workOrderToEdit ? 'Save Changes' : 'Launch Work Order')}
                 </button>
             </div>
         </>
@@ -713,8 +794,8 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                     resetForm();
                     onClose();
                 }}
-                title="Schedule New Production Work Order"
-                subtitle="Assign Product Specs, Machine Line & Production Operator"
+                title={workOrderToEdit ? `Edit Work Order ${workOrderToEdit.workOrderNumber || ''}` : "Schedule New Production Work Order"}
+                subtitle={workOrderToEdit ? "Correct Product Specs, Machine, Operators & Job Details" : "Assign Product Specs, Machine Line & Production Operator"}
                 widthClass="w-full max-w-full sm:max-w-xl md:max-w-2xl"
                 footer={footerButtons}
             >
@@ -774,12 +855,13 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                                Target Production Quantity (Bags) *
+                                Target Production Quantity ({totalOrderQuantityUnit || 'Bags'}) *
                             </label>
                             <input
                                 type="number"
                                 required
-                                min="1"
+                                step="0.001"
+                                min="0.001"
                                 placeholder="e.g. 20000"
                                 value={targetQuantity}
                                 onChange={(e) => setTargetQuantity(e.target.value)}
@@ -1266,7 +1348,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess }) {
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
                                 <label className="block text-[10.5px] font-bold uppercase tracking-wide text-text-main mb-1">
-                                    Total Order Quantity (Kgs / Pcs)
+                                    Total Order Quantity ({totalOrderQuantityUnit || 'Bags'})
                                 </label>
                                 <div className="flex gap-2">
                                     <input

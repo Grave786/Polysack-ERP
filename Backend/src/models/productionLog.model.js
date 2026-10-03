@@ -43,6 +43,11 @@ const ProductionLogSchema = new mongoose.Schema({
         ref: 'Shift',
         default: null
     },
+    netWeight: {
+        type: Number,
+        default: null,
+        min: [0, 'Net Weight cannot be negative']
+    },
     remarks: {
         type: String,
         trim: true,

@@ -5,7 +5,7 @@ import PackingSlipRollsSection, { createEmptyRoll } from '../shared/PackingSlipR
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
-export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
+export default function CreateGRNPanel({ isOpen, onClose, po, editGrn = null, onSuccess }) {
     const [locations, setLocations] = useState([]);
     const [receivingLocation, setReceivingLocation] = useState('');
     const [notes, setNotes] = useState('');
@@ -72,27 +72,40 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
 
     // Initialize items & refetch fresh PO details whenever modal opens or po._id changes
     useEffect(() => {
-        const poId = po?._id;
-        if (isOpen && poId) {
+        const poId = po?._id || editGrn?.purchaseOrder?._id || editGrn?.purchaseOrder;
+        if (isOpen && (poId || editGrn)) {
             setIsLoadingLocs(true);
-            setNotes('');
-            setInwardRolls([
-                { rollNo: '', length: '', width: '', grossWeight: '', netWeight: '', qtyKgs: '', qtyPcs: '' }
-            ]);
+            setNotes(editGrn?.notes || '');
+            if (editGrn?.rolls && editGrn.rolls.length > 0) {
+                setInwardRolls(editGrn.rolls.map(r => ({
+                    rollNo: r.rollNumber || r.rollNo || '',
+                    length: r.fabricLength || r.length || '',
+                    width: r.width || '',
+                    grossWeight: r.grossWeight || '',
+                    netWeight: r.netWeight || '',
+                    qtyKgs: r.totalQuantityKg || r.qtyKgs || '',
+                    qtyPcs: r.totalQuantityPcs || r.qtyPcs || ''
+                })));
+            } else {
+                setInwardRolls([
+                    { rollNo: '', length: '', width: '', grossWeight: '', netWeight: '', qtyKgs: '', qtyPcs: '' }
+                ]);
+            }
 
             // Fetch receiving locations & fresh PO details in parallel
             Promise.all([
                 axiosInstance.get('/locations?isActive=true&limit=200').catch(() => ({ data: { data: [] } })),
-                axiosInstance.get(`/purchase-orders/${poId}`).catch(() => ({ data: { data: null } }))
+                poId ? axiosInstance.get(`/purchase-orders/${poId}`).catch(() => ({ data: { data: null } })) : Promise.resolve({ data: { data: null } })
             ])
                 .then(([locRes, poRes]) => {
                     if (locRes.data?.success && Array.isArray(locRes.data.data)) {
                         const locs = locRes.data.data;
                         setLocations(locs);
-                        if (locs.length > 0) setReceivingLocation(locs[0]._id);
+                        const initialLoc = editGrn?.receivingLocation?._id || editGrn?.receivingLocation || (locs.length > 0 ? locs[0]._id : '');
+                        if (initialLoc) setReceivingLocation(initialLoc);
                     }
 
-                    const freshPo = poRes.data?.data || po;
+                    const freshPo = poRes.data?.data || po || editGrn?.purchaseOrder;
                     setActivePoDetails(freshPo);
 
                     const itemsList = Array.isArray(freshPo?.items) ? freshPo.items : [];
@@ -109,6 +122,11 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                             const alreadyRecv = i.receivedQuantity || 0;
                             const remaining = Math.max(0, ordered - alreadyRecv);
 
+                            const existingGrnItem = editGrn?.items?.find(gi => String(gi.rawMaterial?._id || gi.rawMaterial) === String(rmId));
+                            const initialRecvVal = existingGrnItem
+                                ? Number(Number(existingGrnItem.receivedQuantity || 0).toFixed(3))
+                                : (editGrn ? Number(Number(alreadyRecv).toFixed(3)) : Number(Number(remaining).toFixed(3)));
+
                             return {
                                 _id: i._id || rmId || `item-${index}`,
                                 rawMaterial: rmId,
@@ -120,12 +138,12 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                                 orderedQuantity: ordered,
                                 alreadyReceivedQuantity: alreadyRecv,
                                 remainingAllowed: remaining,
-                                receivedQuantity: remaining,
-                                receivedQty: remaining,
-                                batchNumber: '',
-                                receivedRolls: '',
-                                fabricAverage: '',
-                                bucketsCount: ''
+                                receivedQuantity: initialRecvVal,
+                                receivedQty: initialRecvVal,
+                                batchNumber: existingGrnItem?.batchNumber || '',
+                                receivedRolls: existingGrnItem?.receivedRolls || '',
+                                fabricAverage: existingGrnItem?.fabricAverage || '',
+                                bucketsCount: existingGrnItem?.bucketsCount || ''
                             };
                         })
                     );
@@ -140,7 +158,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                 { rollNo: '', length: '', width: '', grossWeight: '', netWeight: '', qtyKgs: '', qtyPcs: '' }
             ]);
         }
-    }, [isOpen, po?._id]);
+    }, [isOpen, po?._id, editGrn?._id]);
 
     const handleItemChange = (identifier, field, value) => {
         setGrnItems((prev) => {
@@ -197,15 +215,10 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                 return;
             }
 
-            if (numRecv > item.remainingAllowed) {
-                toast.error(`Cannot receive ${numRecv} for ${item.name}. Remaining balance allowed is ${item.remainingAllowed}.`);
-                return;
-            }
-
             if (numRecv > 0) {
                 validItems.push({
                     rawMaterial: item.rawMaterial,
-                    receivedQuantity: numRecv,
+                    receivedQuantity: Number(numRecv.toFixed(3)),
                     unit: item.unit,
                     batchNumber: item.batchNumber?.trim() || undefined,
                     receivedRolls: item.receivedRolls ? Number(item.receivedRolls) : undefined,
@@ -291,16 +304,25 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                 rolls: validRolls
             };
 
-            const res = await axiosInstance.post('/grns', payload);
+            let res;
+            if (editGrn?._id) {
+                res = await axiosInstance.put(`/grns/${editGrn._id}`, payload);
+            } else {
+                res = await axiosInstance.post('/grns', payload);
+            }
 
             if (res.data?.success) {
-                toast.success(`GRN ${res.data.data?.grnNumber || ''} created & stock inwarded!`);
+                if (editGrn?._id) {
+                    toast.success(`GRN ${editGrn.grnNumber || ''} updated successfully & PO totals recalculated!`);
+                } else {
+                    toast.success(`GRN ${res.data.data?.grnNumber || ''} created & stock inwarded!`);
+                }
                 if (onSuccess) onSuccess();
                 onClose();
             }
         } catch (err) {
-            console.error('Error creating GRN:', err);
-            toast.error(err.response?.data?.message || 'Failed to create GRN');
+            console.error('Error submitting GRN:', err);
+            toast.error(err.response?.data?.message || (editGrn ? 'Failed to update GRN' : 'Failed to create GRN'));
         } finally {
             setIsSubmitting(false);
         }
@@ -316,8 +338,8 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
         <SlideOverPanel
             isOpen={isOpen}
             onClose={onClose}
-            title="Create Goods Receipt Note (GRN)"
-            subtitle={`Inward raw materials to inventory for Purchase Order ${activePo?.poNumber || ''}`}
+            title={editGrn ? 'Edit Goods Receipt Note (GRN)' : 'Create Goods Receipt Note (GRN)'}
+            subtitle={editGrn ? `Update received raw materials for Purchase Order ${activePo?.poNumber || ''}` : `Inward raw materials to inventory for Purchase Order ${activePo?.poNumber || ''}`}
         >
             <form onSubmit={handleSubmit} className="space-y-4 font-sans text-xs">
                 {/* Locked PO Summary Card */}
@@ -330,7 +352,34 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                         <span className="text-text-muted">Supplier:</span>
                         <span className="font-semibold text-text-main">{supplierName}</span>
                     </div>
+                    {editGrn?.grnNumber && (
+                        <div className="flex justify-between items-center text-xs pt-1 border-t border-border/50">
+                            <span className="text-text-muted">Editing GRN:</span>
+                            <span className="font-mono font-bold text-emerald-700">{editGrn.grnNumber}</span>
+                        </div>
+                    )}
                 </div>
+
+                {/* Audit Note */}
+                {editGrn?.lastEditedAt && (
+                    <div className="p-2.5 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 flex items-center gap-2">
+                        <span className="font-bold shrink-0">Audit Note:</span>
+                        <span>
+                            Last edited by{' '}
+                            <strong>
+                                {typeof editGrn.lastEditedBy === 'object'
+                                    ? (editGrn.lastEditedBy?.name || editGrn.lastEditedBy?.email || 'Tenant Admin')
+                                    : 'Tenant Admin'}
+                            </strong>{' '}
+                            on{' '}
+                            {new Date(editGrn.lastEditedAt).toLocaleDateString('en-GB', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric'
+                            }).replace(/\//g, '-')}
+                        </span>
+                    </div>
+                )}
 
                 {/* Receiving Location Selection */}
                 <div>
@@ -366,101 +415,119 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                     </label>
 
                     <div className="space-y-2.5">
-                        {inwardItems.map((item, idx) => (
-                            <div key={item._id || idx} className="bg-app-bg border border-border rounded-lg p-3 space-y-2">
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <span className="font-bold text-text-main block">{item.name}</span>
-                                        <span className="text-[10px] font-mono text-text-muted">{item.code}</span>
-                                    </div>
-                                    <div className="text-right text-[10px]">
-                                        <span className="text-text-muted block">
-                                            Ordered: <strong>{item.orderedQuantity} {item.unit || ''}</strong> | Recv: <strong>{item.alreadyReceivedQuantity} {item.unit || ''}</strong>
-                                        </span>
-                                        <span className="text-emerald-700 font-bold block">
-                                            Remaining: {item.remainingAllowed} {item.unit || ''}
-                                        </span>
-                                    </div>
-                                </div>
+                        {inwardItems.map((item, idx) => {
+                            const ordered = Number(item.orderedQuantity) || 0;
+                            const alreadyRecv = Number(item.alreadyReceivedQuantity) || 0;
+                            const enteredQty = Number(item.receivedQuantity !== undefined && item.receivedQuantity !== '' ? item.receivedQuantity : (item.receivedQty || 0));
+                            const totalRecv = alreadyRecv + enteredQty;
+                            const isOverReceived = totalRecv > ordered;
+                            const overQty = isOverReceived ? (totalRecv - ordered) : 0;
+                            const remainingQty = isOverReceived ? 0 : Math.max(0, ordered - totalRecv);
 
-                                {/* Determine if item is Fabric/Roll-based or Bulk/Ink */}
-                                {isFabric(item) ? (
-                                    <div className="roll-tracking-section space-y-2">
-                                        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border/60">
-                                            <div>
-                                                <label className="block text-[10px] font-bold text-text-muted mb-0.5">
-                                                    Received Qty ({item.unit || 'Kg'}) *
-                                                </label>
-                                                <input
-                                                    type="number"
-                                                    min="0"
-                                                    max={item.remainingAllowed}
-                                                    required
-                                                    value={item.receivedQuantity ?? item.receivedQty ?? ''}
-                                                    onChange={(e) => {
-                                                        handleItemChange(item._id, 'receivedQuantity', e.target.value);
-                                                        handleItemChange(item._id, 'receivedQty', e.target.value);
-                                                    }}
-                                                    className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-emerald-800 focus:outline-none focus:border-primary"
-                                                />
-                                            </div>
-
-                                            <div>
-                                                <label className="block text-[10px] font-bold text-text-muted mb-0.5">
-                                                    Batch / Lot Number
-                                                </label>
-                                                <input
-                                                    type="text"
-                                                    placeholder="e.g. LOT-2026-X"
-                                                    value={item.batchNumber || ''}
-                                                    onChange={(e) => handleItemChange(item._id, 'batchNumber', e.target.value)}
-                                                    className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary"
-                                                />
-                                            </div>
+                            return (
+                                <div key={item._id || idx} className="bg-app-bg border border-border rounded-lg p-3 space-y-2">
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <span className="font-bold text-text-main block">{item.name}</span>
+                                            <span className="text-[10px] font-mono text-text-muted">{item.code}</span>
                                         </div>
-
-                                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                            <div>
-                                                <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">No. of Rolls Received</label>
-                                                <input
-                                                    type="number"
-                                                    min="0"
-                                                    placeholder="e.g. 15"
-                                                    value={item.receivedRolls || ''}
-                                                    onChange={(e) => handleItemChange(item._id, 'receivedRolls', e.target.value)}
-                                                    className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">Fabric Average</label>
-                                                <input
-                                                    type="number"
-                                                    step="0.01"
-                                                    placeholder="e.g. 120.5"
-                                                    value={item.fabricAverage || ''}
-                                                    onChange={(e) => handleItemChange(item._id, 'fabricAverage', e.target.value)}
-                                                    className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
-                                                />
-                                            </div>
+                                        <div className="text-right text-[10px]">
+                                            <span className="text-text-muted block">
+                                                Ordered: <strong>{ordered.toFixed(3)} {item.unit || ''}</strong> | Recv: <strong>{alreadyRecv.toFixed(3)} {item.unit || ''}</strong>
+                                            </span>
+                                            {isOverReceived ? (
+                                                <span className="text-amber-600 font-bold block">
+                                                    Remaining: 0.000 {item.unit || ''}{' '}
+                                                    <span className="text-[9px] font-semibold text-amber-700">(Over-received by {overQty.toFixed(3)} {item.unit || 'Kg'})</span>
+                                                </span>
+                                            ) : (
+                                                <span className="text-emerald-700 font-bold block">
+                                                    Remaining: {remainingQty.toFixed(3)} {item.unit || ''}
+                                                </span>
+                                            )}
                                         </div>
                                     </div>
-                                ) : (
-                                    <div className="mt-4 p-4 border border-dashed border-gray-300 rounded-md bg-gray-50">
-                                        <h4 className="text-sm font-bold text-gray-700 mb-3">BULK MATERIAL / INK RECEIPT</h4>
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                            <div>
-                                                <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase">Total Quantity Received</label>
-                                                <div className="flex gap-2">
+
+                                    {/* Determine if item is Fabric/Roll-based or Bulk/Ink */}
+                                    {isFabric(item) ? (
+                                        <div className="roll-tracking-section space-y-2">
+                                            <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border/60">
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-text-muted mb-0.5">
+                                                        Received Qty ({item.unit || 'Kg'}) *
+                                                    </label>
                                                     <input
                                                         type="number"
-                                                        value={item.receivedQty ?? item.receivedQuantity ?? ''}
+                                                        step="0.001"
+                                                        min="0"
+                                                        required
+                                                        value={item.receivedQuantity ?? item.receivedQty ?? ''}
                                                         onChange={(e) => {
-                                                            handleItemChange(item._id, 'receivedQty', e.target.value);
                                                             handleItemChange(item._id, 'receivedQuantity', e.target.value);
+                                                            handleItemChange(item._id, 'receivedQty', e.target.value);
                                                         }}
-                                                        className="flex-1 border border-border rounded-md p-2 text-xs"
-                                                        placeholder="e.g. 50"
+                                                        className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-emerald-800 focus:outline-none focus:border-primary"
                                                     />
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-text-muted mb-0.5">
+                                                        Batch / Lot Number
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="e.g. LOT-2026-X"
+                                                        value={item.batchNumber || ''}
+                                                        onChange={(e) => handleItemChange(item._id, 'batchNumber', e.target.value)}
+                                                        className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono text-text-main focus:outline-none focus:border-primary"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">No. of Rolls Received</label>
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        placeholder="e.g. 15"
+                                                        value={item.receivedRolls || ''}
+                                                        onChange={(e) => handleItemChange(item._id, 'receivedRolls', e.target.value)}
+                                                        className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase tracking-wider">Fabric Average</label>
+                                                    <input
+                                                        type="number"
+                                                        step="0.001"
+                                                        placeholder="e.g. 120.5"
+                                                        value={item.fabricAverage || ''}
+                                                        onChange={(e) => handleItemChange(item._id, 'fabricAverage', e.target.value)}
+                                                        className="w-full border border-border rounded-md p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="mt-4 p-4 border border-dashed border-gray-300 rounded-md bg-gray-50">
+                                            <h4 className="text-sm font-bold text-gray-700 mb-3">BULK MATERIAL / INK RECEIPT</h4>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-text-muted mb-1 uppercase">Total Quantity Received</label>
+                                                    <div className="flex gap-2">
+                                                        <input
+                                                            type="number"
+                                                            step="0.001"
+                                                            min="0"
+                                                            value={item.receivedQty ?? item.receivedQuantity ?? ''}
+                                                            onChange={(e) => {
+                                                                handleItemChange(item._id, 'receivedQty', e.target.value);
+                                                                handleItemChange(item._id, 'receivedQuantity', e.target.value);
+                                                            }}
+                                                            className="flex-1 border border-border rounded-md p-2 text-xs"
+                                                            placeholder="e.g. 50.000"
+                                                        />
                                                     <select 
                                                         value={item.unit || 'Kg'}
                                                         onChange={(e) => handleItemChange(item._id, 'unit', e.target.value)}
@@ -501,7 +568,8 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                                     </div>
                                 )}
                             </div>
-                        ))}
+                        );
+                    })}
                     </div>
                 </div>
 
@@ -545,7 +613,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, onSuccess }) {
                         className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
                         <Truck size={15} />
-                        <span>{isSubmitting ? 'Inwarding GRN Stock...' : 'Confirm & Create GRN'}</span>
+                        <span>{isSubmitting ? (editGrn ? 'Saving GRN Changes...' : 'Inwarding GRN Stock...') : (editGrn ? 'Save GRN Changes' : 'Confirm & Create GRN')}</span>
                     </button>
                 </div>
             </form>

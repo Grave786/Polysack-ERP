@@ -71,10 +71,10 @@ const createQCInspection = async (req, res) => {
         const numPassedQty = Number(passedQty);
         const numRejectedQty = Number(rejectedQty);
 
-        if (isNaN(numSampleSize) || numSampleSize < 1 || isNaN(numPassedQty) || numPassedQty < 0 || isNaN(numRejectedQty) || numRejectedQty < 0) {
+        if (isNaN(numSampleSize) || numSampleSize <= 0 || isNaN(numPassedQty) || numPassedQty < 0 || isNaN(numRejectedQty) || numRejectedQty < 0) {
             return res.status(400).json({
                 success: false,
-                message: 'sampleSize must be >= 1, and passedQty/rejectedQty must be non-negative numbers.'
+                message: 'sampleSize must be > 0, and passedQty/rejectedQty must be non-negative numbers.'
             });
         }
 
@@ -152,17 +152,17 @@ const createQCInspection = async (req, res) => {
                     rawMaterial: rmDoc._id
                 }).select('passedQty rejectedQty');
 
-                const alreadyInspectedQty = existingQcs.reduce((sum, q) => sum + (q.passedQty || 0) + (q.rejectedQty || 0), 0);
-                const remainingUninspected = totalReceivedQty - alreadyInspectedQty;
+                const alreadyInspectedQty = Number(existingQcs.reduce((sum, q) => sum + (q.passedQty || 0) + (q.rejectedQty || 0), 0).toFixed(3));
+                const remainingUninspected = Number((totalReceivedQty - alreadyInspectedQty).toFixed(3));
 
-                if (remainingUninspected <= 0) {
+                if (remainingUninspected <= 0.0001) {
                     return res.status(400).json({
                         success: false,
                         message: `This GRN line item has already been fully inspected (${totalReceivedQty} received, ${alreadyInspectedQty} already tested). No further QC inspections can be logged.`
                     });
                 }
 
-                if (totalTested > remainingUninspected) {
+                if (totalTested > (remainingUninspected + 0.0001)) {
                     return res.status(400).json({
                         success: false,
                         message: `Cannot inspect ${totalTested} units. Only ${remainingUninspected} units remain un-inspected for this GRN line item (Received: ${totalReceivedQty}, Already Inspected: ${alreadyInspectedQty}).`
@@ -255,17 +255,17 @@ const createQCInspection = async (req, res) => {
                 workOrder: workOrderDoc._id
             }).select('passedQty rejectedQty');
 
-            const alreadyInspectedQty = existingQcs.reduce((sum, q) => sum + (q.passedQty || 0) + (q.rejectedQty || 0), 0);
-            const remainingUninspected = totalProducedQty - alreadyInspectedQty;
+            const alreadyInspectedQty = Number(existingQcs.reduce((sum, q) => sum + (q.passedQty || 0) + (q.rejectedQty || 0), 0).toFixed(3));
+            const remainingUninspected = Number((totalProducedQty - alreadyInspectedQty).toFixed(3));
 
-            if (remainingUninspected <= 0) {
+            if (remainingUninspected <= 0.0001) {
                 return res.status(400).json({
                     success: false,
                     message: `Work Order '${workOrderDoc.workOrderNumber}' has already been fully inspected (${totalProducedQty} produced, ${alreadyInspectedQty} inspected). No further QC inspections can be logged.`
                 });
             }
 
-            if (totalTested > remainingUninspected) {
+            if (totalTested > (remainingUninspected + 0.0001)) {
                 return res.status(400).json({
                     success: false,
                     message: `Cannot inspect ${totalTested} units. Only ${remainingUninspected} units remain to be inspected for Work Order '${workOrderDoc.workOrderNumber}' (Produced: ${totalProducedQty}, Already Inspected: ${alreadyInspectedQty}).`

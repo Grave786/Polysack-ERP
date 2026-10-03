@@ -232,6 +232,15 @@ const getApprovalById = async (req, res) => {
                         .populate('customer customerRef', 'companyName code name phone email gstin')
                         .lean();
                     if (nslDoc) approval.referenceId = nslDoc;
+                } else if (approval.referenceModel === 'WorkOrder' || approval.type === 'CONTINUATION_WO') {
+                    const woDoc = await WorkOrder.findById(approval.referenceId._id || approval.referenceId)
+                        .populate('customer', 'companyName code contactPerson phone')
+                        .populate('finishedGood', 'name code unit')
+                        .populate('assignedMachine', 'name code')
+                        .populate('parentWorkOrder', 'workOrderNumber targetQuantity completedQuantity status')
+                        .populate('continuationWorkOrder', 'workOrderNumber targetQuantity completedQuantity status')
+                        .lean();
+                    if (woDoc) approval.referenceId = woDoc;
                 }
             }
         } catch (subPopErr) {

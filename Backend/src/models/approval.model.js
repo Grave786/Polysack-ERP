@@ -15,12 +15,12 @@ const ApprovalSchema = new mongoose.Schema({
     type: {
         type: String,
         required: [true, 'Approval type is required'],
-        enum: ['NSL', 'PO']
+        enum: ['NSL', 'PO', 'CONTINUATION_WO']
     },
     referenceModel: {
         type: String,
         required: [true, 'Reference model is required'],
-        enum: ['OrderEnquiry', 'PurchaseOrder']
+        enum: ['OrderEnquiry', 'PurchaseOrder', 'WorkOrder']
     },
     referenceId: {
         type: mongoose.Schema.Types.ObjectId,

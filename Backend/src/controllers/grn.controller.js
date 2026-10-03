@@ -163,23 +163,9 @@ const createGRN = async (req, res) => {
                 });
             }
 
-            const currentReceived = poItem.receivedQuantity || 0;
-            const remainingAllowed = poItem.orderedQuantity - currentReceived;
-
-            if (numQty > remainingAllowed) {
-                if (useTransaction && session) {
-                    if (session.inTransaction()) await session.abortTransaction();
-                    session.endSession();
-                }
-                return res.status(400).json({
-                    success: false,
-                    message: `Cannot receive ${numQty} units. Ordered: ${poItem.orderedQuantity}, Received: ${currentReceived}, Allowed: ${remainingAllowed}.`
-                });
-            }
-
             cleanedItems.push({
                 rawMaterial: rawMaterialId,
-                receivedQuantity: numQty,
+                receivedQuantity: Number(numQty.toFixed(3)),
                 batchNumber: grnItem.batchNumber ? String(grnItem.batchNumber).trim() : undefined,
                 receivedRolls: (grnItem.receivedRolls !== undefined && grnItem.receivedRolls !== '' && grnItem.receivedRolls !== null) ? Number(grnItem.receivedRolls) : 0,
                 fabricAverage: (grnItem.fabricAverage !== undefined && grnItem.fabricAverage !== '' && grnItem.fabricAverage !== null) ? Number(grnItem.fabricAverage) : null
@@ -236,7 +222,7 @@ const createGRN = async (req, res) => {
         for (const grnItem of cleanedItems) {
             const poItem = poDoc.items.find(i => String(i.rawMaterial) === String(grnItem.rawMaterial));
             if (poItem) {
-                poItem.receivedQuantity += grnItem.receivedQuantity;
+                poItem.receivedQuantity = Number(((poItem.receivedQuantity || 0) + grnItem.receivedQuantity).toFixed(3));
 
                 if (poItem.ratePerUnit !== undefined && Number(poItem.ratePerUnit) > 0) {
                     const rmDocQuery = RawMaterial.findOne({ _id: grnItem.rawMaterial, tenant: tenantId });
@@ -337,6 +323,7 @@ const getGRNs = async (req, res) => {
                 .populate('receivingLocation', 'name code type')
                 .populate('items.rawMaterial', 'name code uom currentStock')
                 .populate('receivedBy', 'name email')
+                .populate('lastEditedBy', 'name email')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum),
@@ -384,7 +371,8 @@ const getGRNById = async (req, res) => {
             .populate('supplier', 'name contactPerson phone')
             .populate('receivingLocation', 'name code type')
             .populate('items.rawMaterial', 'name code uom currentStock')
-            .populate('receivedBy', 'name email');
+            .populate('receivedBy', 'name email')
+            .populate('lastEditedBy', 'name email');
 
         if (!grn) {
             return res.status(404).json({
@@ -407,8 +395,287 @@ const getGRNById = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Update an existing Goods Receipt Note (GRN) (Tenant Admin only)
+ *          Recalculates linked Purchase Order item received quantities and overall PO status.
+ * @route   PUT /api/grns/:id
+ * @access  Private (Tenant Admin only)
+ */
+const updateGRN = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const { id } = req.params;
+        const grn = await GRN.findOne({ _id: id, tenant: tenantId });
+        if (!grn) {
+            return res.status(404).json({
+                success: false,
+                message: 'Goods Receipt Note (GRN) not found.'
+            });
+        }
+
+        const {
+            receivedDate,
+            items,
+            rolls,
+            receivingLocation,
+            notes
+        } = req.body;
+
+        const WorkOrder = require('../models/workOrder.model');
+
+        // Fetch active Work Orders to check roll and material consumption
+        const activeWorkOrders = await WorkOrder.find({
+            tenant: tenantId,
+            status: { $ne: 'CANCELLED' },
+            'jobOrderDetails.rolls.0': { $exists: true }
+        }).select('workOrderNumber jobOrderDetails.rolls').lean();
+
+        // Map consumption of this GRN's rolls
+        const rollUsageMap = {};
+        const grnRollIdSet = new Set((grn.rolls || []).map(r => String(r._id)));
+        const grnRollNumMap = {};
+        (grn.rolls || []).forEach(r => {
+            if (r.rollNumber) {
+                grnRollNumMap[String(r.rollNumber).trim().toUpperCase()] = r;
+            }
+        });
+
+        for (const wo of activeWorkOrders) {
+            const woRolls = wo.jobOrderDetails?.rolls || [];
+            for (const r of woRolls) {
+                const rId = r.rollId ? String(r.rollId) : (r._id ? String(r._id) : '');
+                const rNum = String(r.rollNumber || r.rollNo || '').trim().toUpperCase();
+                const matchesGrn = (r.grnId && String(r.grnId) === String(grn._id)) ||
+                    (r.grnNumber && String(r.grnNumber).toUpperCase() === String(grn.grnNumber).toUpperCase()) ||
+                    (rId && grnRollIdSet.has(rId)) ||
+                    (rNum && grnRollNumMap[rNum]);
+
+                if (matchesGrn) {
+                    const consumedM = Number(r.consumedLength != null ? r.consumedLength : (r.fabricLength != null ? r.fabricLength : (r.length != null ? r.length : 0))) || 0;
+                    const consumedKg = Number(r.consumedWeightKg != null ? r.consumedWeightKg : (r.netWeight != null ? r.netWeight : (r.grossWeight != null ? r.grossWeight : 0))) || 0;
+
+                    const targetKey = rNum || rId;
+                    if (!rollUsageMap[targetKey]) {
+                        rollUsageMap[targetKey] = {
+                            rollNumber: r.rollNumber || r.rollNo || 'Roll',
+                            consumedMeters: 0,
+                            consumedWeightKg: 0,
+                            workOrders: new Set()
+                        };
+                    }
+                    rollUsageMap[targetKey].consumedMeters += consumedM;
+                    rollUsageMap[targetKey].consumedWeightKg += consumedKg;
+                    rollUsageMap[targetKey].workOrders.add(wo.workOrderNumber);
+                }
+            }
+        }
+
+        // Validate incoming rolls against consumption
+        const cleanedRolls = Array.isArray(rolls) ? rolls.filter(r => r && (r.rollNumber || r.rollNo) && String(r.rollNumber || r.rollNo).trim()).map(r => {
+            const rollNumStr = String(r.rollNumber || r.rollNo).trim().slice(0, 50);
+            const matchedExisting = (grn.rolls || []).find(oldR => String(oldR.rollNumber || '').trim().toUpperCase() === rollNumStr.toUpperCase() || (r._id && String(oldR._id) === String(r._id)));
+
+            return {
+                _id: matchedExisting?._id || (r._id && mongoose.isValidObjectId(r._id) ? r._id : undefined),
+                rollNumber: rollNumStr,
+                fabricLength: (r.fabricLength !== undefined && r.fabricLength !== '' && r.fabricLength !== null)
+                    ? Number(r.fabricLength)
+                    : ((r.length !== undefined && r.length !== '' && r.length !== null) ? Number(r.length) : null),
+                width: r.width !== undefined && r.width !== '' && r.width !== null ? Number(r.width) : null,
+                grossWeight: r.grossWeight !== undefined && r.grossWeight !== '' && r.grossWeight !== null ? Number(r.grossWeight) : null,
+                netWeight: r.netWeight !== undefined && r.netWeight !== '' && r.netWeight !== null ? Number(r.netWeight) : null,
+                fabricAverage: r.fabricAverage !== undefined && r.fabricAverage !== '' && r.fabricAverage !== null ? Number(r.fabricAverage) : null,
+                totalQuantityKg: (r.totalQuantityKg !== undefined && r.totalQuantityKg !== '' && r.totalQuantityKg !== null)
+                    ? Number(r.totalQuantityKg)
+                    : ((r.qtyKgs !== undefined && r.qtyKgs !== '' && r.qtyKgs !== null) ? Number(r.qtyKgs) : null),
+                totalQuantityPcs: (r.totalQuantityPcs !== undefined && r.totalQuantityPcs !== '' && r.totalQuantityPcs !== null)
+                    ? Number(r.totalQuantityPcs)
+                    : ((r.qtyPcs !== undefined && r.qtyPcs !== '' && r.qtyPcs !== null) ? Number(r.qtyPcs) : null)
+            };
+        }) : [];
+
+        // Check if any consumed roll was removed or reduced below consumed quantity
+        for (const [key, usage] of Object.entries(rollUsageMap)) {
+            if (usage.consumedMeters > 0 || usage.consumedWeightKg > 0) {
+                const incomingRoll = cleanedRolls.find(r => String(r.rollNumber).trim().toUpperCase() === key || (r._id && String(r._id) === key));
+                const woList = Array.from(usage.workOrders).join(', ');
+
+                if (!incomingRoll) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Cannot remove roll "${usage.rollNumber}". It has already been consumed (${usage.consumedMeters}m / ${usage.consumedWeightKg.toFixed(2)}kg) by Work Order(s): ${woList}.`
+                    });
+                }
+
+                if (incomingRoll.fabricLength !== null && incomingRoll.fabricLength < usage.consumedMeters) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Cannot reduce roll "${usage.rollNumber}" length to ${incomingRoll.fabricLength}m. A total of ${usage.consumedMeters}m has already been consumed by Work Order(s): ${woList}.`
+                    });
+                }
+
+                if (incomingRoll.netWeight !== null && incomingRoll.netWeight < usage.consumedWeightKg) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Cannot reduce roll "${usage.rollNumber}" net weight to ${incomingRoll.netWeight}kg. A total of ${usage.consumedWeightKg.toFixed(2)}kg has already been consumed by Work Order(s): ${woList}.`
+                    });
+                }
+            }
+        }
+
+        // Validate items and QC testing limits
+        const cleanedItems = [];
+        if (Array.isArray(items) && items.length > 0) {
+            for (const grnItem of items) {
+                const rawMaterialId = typeof grnItem.rawMaterial === 'object'
+                    ? String(grnItem.rawMaterial?._id || grnItem.rawMaterial?.id || '')
+                    : String(grnItem.rawMaterial || '').trim();
+
+                const numQty = Number(grnItem.receivedQuantity);
+                if (rawMaterialId && !isNaN(numQty) && numQty >= 0) {
+                    cleanedItems.push({
+                        rawMaterial: rawMaterialId,
+                        receivedQuantity: Number(numQty.toFixed(3)),
+                        batchNumber: grnItem.batchNumber ? String(grnItem.batchNumber).trim() : undefined,
+                        receivedRolls: (grnItem.receivedRolls !== undefined && grnItem.receivedRolls !== '' && grnItem.receivedRolls !== null) ? Number(grnItem.receivedRolls) : 0,
+                        fabricAverage: (grnItem.fabricAverage !== undefined && grnItem.fabricAverage !== '' && grnItem.fabricAverage !== null) ? Number(grnItem.fabricAverage) : null
+                    });
+                }
+            }
+        }
+
+        if (cleanedItems.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'At least one item with a valid received quantity is required.'
+            });
+        }
+
+        // Check against total roll consumed kg across this GRN
+        let totalGrnConsumedKg = 0;
+        const allGrnWorkOrders = new Set();
+        for (const usage of Object.values(rollUsageMap)) {
+            totalGrnConsumedKg += Number(usage.consumedWeightKg || 0);
+            usage.workOrders.forEach(w => allGrnWorkOrders.add(w));
+        }
+
+        const totalNewRecvQty = cleanedItems.reduce((acc, it) => acc + (it.receivedQuantity || 0), 0);
+        if (totalGrnConsumedKg > 0 && totalNewRecvQty < totalGrnConsumedKg) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot reduce total GRN received quantity to ${totalNewRecvQty.toFixed(3)} Kg. A total of ${totalGrnConsumedKg.toFixed(2)} Kg has already been consumed by Work Order(s): ${Array.from(allGrnWorkOrders).join(', ')}.`
+            });
+        }
+
+        // Check QC Inspection constraints
+        const existingQcs = await QCInspection.find({
+            tenant: tenantId,
+            grn: grn._id
+        }).select('rawMaterial passedQty rejectedQty');
+
+        for (const qc of existingQcs) {
+            const inspectedTotal = (qc.passedQty || 0) + (qc.rejectedQty || 0);
+            const matchingItem = cleanedItems.find(i => String(i.rawMaterial) === String(qc.rawMaterial));
+            if (matchingItem && matchingItem.receivedQuantity < inspectedTotal) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot reduce received quantity to ${matchingItem.receivedQuantity} because ${inspectedTotal} units have already undergone Inbound QC inspection.`
+                });
+            }
+        }
+
+        if (receivingLocation) {
+            const loc = await Location.findOne({ _id: receivingLocation, tenant: tenantId });
+            if (loc) {
+                grn.receivingLocation = receivingLocation;
+            }
+        }
+
+        if (receivedDate) {
+            grn.receivedDate = new Date(receivedDate);
+        }
+
+        if (notes !== undefined) {
+            grn.notes = notes;
+        }
+
+        grn.items = cleanedItems;
+        if (cleanedRolls.length > 0) {
+            grn.rolls = cleanedRolls;
+        }
+
+        grn.lastEditedBy = req.user._id || req.user.id;
+        grn.lastEditedAt = new Date();
+
+        await grn.save();
+
+        // Recalculate linked Purchase Order received quantities & status
+        if (grn.purchaseOrder) {
+            const poDoc = await PurchaseOrder.findOne({ _id: grn.purchaseOrder, tenant: tenantId });
+            if (poDoc) {
+                const allGrnsForPo = await GRN.find({ purchaseOrder: poDoc._id, tenant: tenantId });
+
+                poDoc.items.forEach((poItem) => {
+                    const rmIdStr = String(poItem.rawMaterial?._id || poItem.rawMaterial);
+                    let totalRecvForRm = 0;
+                    allGrnsForPo.forEach((g) => {
+                        (g.items || []).forEach((gi) => {
+                            if (String(gi.rawMaterial?._id || gi.rawMaterial) === rmIdStr) {
+                                totalRecvForRm += Number(gi.receivedQuantity || 0);
+                            }
+                        });
+                    });
+                    poItem.receivedQuantity = Number(totalRecvForRm.toFixed(3));
+                });
+
+                const allFullyReceived = poDoc.items.every(i => (i.receivedQuantity || 0) >= (i.orderedQuantity || 0));
+                const anyReceived = poDoc.items.some(i => (i.receivedQuantity || 0) > 0);
+
+                if (allFullyReceived) {
+                    poDoc.status = 'FULLY_RECEIVED';
+                } else if (anyReceived) {
+                    poDoc.status = 'PARTIALLY_RECEIVED';
+                } else {
+                    poDoc.status = 'SENT_TO_SUPPLIER';
+                }
+
+                await poDoc.save();
+            }
+        }
+
+        const populatedGrn = await GRN.findById(grn._id)
+            .populate('purchaseOrder', 'poNumber poDate totalValue status')
+            .populate('supplier', 'name contactPerson phone')
+            .populate('receivingLocation', 'name code type')
+            .populate('items.rawMaterial', 'name code uom currentStock')
+            .populate('receivedBy', 'name email')
+            .populate('lastEditedBy', 'name email');
+
+        return res.status(200).json({
+            success: true,
+            message: 'Goods Receipt Note updated successfully and PO totals recalculated.',
+            data: populatedGrn
+        });
+    } catch (error) {
+        console.error('Error in updateGRN:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to update GRN.',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     createGRN,
     getGRNs,
-    getGRNById
+    getGRNById,
+    updateGRN
 };

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Layers, Users, Package, AlertCircle, RefreshCw, CheckCircle2, Award } from 'lucide-react';
+import { Layers, Users, Package, AlertCircle, RefreshCw, CheckCircle2, Award, Calendar, Clock } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 
 const STAGE_NAME_MAP = {
@@ -73,11 +73,12 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
 
     const operators = summaryData?.operators || [];
     const targetQty = Number(summaryData?.targetQuantity || 0);
+    const woUnit = summaryData?.unit || 'Bags';
     const finishedGoodsQty = Number(summaryData?.finishedGoodsQty || 0);
     const hasLegacyStages = summaryData?.hasLegacyStages;
 
-    // Filter operators who have at least one entry or are non-empty
     const activeOperators = operators.filter((op) => op.totalAcrossStages > 0);
+    const timeline = summaryData?.timeline || [];
     const finalStageName = summaryData?.finishedGoodsStageName;
     const finalStageObj = stages.find((s) => s.stageName === finalStageName) || stages[stages.length - 1];
     const finalStageOperatorsCount = finalStageObj?.byOperator?.filter((op) => op.quantity > 0)?.length || 0;
@@ -162,7 +163,7 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                                             <td key={st.stageName} className="p-3 text-center font-mono font-semibold">
                                                 {qty > 0 ? (
                                                     <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                                                        {qty.toLocaleString('en-IN')} Bags
+                                                        {qty.toLocaleString('en-IN')} {woUnit}
                                                     </span>
                                                 ) : st.isLegacy ? (
                                                     <span className="text-[10px] text-amber-700 italic font-sans">
@@ -177,7 +178,7 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                                     <td className="p-3 text-center font-mono font-bold text-emerald-800 bg-emerald-50/40 border-l border-gray-200">
                                         {(op.stages?.[finalStageName] || op.finishedGoodsQty) ? (
                                             <span className="font-extrabold text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded border border-emerald-200">
-                                                {Number(op.stages?.[finalStageName] || op.finishedGoodsQty).toLocaleString('en-IN')} Bags
+                                                {Number(op.stages?.[finalStageName] || op.finishedGoodsQty).toLocaleString('en-IN')} {woUnit}
                                             </span>
                                         ) : (
                                             <span className="text-text-muted text-[11px]">-</span>
@@ -200,7 +201,7 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                                     <td key={st.stageName} className="p-3 text-center">
                                         {st.isLegacy ? (
                                             <div className="inline-block bg-amber-100 text-amber-900 border border-amber-300 px-2 py-1 rounded text-[10px] font-semibold text-center font-mono">
-                                                <div>{Number(st.legacyQuantity || st.totalProduced || 0).toLocaleString('en-IN')} Bags</div>
+                                                <div>{Number(st.legacyQuantity || st.totalProduced || 0).toLocaleString('en-IN')} {woUnit}</div>
                                                 <div className="text-[8px] text-amber-700 font-sans tracking-tight uppercase">Legacy total (no operator breakdown)</div>
                                             </div>
                                         ) : (
@@ -225,7 +226,7 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                                 return (
                                     <td key={st.stageName} className="p-3 text-center font-mono">
                                         <div className={`font-extrabold text-xs ${isAchieved ? 'text-emerald-700' : 'text-primary'}`}>
-                                            {total.toLocaleString('en-IN')} Bags
+                                            {total.toLocaleString('en-IN')} {woUnit}
                                         </div>
                                         <div className="text-[9px] font-sans text-text-muted font-normal mt-0.5">
                                             {st.remainingQuantity > 0 ? (
@@ -238,7 +239,7 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                                 );
                             })}
                             <td className="p-3 text-center font-mono font-extrabold text-xs text-emerald-800 bg-emerald-100/70 border-l border-gray-200">
-                                {finishedGoodsQty.toLocaleString('en-IN')} Bags
+                                {finishedGoodsQty.toLocaleString('en-IN')} {woUnit}
                             </td>
                         </tr>
                     </tbody>
@@ -253,7 +254,7 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                     </div>
                     <div>
                         <span className="font-extrabold text-text-main">Finished Goods (Final Stage Output): </span>
-                        <strong className="text-emerald-700 font-mono text-sm">{finishedGoodsQty.toLocaleString('en-IN')} Bags</strong>
+                        <strong className="text-emerald-700 font-mono text-sm">{finishedGoodsQty.toLocaleString('en-IN')} {woUnit}</strong>
                         <span className="text-text-muted text-[11px] ml-1.5 font-medium">
                             {finalStageOperatorsCount > 0
                                 ? `across ${finalStageOperatorsCount} operator${finalStageOperatorsCount > 1 ? 's' : ''}`
@@ -271,6 +272,136 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                         {targetQty > 0 ? `${Math.round((finishedGoodsQty / targetQty) * 100)}% Complete` : 'No target'}
                     </span>
                 </div>
+            </div>
+
+            {/* Production Timeline (Date-wise Progress) Section */}
+            <div className="border-t border-border bg-card-bg">
+                <div className="p-4 border-b border-border bg-app-bg flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                    <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                            <Calendar size={16} className="text-primary" />
+                            <h3 className="text-xs font-extrabold text-text-main uppercase tracking-wider">
+                                Production Timeline (Date-wise Progress)
+                            </h3>
+                        </div>
+                        <p className="text-[11px] text-text-muted">
+                            Chronological history showing processes active and bags logged by date across all production stages.
+                        </p>
+                    </div>
+                    {timeline.length > 0 && (
+                        <span className="text-[10px] font-bold text-primary bg-primary/10 border border-primary/20 px-2.5 py-1 rounded-full">
+                            {timeline.length} Production Day{timeline.length > 1 ? 's' : ''} Logged
+                        </span>
+                    )}
+                </div>
+
+                {timeline.length === 0 ? (
+                    <div className="p-6 text-center text-text-muted">
+                        <div className="flex flex-col items-center justify-center space-y-1">
+                            <Clock size={20} className="text-primary/60" />
+                            <p className="font-semibold text-xs text-text-main">No date-wise production logs recorded yet.</p>
+                            <p className="text-[11px] text-text-muted">
+                                Daily production logs entered in the stage monitor will be displayed chronologically here.
+                            </p>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse font-sans">
+                            <thead>
+                                <tr className="bg-gray-50 text-slate-800 border-b border-gray-200">
+                                    <th className="p-3.5 uppercase text-[10px] font-bold tracking-wider text-slate-800 min-w-[140px]">
+                                        Date
+                                    </th>
+                                    <th className="p-3.5 uppercase text-[10px] font-bold tracking-wider text-slate-800 min-w-[280px]">
+                                        Stage(s) Active That Date
+                                    </th>
+                                    <th className="p-3.5 uppercase text-[10px] font-bold tracking-wider text-slate-800 min-w-[220px]">
+                                        Operators
+                                    </th>
+                                    <th className="p-3.5 text-right uppercase text-[10px] font-bold tracking-wider text-slate-800 min-w-[150px]">
+                                        Total {woUnit} Logged
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border text-text-main">
+                                {timeline.map((entry, idx) => {
+                                    let dateDisplay = entry.date;
+                                    try {
+                                        const [y, m, d] = entry.date.split('-');
+                                        if (y && m && d) {
+                                            const dObj = new Date(Number(y), Number(m) - 1, Number(d));
+                                            dateDisplay = dObj.toLocaleDateString('en-IN', {
+                                                day: '2-digit',
+                                                month: 'short',
+                                                year: 'numeric'
+                                            });
+                                        }
+                                    } catch {
+                                        dateDisplay = entry.date;
+                                    }
+
+                                    return (
+                                        <tr key={idx} className="hover:bg-app-bg/50 transition-colors">
+                                            <td className="p-3.5 align-top font-sans">
+                                                <div className="flex items-center gap-1.5 font-bold text-text-main text-xs">
+                                                    <Calendar size={13} className="text-primary shrink-0" />
+                                                    <span>{dateDisplay}</span>
+                                                </div>
+                                                <div className="text-[10px] text-text-muted font-mono mt-0.5 ml-4">
+                                                    {entry.date}
+                                                </div>
+                                            </td>
+                                            <td className="p-3.5 align-top">
+                                                <div className="flex flex-col gap-1.5">
+                                                    {entry.stages.map((st, sIdx) => (
+                                                        <div
+                                                            key={sIdx}
+                                                            className="flex items-center justify-between gap-2 p-1.5 rounded-md bg-app-bg border border-border text-xs"
+                                                        >
+                                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                                <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
+                                                                <span className="font-semibold text-text-main truncate text-[11px]">
+                                                                    {STAGE_NAME_MAP[st.stageName] || st.stageLabel}
+                                                                </span>
+                                                            </div>
+                                                            <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded text-[11px] shrink-0 border border-emerald-200">
+                                                                {Number(st.quantity).toLocaleString('en-IN')} {woUnit}
+                                                            </span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </td>
+                                            <td className="p-3.5 align-top">
+                                                <div className="flex flex-wrap gap-1">
+                                                    {entry.operators && entry.operators.length > 0 ? (
+                                                        entry.operators.map((op, opIdx) => (
+                                                            <span
+                                                                key={opIdx}
+                                                                className="inline-flex items-center gap-1 text-[10px] font-medium bg-card-bg text-text-main border border-border px-2 py-0.5 rounded-md shadow-2xs"
+                                                            >
+                                                                <Users size={10} className="text-text-muted" />
+                                                                <span>{op}</span>
+                                                            </span>
+                                                        ))
+                                                    ) : (
+                                                        <span className="text-text-muted text-[11px] italic">Unassigned</span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            <td className="p-3.5 align-top text-right font-mono">
+                                                <span className="font-extrabold text-sm text-text-main">
+                                                    {Number(entry.totalBags).toLocaleString('en-IN')}
+                                                </span>
+                                                <span className="text-[11px] text-text-muted ml-1 font-sans">{woUnit}</span>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
         </div>
     );

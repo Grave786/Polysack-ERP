@@ -1,7 +1,8 @@
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { Activity, Flame, Layers, Package, TrendingUp, TrendingDown, RefreshCw, Download } from 'lucide-react';
+import { Activity, Flame, Layers, Package, TrendingUp, TrendingDown, RefreshCw, Download, Printer, Search, X } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { generatePdfReport } from '../../utils/pdfExportUtils';
 
 const escapeCsvCell = (val) => {
     if (val === undefined || val === null) return '""';
@@ -31,6 +32,7 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
     const [startDate, setStartDate] = useState(''); // Empty string allows fetching all records
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]); // Default today
     const [tableData, setTableData] = useState([]);
+    const [searchTerm, setSearchTerm] = useState('');
 
     const [metrics, setMetrics] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -63,6 +65,14 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
         setTableData(rawWoList);
     }, [metrics]);
 
+    // Filter table data by search term
+    const filteredTableData = tableData.filter((row) => {
+        if (!searchTerm.trim()) return true;
+        const term = searchTerm.toLowerCase().trim();
+        const woNum = String(row.workOrderNumber || '').toLowerCase();
+        return woNum.includes(term);
+    });
+
     // Extract metrics with safe defaults
     const todayBags = metrics?.todayVsYesterdayBags?.todayBags ?? metrics?.todayBags ?? 0;
     const yesterdayBags = metrics?.todayVsYesterdayBags?.yesterdayBags ?? metrics?.yesterdayBags ?? 0;
@@ -93,26 +103,36 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
             [],
             [escapeCsvCell('--- PROCESS YIELD & SCRAP RECOVERY BREAKDOWN ---')],
             [
-                escapeCsvCell('Work Order Number'),
+                escapeCsvCell('Work Order #'),
                 escapeCsvCell('Date'),
+                escapeCsvCell('Target Bags'),
                 escapeCsvCell('Net Input (Kg)'),
-                escapeCsvCell('Bags Produced (Qty)'),
-                escapeCsvCell('Wastage (Kg)'),
-                escapeCsvCell('Rejects (Qty)')
+                escapeCsvCell('Final Bags Produced'),
+                escapeCsvCell('Total Baling'),
+                escapeCsvCell('Weight per Baling (Kg)'),
+                escapeCsvCell('Total Net Weight (Kg)'),
+                escapeCsvCell('Qty Rejected (Pcs)'),
+                escapeCsvCell('Qty Rejected (Kg)'),
+                escapeCsvCell('Scrap (Kg)')
             ]
         ];
 
-        if (tableData.length === 0) {
+        if (filteredTableData.length === 0) {
             csvLines.push([escapeCsvCell('No production stage records found for selected period')]);
         } else {
-            tableData.forEach((row) => {
+            filteredTableData.forEach((row) => {
                 csvLines.push([
                     escapeCsvCell(row.workOrderNumber || 'N/A'),
                     escapeCsvCell(row.date ? formatCsvDate(row.date) : '-'),
+                    escapeCsvCell(Number(row.targetQuantity ?? row.targetBags ?? 0)),
                     escapeCsvCell(Number(row.netInput ?? row.netKgUsed ?? 0)),
-                    escapeCsvCell(Number(row.bagsProduced ?? row.totalBagsProduced ?? 0)),
-                    escapeCsvCell(Number(row.wastageKg ?? row.totalWastageKg ?? 0)),
-                    escapeCsvCell(Number(row.rejects ?? row.totalRejectedBags ?? 0))
+                    escapeCsvCell(Number(row.finalBagsProduced ?? row.bagsProduced ?? row.totalBagsProduced ?? 0)),
+                    escapeCsvCell(row.totalBaling || '-'),
+                    escapeCsvCell(row.weightPerBalingKg != null ? Number(row.weightPerBalingKg) : '-'),
+                    escapeCsvCell(row.totalNetWeightKg != null ? Number(row.totalNetWeightKg) : '-'),
+                    escapeCsvCell(Number(row.qtyRejectedPcs ?? row.rejects ?? row.totalRejectedBags ?? 0)),
+                    escapeCsvCell(row.qtyRejectedKg != null ? Number(row.qtyRejectedKg) : 0),
+                    escapeCsvCell(Number(row.scrapKg ?? row.wastageKg ?? row.totalWastageKg ?? 0))
                 ]);
             });
         }
@@ -146,27 +166,37 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
         const filename = `production-yield-breakdown-${dateStr}.csv`;
 
         const headers = [
-            'Work Order',
+            'Work Order #',
             'Date',
+            'Target Bags',
             'Net Input (Kg)',
-            'Bags Produced (Qty)',
-            'Wastage (Kg)',
-            'Rejects (Qty)'
+            'Final Bags Produced',
+            'Total Baling',
+            'Weight per Baling (Kg)',
+            'Total Net Weight (Kg)',
+            'Qty Rejected (Pcs)',
+            'Qty Rejected (Kg)',
+            'Scrap (Kg)'
         ];
 
         const csvRows = [headers.map(escapeCsvCell).join(',')];
 
-        if (tableData.length === 0) {
+        if (filteredTableData.length === 0) {
             toast('No records to export for the selected date range.', { icon: 'ℹ️' });
         } else {
-            tableData.forEach((row) => {
+            filteredTableData.forEach((row) => {
                 const cells = [
                     row.workOrderNumber || 'N/A',
                     row.date ? formatCsvDate(row.date) : '',
+                    Number(row.targetQuantity ?? row.targetBags ?? 0),
                     Number(row.netInput ?? row.netKgUsed ?? 0),
-                    Number(row.bagsProduced ?? row.totalBagsProduced ?? 0),
-                    Number(row.wastageKg ?? row.totalWastageKg ?? 0),
-                    Number(row.rejects ?? row.totalRejectedBags ?? 0)
+                    Number(row.finalBagsProduced ?? row.bagsProduced ?? row.totalBagsProduced ?? 0),
+                    row.totalBaling || '-',
+                    row.weightPerBalingKg != null ? Number(row.weightPerBalingKg) : '-',
+                    row.totalNetWeightKg != null ? Number(row.totalNetWeightKg) : '-',
+                    Number(row.qtyRejectedPcs ?? row.rejects ?? row.totalRejectedBags ?? 0),
+                    row.qtyRejectedKg != null ? Number(row.qtyRejectedKg) : 0,
+                    Number(row.scrapKg ?? row.wastageKg ?? row.totalWastageKg ?? 0)
                 ];
                 csvRows.push(cells.map(escapeCsvCell).join(','));
             });
@@ -183,13 +213,62 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
         document.body.removeChild(link);
         window.URL.revokeObjectURL(url);
 
-        if (tableData.length > 0) {
-            toast.success(`Exported ${tableData.length} records to CSV!`);
+        if (filteredTableData.length > 0) {
+            toast.success(`Exported ${filteredTableData.length} records to CSV!`);
         }
     };
 
+    const exportPdf = () => {
+        const todayStr = getTodayDdMmYyyy();
+        const dateRangeStr = `From: ${startDate ? formatCsvDate(startDate) : 'All Beginning'} To: ${endDate ? formatCsvDate(endDate) : 'Today'}`;
+        generatePdfReport({
+            title: 'Production Yield & Scrap Recovery Report',
+            subtitle: dateRangeStr,
+            generatedDate: todayStr,
+            filename: `executive-audit-report-production-yield-${todayStr}.pdf`,
+            summaryCards: [
+                { label: 'Total Production', value: `${Number(todayBags || 0).toLocaleString('en-IN')} Bags`, notes: 'Bags produced' },
+                { label: 'Available Raw Fabric', value: `${Number(availableFabricKg || 0).toLocaleString('en-IN')} Kg`, notes: 'In-stock fabric' },
+                { label: 'Total Process Scrap', value: `${Number(totalWastageKg || 0).toLocaleString('en-IN')} Kg`, notes: 'Machine wastage' },
+                { label: 'Total Rejected Defects', value: `${Number(totalRejects || 0).toLocaleString('en-IN')} Bags`, notes: 'Rejected defects' },
+                { label: 'Material Returned', value: `${Number(totalReturnToStore || 0).toLocaleString('en-IN')} Kg`, notes: 'Returned to store' }
+            ],
+            sections: [
+                {
+                    title: 'PROCESS YIELD & SCRAP RECOVERY BREAKDOWN',
+                    headers: [
+                        'WO #',
+                        'Target (Bags)',
+                        'Net In (Kg)',
+                        'Final (Bags)',
+                        'Total Baling',
+                        'Wt/Bale (Kg)',
+                        'Tot Net Wt (Kg)',
+                        'Rej (Pcs)',
+                        'Rej (Kg)',
+                        'Scrap (Kg)'
+                    ],
+                    rows: filteredTableData.map((row) => [
+                        row.workOrderNumber || 'N/A',
+                        Number(row.targetQuantity ?? row.targetBags ?? 0).toLocaleString('en-IN'),
+                        Number(row.netInput ?? row.netKgUsed ?? 0).toLocaleString('en-IN'),
+                        Number(row.finalBagsProduced ?? row.bagsProduced ?? row.totalBagsProduced ?? 0).toLocaleString('en-IN'),
+                        row.totalBaling || '-',
+                        row.weightPerBalingKg != null ? `${Number(row.weightPerBalingKg).toFixed(2)} kg` : '-',
+                        row.totalNetWeightKg != null ? `${Number(row.totalNetWeightKg).toFixed(2)} kg` : '-',
+                        Number(row.qtyRejectedPcs ?? row.rejects ?? row.totalRejectedBags ?? 0).toLocaleString('en-IN'),
+                        row.qtyRejectedKg != null && Number(row.qtyRejectedKg) > 0 ? `${Number(row.qtyRejectedKg).toFixed(2)} kg` : '0 kg',
+                        Number(row.scrapKg ?? row.wastageKg ?? row.totalWastageKg ?? 0).toLocaleString('en-IN') + ' kg'
+                    ])
+                }
+            ]
+        });
+        toast.success('Production Yield audit report exported to PDF!');
+    };
+
     useImperativeHandle(ref, () => ({
-        exportCsv
+        exportCsv,
+        exportPdf
     }));
 
     return (
@@ -269,17 +348,34 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
 
             {/* Table: Process Yield & Scrap Recovery Breakdown */}
             <div className="bg-card-bg border border-border rounded-xl shadow-xs overflow-hidden">
-                <div className="p-4 border-b border-border bg-app-bg flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="p-4 border-b border-border bg-app-bg flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
                     <div>
                         <h3 className="text-xs font-extrabold text-text-main uppercase tracking-wider">
                             PROCESS YIELD & SCRAP RECOVERY BREAKDOWN
                         </h3>
                         <p className="text-[10px] text-text-muted mt-0.5">
-                            Correlation of material input, production output, machine wastage and defect rejects
+                            Work-order and baling-level breakdown of material input, production output, baling weights, defects, and scrap
                         </p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                        {/* Search Input */}
+                        <div className="flex items-center gap-1.5 bg-card-bg px-2.5 py-1.5 border border-border rounded-lg text-xs shadow-2xs">
+                            <Search size={13} className="text-text-muted" />
+                            <input
+                                type="text"
+                                placeholder="Search WO #..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className="bg-transparent text-xs text-text-main placeholder:text-text-muted focus:outline-none w-28 sm:w-36"
+                            />
+                            {searchTerm && (
+                                <button onClick={() => setSearchTerm('')} className="text-text-muted hover:text-text-main">
+                                    <X size={12} />
+                                </button>
+                            )}
+                        </div>
+
                         {/* Date Range Inputs */}
                         <div className="flex items-center gap-1.5 bg-card-bg px-2.5 py-1 border border-border rounded-lg text-xs shadow-2xs">
                             <label className="text-[10px] font-bold text-text-muted uppercase">From:</label>
@@ -305,11 +401,22 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
                         <button
                             type="button"
                             onClick={handleExportTableCsv}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-card-bg hover:bg-app-bg text-text-main border border-border font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
                             title="Export Process Yield & Scrap table records to CSV"
                         >
                             <Download size={13} />
                             <span>Export CSV</span>
+                        </button>
+
+                        {/* Export PDF Button */}
+                        <button
+                            type="button"
+                            onClick={exportPdf}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer shrink-0"
+                            title="Export Process Yield & Scrap report to PDF"
+                        >
+                            <Printer size={13} />
+                            <span>Export PDF</span>
                         </button>
 
                         {isLoading && (
@@ -319,42 +426,110 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
                 </div>
 
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs border-collapse font-sans">
+                    <table className="w-full text-left text-xs border-collapse font-sans whitespace-nowrap min-w-[1100px]">
                         <thead>
                             <tr className="bg-table-header-bg text-table-header-text font-extrabold uppercase text-[10px]">
-                                <th className="p-3 border-b border-border">Work Order</th>
-                                <th className="p-3 border-b border-border font-mono">Net Input (KG)</th>
-                                <th className="p-3 border-b border-border font-mono">Bags Produced (Qty)</th>
-                                <th className="p-3 border-b border-border font-mono">Wastage (KG)</th>
-                                <th className="p-3 border-b border-border font-mono">Rejects (Qty)</th>
+                                <th className="p-3 border-b border-border">Work Order #</th>
+                                <th className="p-3 border-b border-border text-right font-mono">Target Bags</th>
+                                <th className="p-3 border-b border-border text-right font-mono">Net Input (Kg)</th>
+                                <th className="p-3 border-b border-border text-right font-mono">Final Bags Produced</th>
+                                <th className="p-3 border-b border-border font-mono">Total Baling</th>
+                                <th className="p-3 border-b border-border text-right font-mono">Weight per Baling (Kg)</th>
+                                <th className="p-3 border-b border-border text-right font-mono">Total Net Weight (Kg)</th>
+                                <th className="p-3 border-b border-border text-right font-mono">Qty Rejected (Pcs)</th>
+                                <th className="p-3 border-b border-border text-right font-mono">Qty Rejected (Kg)</th>
+                                <th className="p-3 border-b border-border text-right font-mono">Scrap (Kg)</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
-                            {tableData.length === 0 ? (
+                            {filteredTableData.length === 0 ? (
                                 <tr>
-                                    <td colSpan={5} className="p-6 text-center text-text-muted">
-                                        No production stage records found yet.
+                                    <td colSpan={10} className="p-6 text-center text-text-muted">
+                                        {tableData.length === 0 ? 'No production stage records found yet.' : 'No matching work orders found for the search query.'}
                                     </td>
                                 </tr>
                             ) : (
-                                tableData.map((row, i) => (
-                                    <tr key={i} className="hover:bg-app-bg/50 transition-colors text-text-main">
-                                        <td className="p-3 font-bold text-text-main">
-                                            <div>
-                                                <span className="font-mono">{row.workOrderNumber || 'N/A'}</span>
-                                                {row.date && (
-                                                    <span className="block text-[10px] text-text-muted font-normal font-sans">
-                                                        {new Date(row.date).toLocaleDateString()}
+                                filteredTableData.map((row, i) => {
+                                    const hasBaling = Boolean(row.totalBaling);
+                                    return (
+                                        <tr key={i} className="hover:bg-app-bg/50 transition-colors text-text-main">
+                                            {/* 1. Work Order # */}
+                                            <td className="p-3 font-bold text-text-main">
+                                                <div>
+                                                    <span className="font-mono">{row.workOrderNumber || 'N/A'}</span>
+                                                    {row.date && (
+                                                        <span className="block text-[10px] text-text-muted font-normal font-sans">
+                                                            {new Date(row.date).toLocaleDateString()}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+
+                                            {/* 2. Target Bags */}
+                                            <td className="p-3 text-right font-mono font-medium text-text-muted">
+                                                {Number(row.targetQuantity ?? row.targetBags ?? 0).toLocaleString('en-IN')}
+                                            </td>
+
+                                            {/* 3. Net Input (Kg) */}
+                                            <td className="p-3 text-right font-mono font-medium">
+                                                {Number(row.netInput ?? row.netKgUsed ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 3 })} kg
+                                            </td>
+
+                                            {/* 4. Final Bags Produced */}
+                                            <td className="p-3 text-right font-mono font-bold text-emerald-700">
+                                                {Number(row.finalBagsProduced ?? row.bagsProduced ?? row.totalBagsProduced ?? 0).toLocaleString('en-IN')}
+                                            </td>
+
+                                            {/* 5. Total Baling */}
+                                            <td className="p-3 font-mono font-medium text-text-main">
+                                                {hasBaling ? (
+                                                    <span className="inline-block bg-primary/10 text-primary px-2 py-0.5 rounded text-[11px] font-bold">
+                                                        {row.totalBaling}
                                                     </span>
+                                                ) : (
+                                                    <span className="text-text-muted">-</span>
                                                 )}
-                                            </div>
-                                        </td>
-                                        <td className="p-3 font-mono font-medium">{Number(row.netInput ?? row.netKgUsed ?? 0).toLocaleString()} kg</td>
-                                        <td className="p-3 font-mono font-bold text-emerald-700">{Number(row.bagsProduced ?? row.totalBagsProduced ?? 0).toLocaleString()}</td>
-                                        <td className="p-3 font-mono font-medium text-rose-600">{Number(row.wastageKg ?? row.totalWastageKg ?? 0).toLocaleString()} kg</td>
-                                        <td className="p-3 font-mono font-bold text-amber-700">{Number(row.rejects ?? row.totalRejectedBags ?? 0).toLocaleString()}</td>
-                                    </tr>
-                                ))
+                                            </td>
+
+                                            {/* 6. Weight per Baling (Kg) */}
+                                            <td className="p-3 text-right font-mono font-medium">
+                                                {hasBaling && row.weightPerBalingKg != null ? (
+                                                    <span>{Number(row.weightPerBalingKg).toFixed(3)} kg</span>
+                                                ) : (
+                                                    <span className="text-text-muted">-</span>
+                                                )}
+                                            </td>
+
+                                            {/* 7. Total Net Weight (Kg) */}
+                                            <td className="p-3 text-right font-mono font-bold text-text-main">
+                                                {hasBaling && row.totalNetWeightKg != null ? (
+                                                    <span>{Number(row.totalNetWeightKg).toFixed(3)} kg</span>
+                                                ) : (
+                                                    <span className="text-text-muted">-</span>
+                                                )}
+                                            </td>
+
+                                            {/* 8. Qty Rejected (Pcs) */}
+                                            <td className="p-3 text-right font-mono font-bold text-amber-700">
+                                                {Number(row.qtyRejectedPcs ?? row.rejects ?? row.totalRejectedBags ?? 0).toLocaleString('en-IN')}
+                                            </td>
+
+                                            {/* 9. Qty Rejected (Kg) */}
+                                            <td className="p-3 text-right font-mono font-medium text-amber-800">
+                                                {row.qtyRejectedKg != null && Number(row.qtyRejectedKg) > 0 ? (
+                                                    `${Number(row.qtyRejectedKg).toFixed(3)} kg`
+                                                ) : (
+                                                    Number(row.qtyRejectedPcs ?? row.rejects ?? row.totalRejectedBags ?? 0) === 0 ? '0 kg' : '-'
+                                                )}
+                                            </td>
+
+                                            {/* 10. Scrap (Kg) */}
+                                            <td className="p-3 text-right font-mono font-medium text-rose-600">
+                                                {Number(row.scrapKg ?? row.wastageKg ?? row.totalWastageKg ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 3 })} kg
+                                            </td>
+                                        </tr>
+                                    );
+                                })
                             )}
                         </tbody>
                     </table>

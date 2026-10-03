@@ -5,12 +5,20 @@ const {
     createDispatch,
     updateDeliveryStatus,
     getDispatches,
+    getDeliveryRegister,
     getDispatchById
 } = require('../controllers/dispatch.controller');
 const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
 
 router.use(authenticate);
 router.use(checkTenantModule('DISPATCH'));
+
+/**
+ * @route   GET /api/dispatches/delivery-register
+ * @desc    Get detailed line-item level Delivery Register
+ * @access  Private (DISPATCH:READ)
+ */
+router.get('/delivery-register', authenticate, checkPermission('DISPATCH', 'READ'), getDeliveryRegister);
 
 /**
  * @route   GET /api/dispatches/dispatchable-sources

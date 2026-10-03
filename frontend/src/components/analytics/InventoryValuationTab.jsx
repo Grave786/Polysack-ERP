@@ -1,7 +1,8 @@
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { Package, Layers, Boxes, ShieldAlert, Loader2, RefreshCw } from 'lucide-react';
+import { Package, Layers, Boxes, ShieldAlert, Loader2, RefreshCw, Download, Printer } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { generatePdfReport } from '../../utils/pdfExportUtils';
 
 const escapeCsvCell = (val) => {
     if (val === undefined || val === null) return '""';
@@ -133,8 +134,43 @@ const InventoryValuationTab = forwardRef(function InventoryValuationTab(props, r
         toast.success('Inventory Valuation executive audit report exported to CSV!');
     };
 
+    const exportPdf = () => {
+        const todayStr = getTodayDdMmYyyy();
+        const filename = `executive-audit-report-inventory-valuation-${todayStr}.pdf`;
+
+        generatePdfReport({
+            title: 'Inventory Valuation Audit Report',
+            subtitle: 'Valuation Method: Weighted Average Cost Method',
+            generatedDate: todayStr,
+            filename,
+            summaryCards: [
+                { label: 'Total Inventory Asset Value', value: `₹${Number(summary?.totalInventoryAssetValue || 0).toLocaleString('en-IN')}`, notes: 'Audited asset valuation' },
+                { label: 'Raw Material Valuation', value: `₹${Number(summary?.rawMaterialValuation || 0).toLocaleString('en-IN')}`, notes: summary?.rawMaterialSubtitle || 'Raw Material Stock' },
+                { label: 'Finished Bags Valuation', value: `₹${Number(summary?.finishedBagsValuation || 0).toLocaleString('en-IN')}`, notes: `${Number(summary?.finishedBagsCount || 0).toLocaleString('en-IN')} Finished Bags` },
+                { label: 'Slow Moving Stock', value: `₹${Number(slowMovingVal || 0).toLocaleString('en-IN')}`, notes: slowMovingVal > 0 ? 'Requires Clearance' : 'No slow moving stock' }
+            ],
+            sections: [
+                {
+                    title: 'STOCK ASSET VALUATION LEDGER (WEIGHTED AVERAGE COST METHOD)',
+                    headers: ['Stock Item / Name', 'Stock Code', 'Item Classification', 'Current Quantity', 'Unit', 'Avg Unit Cost (INR)', 'Total Valuation (INR)'],
+                    rows: ledgerList.map((item) => [
+                        item.name || '-',
+                        item.code || '-',
+                        item.category || item.type || '-',
+                        Number(item.currentStock || 0).toLocaleString('en-IN'),
+                        item.uom || 'Kg',
+                        `₹${Number(item.valuationRate || item.costPerUnit || 0).toFixed(2)}`,
+                        `₹${Number(item.totalValuation || 0).toLocaleString('en-IN')}`
+                    ])
+                }
+            ]
+        });
+        toast.success('Inventory Valuation audit report exported to PDF!');
+    };
+
     useImperativeHandle(ref, () => ({
-        exportCsv
+        exportCsv,
+        exportPdf
     }));
 
     if (isLoading) {
@@ -223,13 +259,35 @@ const InventoryValuationTab = forwardRef(function InventoryValuationTab(props, r
 
             {/* Valuation Ledger Table */}
             <div className="bg-card-bg border border-border rounded-xl shadow-xs overflow-hidden">
-                <div className="p-4 border-b border-border bg-app-bg flex justify-between items-center">
+                <div className="p-4 border-b border-border bg-app-bg flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                     <h3 className="text-xs font-extrabold text-text-main uppercase tracking-wider">
                         STOCK ASSET VALUATION LEDGER (WEIGHTED AVERAGE COST METHOD)
                     </h3>
-                    <span className="text-[10px] font-mono font-extrabold bg-blue-100 text-blue-800 border border-blue-300 px-2 py-0.5 rounded-full">
-                        • Verified Weighted Average Rates
-                    </span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] font-mono font-extrabold bg-blue-100 text-blue-800 border border-blue-300 px-2 py-0.5 rounded-full">
+                            • Verified Weighted Average Rates
+                        </span>
+
+                        <button
+                            type="button"
+                            onClick={exportCsv}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-card-bg hover:bg-app-bg text-text-main border border-border font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+                            title="Export Inventory Valuation to CSV"
+                        >
+                            <Download size={13} />
+                            <span>Export CSV</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={exportPdf}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+                            title="Export Inventory Valuation to PDF"
+                        >
+                            <Printer size={13} />
+                            <span>Export PDF</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div className="overflow-x-auto">

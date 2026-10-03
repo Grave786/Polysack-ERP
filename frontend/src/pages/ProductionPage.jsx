@@ -3,9 +3,11 @@ import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import ProductionStageMonitor from '../components/production/ProductionStageMonitor';
 import CreateWorkOrderModal from '../components/production/CreateWorkOrderModal';
 import DetailViewModal from '../components/shared/DetailViewModal';
-import { Layers, Activity, FileText, Plus, Eye, AlertTriangle } from 'lucide-react';
+import { Layers, Activity, FileText, Plus, Eye, Pencil, AlertTriangle } from 'lucide-react';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../store/authStore';
+import { isTenantAdmin, checkIsSuperAdmin } from '../utils/permissionUtils';
 
 const STAGE_LABELS = {
     TAPE_EXTRUSION: 'Tape Extrusion',
@@ -19,9 +21,13 @@ const STAGE_LABELS = {
 };
 
 export default function ProductionPage() {
+    const user = useAuthStore((state) => state.user);
+    const isAdmin = isTenantAdmin(user) || checkIsSuperAdmin(user);
+
     const [selectedWorkOrderId, setSelectedWorkOrderId] = useState(null);
     const [activeTabKey, setActiveTabKey] = useState('work-orders');
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+    const [editOrderRecord, setEditOrderRecord] = useState(null);
     const [viewOrderRecord, setViewOrderRecord] = useState(null);
     const [refreshKey, setRefreshKey] = useState(0);
 
@@ -32,6 +38,29 @@ export default function ProductionPage() {
     const handleTrackJob = (workOrderId) => {
         setSelectedWorkOrderId(workOrderId);
         setActiveTabKey('stage-monitor');
+    };
+
+    const handleResumeBalance = async (workOrderId) => {
+        if (!workOrderId) return;
+        try {
+            const res = await axiosInstance.patch(`/work-orders/${workOrderId}/resume-balance`);
+            if (res.data?.success) {
+                const newWo = res.data?.data || res.data?.continuationWorkOrder;
+                toast.success(res.data?.message || 'Continuation Work Order created for balance production');
+                if (newWo?._id) {
+                    setSelectedWorkOrderId(newWo._id);
+                    setActiveTabKey('stage-monitor');
+                } else {
+                    setSelectedWorkOrderId(workOrderId);
+                    setActiveTabKey('stage-monitor');
+                }
+                setRefreshKey((prev) => prev + 1);
+            } else {
+                toast.error(res.data?.message || 'Failed to resume Work Order');
+            }
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to resume Work Order');
+        }
     };
 
     const handleConfirmCancel = async () => {
@@ -61,16 +90,19 @@ export default function ProductionPage() {
             label: 'Active Work Orders',
             icon: Layers,
             resourcePath: '/work-orders',
-            exportMapper: (data) => data.map(row => ({
-                'WORK ORDER #': row.workOrderNumber || row.code || '',
-                'CUSTOMER / CLIENT': row.customer?.companyName || row.customerName || '',
-                'WORK TITLE': row.finishedGood?.productName || row.workTitle || '',
-                'TARGET BAGS': row.targetQuantity || row.targetBags || 0,
-                'COMPLETED BAGS': row.completedQuantity || row.completedBags || 0,
-                'STAGE PROGRESS': row.currentStage || '',
-                'MACHINE': row.machine?.machineName || row.machineAllocation?.machineName || '',
-                'STATUS': row.status || ''
-            })),
+            exportMapper: (data) => data.map(row => {
+                const u = row.unit || row.jobOrderDetails?.totalOrderQuantityUnit || 'Bags';
+                return {
+                    'WORK ORDER #': row.workOrderNumber || row.code || '',
+                    'CUSTOMER / CLIENT': row.customer?.companyName || row.customerName || '',
+                    'WORK TITLE': row.finishedGood?.productName || row.workTitle || '',
+                    'TARGET QTY': `${Number(row.targetQuantity || 0).toLocaleString('en-IN')} ${u}`,
+                    'COMPLETED QTY': `${Number(row.completedQuantity || 0).toLocaleString('en-IN')} ${u}`,
+                    'STAGE PROGRESS': row.currentStage || '',
+                    'MACHINE': row.machine?.machineName || row.machineAllocation?.machineName || '',
+                    'STATUS': row.status || ''
+                };
+            }),
             columns: [
                 {
                     header: 'WORK ORDER #',
@@ -97,15 +129,51 @@ export default function ProductionPage() {
                     }
                 },
                 {
-                    header: 'TARGET BAGS',
+                    header: 'TARGET QTY',
                     accessor: 'targetQuantity',
                     exportValue: (row) => row.targetQuantity || 0,
-                    render: (row) => <span className="font-mono font-medium">{row.targetQuantity || 0}</span>
+                    render: (row) => {
+                        const u = row.unit || row.jobOrderDetails?.totalOrderQuantityUnit || 'Bags';
+                        return (
+                            <span className="font-mono font-medium">
+                                {Number(row.targetQuantity || 0).toLocaleString('en-IN')} <span className="text-[10px] text-text-muted">{u}</span>
+                            </span>
+                        );
+                    }
                 },
                 {
-                    header: 'COMPLETED BAGS',
+                    header: 'COMPLETED QTY',
                     exportValue: (row) => row.completedQuantity || 0,
-                    render: (row) => <span className="font-extrabold text-text-main font-mono">{row.completedQuantity || 0}</span>
+                    render: (row) => {
+                        const u = row.unit || row.jobOrderDetails?.totalOrderQuantityUnit || 'Bags';
+                        return (
+                            <div className="space-y-1">
+                                <span className="font-extrabold text-text-main font-mono">
+                                    {Number(row.completedQuantity || 0).toLocaleString('en-IN')} <span className="text-[10px] text-text-muted font-normal">{u}</span>
+                                </span>
+                                {row.balanceQuantity > 0 && (
+                                    <div>
+                                        {row.continuationWorkOrder ? (
+                                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-950/50 px-1.5 py-0.5 rounded border border-blue-300 dark:border-blue-800/60 whitespace-nowrap">
+                                                Continued in: {row.continuationWorkOrder?.workOrderNumber || 'WO'}
+                                            </span>
+                                        ) : (
+                                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/50 px-1.5 py-0.5 rounded border border-amber-300 dark:border-amber-800/60 whitespace-nowrap">
+                                                Balance: {Number(row.balanceQuantity).toLocaleString('en-IN')} {u} Pending
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+                                {row.parentWorkOrder && (
+                                    <div>
+                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200 whitespace-nowrap">
+                                            Continuation of: {row.parentWorkOrder?.workOrderNumber || 'WO'}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    }
                 },
                 {
                     header: 'STAGE PROGRESS',
@@ -205,11 +273,23 @@ export default function ProductionPage() {
                                 onClick={() => {
                                     setViewOrderRecord(row);
                                 }}
-                                className="text-gray-500 hover:text-blue-600 mr-3 cursor-pointer"
+                                className="text-gray-500 hover:text-blue-600 mr-2 cursor-pointer"
                                 title="View Details"
                             >
                                 <Eye size={14} />
                             </button>
+                            {isAdmin && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setEditOrderRecord(row);
+                                    }}
+                                    className="text-gray-500 hover:text-blue-600 mr-2 cursor-pointer"
+                                    title="Edit Work Order"
+                                >
+                                    <Pencil size={14} />
+                                </button>
+                            )}
                             <button
                                 type="button"
                                 onClick={() => handleTrackJob(row._id)}
@@ -218,6 +298,25 @@ export default function ProductionPage() {
                                 <Activity size={13} />
                                 <span>Track</span>
                             </button>
+                            {row.continuationWorkOrder ? (
+                                <button
+                                    type="button"
+                                    onClick={() => handleTrackJob(row.continuationWorkOrder?._id || row.continuationWorkOrder)}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold px-2 py-1 rounded-md text-xs transition-all shadow-2xs cursor-pointer whitespace-nowrap"
+                                    title="View continuation Work Order"
+                                >
+                                    Continuation ({row.continuationWorkOrder?.workOrderNumber || 'WO'})
+                                </button>
+                            ) : (row.status === 'COMPLETED' && row.balanceQuantity > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={() => handleResumeBalance(row._id)}
+                                    className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold px-2 py-1 rounded-md text-xs transition-all shadow-2xs cursor-pointer whitespace-nowrap"
+                                    title="Resume balance production for remaining bags"
+                                >
+                                    Resume Balance
+                                </button>
+                            ))}
                             {row.status !== 'COMPLETED' && row.status !== 'CANCELLED' && (
                                 <button
                                     type="button"
@@ -275,9 +374,16 @@ export default function ProductionPage() {
             />
 
             <CreateWorkOrderModal
-                isOpen={isCreateModalOpen}
-                onClose={() => setIsCreateModalOpen(false)}
-                onSuccess={() => setRefreshKey((prev) => prev + 1)}
+                isOpen={isCreateModalOpen || Boolean(editOrderRecord)}
+                workOrderToEdit={editOrderRecord}
+                onClose={() => {
+                    setIsCreateModalOpen(false);
+                    setEditOrderRecord(null);
+                }}
+                onSuccess={() => {
+                    setRefreshKey((prev) => prev + 1);
+                    setEditOrderRecord(null);
+                }}
             />
 
             <DetailViewModal

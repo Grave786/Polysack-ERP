@@ -1890,7 +1890,7 @@ export default function CustomerCrmPage() {
                                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                                     <div>
                                         <label className={lbl}>Bag Weight (Gms)</label>
-                                        <input type="number" min="0" step="0.01" placeholder="0.00" value={enquiryForm.bagWeightGms} onChange={(e) => setEnquiryForm((p) => ({ ...p, bagWeightGms: e.target.value }))} className={inp} />
+                                        <input type="number" min="0" step="0.001" placeholder="0.000" value={enquiryForm.bagWeightGms} onChange={(e) => setEnquiryForm((p) => ({ ...p, bagWeightGms: e.target.value }))} className={inp} />
                                     </div>
                                     <div>
                                         <label className={lbl}>Fabric Average</label>
@@ -1898,11 +1898,11 @@ export default function CustomerCrmPage() {
                                     </div>
                                     <div>
                                         <label className={lbl}>Width (Inch)</label>
-                                        <input type="number" min="0" step="0.5" placeholder="e.g. 14" value={enquiryForm.fabricWidthInch} onChange={(e) => setEnquiryForm((p) => ({ ...p, fabricWidthInch: e.target.value }))} className={inp} />
+                                        <input type="number" min="0" step="0.001" placeholder="e.g. 14" value={enquiryForm.fabricWidthInch} onChange={(e) => setEnquiryForm((p) => ({ ...p, fabricWidthInch: e.target.value }))} className={inp} />
                                     </div>
                                     <div>
                                         <label className={lbl}>Length (Inch)</label>
-                                        <input type="number" min="0" step="0.5" placeholder="e.g. 24" value={enquiryForm.fabricLengthInch} onChange={(e) => setEnquiryForm((p) => ({ ...p, fabricLengthInch: e.target.value }))} className={inp} />
+                                        <input type="number" min="0" step="0.001" placeholder="e.g. 24" value={enquiryForm.fabricLengthInch} onChange={(e) => setEnquiryForm((p) => ({ ...p, fabricLengthInch: e.target.value }))} className={inp} />
                                     </div>
                                 </div>
                             </div>
@@ -1916,6 +1916,8 @@ export default function CustomerCrmPage() {
                                         <div className="flex gap-2">
                                             <input 
                                                 type="number" 
+                                                step="0.001"
+                                                min="0.001"
                                                 placeholder="e.g. 10000" 
                                                 value={enquiryForm.orderQuantity || ''} 
                                                 onChange={(e) => setEnquiryForm((p) => ({ ...p, orderQuantity: e.target.value }))} 

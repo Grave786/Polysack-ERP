@@ -470,7 +470,7 @@ export default function DashboardPage() {
                         <span>INDUSTRIAL EXECUTIVE CONTROL CENTER</span>
                     </div>
                     <h1 className="text-2xl font-black text-text-main tracking-tight">
-                        PolySack Enterprise ERP
+                        {(user?.tenant?.companyName || user?.tenant?.name || user?.companyName || 'PP Poly & Paper Products')} <span className="text-primary font-normal text-lg">Enterprise ERP</span>
                     </h1>
                     <p className="text-xs text-text-muted">
                         Real-time shop floor metrics, inventory valuation & order dispatches.

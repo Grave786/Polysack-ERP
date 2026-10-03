@@ -377,6 +377,7 @@ export default function ApprovalsPage() {
                             <option value="All">All Types</option>
                             <option value="NSL">NSL (Sales Lead)</option>
                             <option value="PO">PO (Purchase Order)</option>
+                            <option value="CONTINUATION_WO">Continuation WO</option>
                         </select>
                     </div>
                 </div>
@@ -884,6 +885,68 @@ export default function ApprovalsPage() {
                                     {(viewRecord.referenceId.description || viewRecord.referenceId.remarks) && (
                                         <div className="bg-app-bg p-3 rounded-xl border border-border">
                                             <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Requirement Notes & Specs</span>
+                                            <p className="text-xs text-text-main whitespace-pre-wrap font-sans">
+                                                {viewRecord.referenceId.description || viewRecord.referenceId.remarks}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Continuation WO Reference Details */}
+                            {viewRecord.type === 'CONTINUATION_WO' && viewRecord.referenceId && (
+                                <div className="space-y-3">
+                                    <div className="text-[11px] font-extrabold uppercase tracking-widest text-text-muted border-b border-border pb-1">
+                                        Continuation Work Order Request Details
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg p-3.5 rounded-xl border border-border">
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Original Work Order</span>
+                                            <span className="font-mono font-extrabold text-primary text-sm">
+                                                {viewRecord.referenceId.workOrderNumber || viewRecord.referenceNo}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Customer</span>
+                                            <span className="font-extrabold text-text-main">
+                                                {viewRecord.referenceId.customer?.companyName || viewRecord.referenceId.customer?.name || 'Assigned Customer'}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Finished Good</span>
+                                            <span className="font-bold text-text-main">
+                                                {viewRecord.referenceId.finishedGood?.name || viewRecord.referenceId.finishedGood?.code || 'Finished Good'}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Pending Balance to Produce</span>
+                                            <span className="font-mono font-extrabold text-rose-600 text-sm">
+                                                {Number(viewRecord.referenceId.balanceQuantity || 0).toLocaleString('en-IN')} {viewRecord.referenceId.unit || 'Bags'}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Completed vs Original Target</span>
+                                            <span className="font-mono text-text-main font-semibold">
+                                                {Number(viewRecord.referenceId.completedQuantity || 0).toLocaleString('en-IN')} / {Number(viewRecord.referenceId.targetQuantity || 0).toLocaleString('en-IN')} {viewRecord.referenceId.unit || 'Bags'}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Assigned Machine</span>
+                                            <span className="text-text-main font-semibold">
+                                                {viewRecord.referenceId.assignedMachine?.name || viewRecord.referenceId.assignedMachine?.code || 'None'}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {(viewRecord.referenceId.description || viewRecord.referenceId.remarks) && (
+                                        <div className="bg-app-bg p-3 rounded-xl border border-border">
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Work Order Description & Remarks</span>
                                             <p className="text-xs text-text-main whitespace-pre-wrap font-sans">
                                                 {viewRecord.referenceId.description || viewRecord.referenceId.remarks}
                                             </p>

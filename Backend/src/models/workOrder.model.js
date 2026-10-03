@@ -56,6 +56,16 @@ const WorkOrderStageSchema = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    balingQuantityPcs: {
+        type: Number,
+        default: null,
+        min: 0
+    },
+    balingTotalWeightKg: {
+        type: Number,
+        default: null,
+        min: 0
+    },
     startedAt: {
         type: Date,
         default: null
@@ -63,6 +73,18 @@ const WorkOrderStageSchema = new mongoose.Schema({
     completedAt: {
         type: Date,
         default: null
+    },
+    isInherited: {
+        type: Boolean,
+        default: false
+    },
+    inheritedFrom: {
+        type: String,
+        default: null
+    },
+    inheritedQuantity: {
+        type: Number,
+        default: 0
     }
 }, { _id: false });
 
@@ -89,6 +111,39 @@ const RollSpecificationSchema = new mongoose.Schema({
         trim: true,
         default: ''
     },
+    materialCode: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    grnId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'GRN',
+        default: null
+    },
+    grnNumber: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    poNumber: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    supplierName: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    consumedLength: {
+        type: Number,
+        default: null
+    },
+    consumedWeightKg: {
+        type: Number,
+        default: null
+    },
     remainingMeters: {
         type: Number,
         default: null
@@ -111,13 +166,13 @@ const RollSpecificationSchema = new mongoose.Schema({
     grossWeight: {
         type: Number,
         default: null,
-        min: [0.01, 'Gross Weight must be at least 0.01 Kg'],
+        min: [0.001, 'Gross Weight must be at least 0.001 Kg'],
         max: [10000, 'Gross Weight cannot exceed 10000 Kg']
     },
     netWeight: {
         type: Number,
         default: null,
-        min: [0.01, 'Net Weight must be at least 0.01 Kg'],
+        min: [0.001, 'Net Weight must be at least 0.001 Kg'],
         max: [10000, 'Net Weight cannot exceed 10000 Kg']
     },
     totalQuantityKg: {
@@ -307,12 +362,42 @@ const WorkOrderSchema = new mongoose.Schema({
     targetQuantity: {
         type: Number,
         required: [true, 'Target Quantity is required'],
-        min: [1, 'Target Quantity must be at least 1']
+        min: [0.001, 'Target Quantity must be at least 0.001']
+    },
+    unit: {
+        type: String,
+        enum: ['Bags', 'Pcs', 'Kgs', 'Kg', 'Rolls', 'Units'],
+        default: 'Bags'
     },
     completedQuantity: {
         type: Number,
         default: 0,
         min: 0
+    },
+    balanceQuantity: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    balanceStatus: {
+        type: String,
+        default: 'RESOLVED',
+        enum: ['RESOLVED', 'PENDING', 'CONTINUED', 'PENDING_APPROVAL', 'REJECTED']
+    },
+    parentWorkOrder: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'WorkOrder',
+        default: null
+    },
+    continuationWorkOrder: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'WorkOrder',
+        default: null
+    },
+    continuationApprovalRemarks: {
+        type: String,
+        trim: true,
+        default: ''
     },
     progressPercentage: {
         type: Number,

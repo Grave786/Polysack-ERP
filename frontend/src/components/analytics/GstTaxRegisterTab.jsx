@@ -1,7 +1,8 @@
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { FileText, Receipt, CheckCircle, Percent, RefreshCw, X } from 'lucide-react';
+import { FileText, Receipt, CheckCircle, Percent, RefreshCw, X, Download, Printer } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { generatePdfReport } from '../../utils/pdfExportUtils';
 
 const escapeCsvCell = (val) => {
     if (val === undefined || val === null) return '""';
@@ -198,8 +199,46 @@ const GstTaxRegisterTab = forwardRef(function GstTaxRegisterTab(props, ref) {
         toast.success('GST Tax Register executive audit report exported to CSV!');
     };
 
+    const exportPdf = () => {
+        const todayStr = getTodayDdMmYyyy();
+        const filename = `executive-audit-report-gst-tax-register-${todayStr}.pdf`;
+
+        generatePdfReport({
+            title: 'Sales & GST Tax Register Audit Report',
+            subtitle: `Financial Year: ${selectedFyLabel} | GSTIN: ${companyGstin || 'Not Configured'}`,
+            generatedDate: todayStr,
+            filename,
+            summaryCards: [
+                { label: 'Total Taxable Turnover', value: `₹${Number(summary.totalTaxableTurnover || 0).toLocaleString('en-IN')}`, notes: 'Output sales turnover' },
+                { label: 'Total GST Collected', value: `₹${Number(summary.totalGstCollected || 0).toLocaleString('en-IN')}`, notes: 'CGST + SGST + IGST output' },
+                { label: 'Input Tax Credit (ITC)', value: `₹${Number(summary.inputTaxCredit || 0).toLocaleString('en-IN')}`, notes: 'Purchases & expenses ITC' },
+                { label: 'Net GST Payable / (Credit)', value: `₹${Number(summary.netTaxPayable || 0).toLocaleString('en-IN')}`, notes: summary.netTaxPayable > 0 ? 'Net Tax Payable' : 'Excess ITC Available' }
+            ],
+            sections: [
+                {
+                    title: 'MONTHLY GST TAX BREAKDOWN & FILING STATUS',
+                    headers: ['Return Period', 'Taxable Sales (INR)', 'CGST (INR)', 'SGST (INR)', 'IGST (INR)', 'Total GST (INR)', 'ITC (INR)', 'Net Payable (INR)', 'GSTR-1 Status', 'GSTR-3B Status'],
+                    rows: months.map((m) => [
+                        m.returnPeriod || m.monthName || '-',
+                        `₹${Number(m.taxableSales || 0).toLocaleString('en-IN')}`,
+                        `₹${Number(m.cgst || 0).toLocaleString('en-IN')}`,
+                        `₹${Number(m.sgst || 0).toLocaleString('en-IN')}`,
+                        `₹${Number(m.igst || 0).toLocaleString('en-IN')}`,
+                        `₹${Number(m.totalGstLiability || 0).toLocaleString('en-IN')}`,
+                        `₹${Number(m.itc || 0).toLocaleString('en-IN')}`,
+                        `₹${Number(m.netPayable || 0).toLocaleString('en-IN')}`,
+                        m.gstr1?.status || '-',
+                        m.gstr3b?.status || '-'
+                    ])
+                }
+            ]
+        });
+        toast.success('GST Tax Register audit report exported to PDF!');
+    };
+
     useImperativeHandle(ref, () => ({
-        exportCsv
+        exportCsv,
+        exportPdf
     }));
 
     // Open Filing Modal
@@ -389,6 +428,26 @@ const GstTaxRegisterTab = forwardRef(function GstTaxRegisterTab(props, ref) {
                                 • GSTIN: {companyGstin}
                             </span>
                         ) : null}
+
+                        <button
+                            type="button"
+                            onClick={exportCsv}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-card-bg hover:bg-app-bg text-text-main border border-border font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+                            title="Export GST Tax Register to CSV"
+                        >
+                            <Download size={13} />
+                            <span>Export CSV</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={exportPdf}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+                            title="Export GST Tax Register to PDF"
+                        >
+                            <Printer size={13} />
+                            <span>Export PDF</span>
+                        </button>
                     </div>
                 </div>
 

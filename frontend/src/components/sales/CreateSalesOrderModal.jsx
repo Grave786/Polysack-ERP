@@ -123,16 +123,9 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
         }
     }, [isOpen, isEditMode, initialData]);
 
-    // Handle Expected Delivery Date Change with Live Self-Correction
+    // Handle Expected Delivery Date Change
     const handleDeliveryDueChange = (e) => {
-        const val = e.target.value;
-        const todayStr = getTodayLocalDateString();
-        if (val && val < todayStr) {
-            setDeliveryDue(todayStr);
-            toast.error("Expected delivery date cannot be in the past — reset to today's date.");
-        } else {
-            setDeliveryDue(val);
-        }
+        setDeliveryDue(e.target.value);
     };
 
     // Handle Item Field Changes
@@ -182,12 +175,6 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
     // Save Sales Order
     const handleSubmit = async (e) => {
         e.preventDefault();
-        const todayStr = getTodayLocalDateString();
-        if (deliveryDue && deliveryDue < todayStr) {
-            toast.error('Expected Delivery date cannot be in the past.');
-            setDeliveryDue(todayStr);
-            return;
-        }
 
         if (!isFormValid) {
             toast.error('Please complete all required fields and valid line items.');
@@ -432,7 +419,6 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                             <input
                                 type="date"
                                 required
-                                min={getTodayLocalDateString()}
                                 value={deliveryDue}
                                 onChange={handleDeliveryDueChange}
                                 className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
@@ -511,7 +497,8 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                                 <input
                                                     type="number"
                                                     required
-                                                    min="1"
+                                                    step="0.001"
+                                                    min="0.001"
                                                     placeholder="e.g. 5000"
                                                     value={item.quantity}
                                                     onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}

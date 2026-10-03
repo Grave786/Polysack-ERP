@@ -92,8 +92,8 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
         }
     }, [inspectionType, activeInboundItem, activeOutboundItem]);
 
-    const totalTested = Number(formData.passedQty || 0) + Number(formData.rejectedQty || 0);
-    const isExceedingRemaining = maxAllowedQty !== null && totalTested > maxAllowedQty;
+    const totalTested = Number((Number(formData.passedQty || 0) + Number(formData.rejectedQty || 0)).toFixed(3));
+    const isExceedingRemaining = maxAllowedQty !== null && totalTested > (maxAllowedQty + 0.0001);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -101,14 +101,14 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
         const sampleSizeNum = Number(formData.sampleSize || 1);
         const passedQtyNum = Number(formData.passedQty || 0);
         const rejectedQtyNum = Number(formData.rejectedQty || 0);
-        const sumTested = passedQtyNum + rejectedQtyNum;
+        const sumTested = Number((passedQtyNum + rejectedQtyNum).toFixed(3));
 
         if (sumTested <= 0) {
             toast.error('Passed Qty + Rejected Qty must be greater than 0');
             return;
         }
 
-        if (maxAllowedQty !== null && sumTested > maxAllowedQty) {
+        if (maxAllowedQty !== null && sumTested > (maxAllowedQty + 0.0001)) {
             toast.error(`Cannot inspect ${sumTested} units. Max remaining inspectable quantity is ${maxAllowedQty}.`);
             return;
         }
@@ -350,7 +350,8 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                         <input
                             type="number"
                             required
-                            min="1"
+                            step="0.001"
+                            min="0.001"
                             max={maxAllowedQty || undefined}
                             value={formData.sampleSize}
                             onChange={(e) => setFormData({ ...formData, sampleSize: e.target.value })}
@@ -364,6 +365,7 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                         <input
                             type="number"
                             required
+                            step="0.001"
                             min="0"
                             max={maxAllowedQty || undefined}
                             value={formData.passedQty}
@@ -378,6 +380,7 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                         <input
                             type="number"
                             required
+                            step="0.001"
                             min="0"
                             max={maxAllowedQty || undefined}
                             value={formData.rejectedQty}
@@ -403,6 +406,7 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                         </label>
                         <input
                             type="number"
+                            step="0.001"
                             placeholder="e.g. 250"
                             value={formData.tensileStrength}
                             onChange={(e) => setFormData({ ...formData, tensileStrength: e.target.value })}
@@ -415,6 +419,7 @@ export default function CreateQCInspectionModal({ isOpen, onClose, onSuccess, de
                         </label>
                         <input
                             type="number"
+                            step="0.001"
                             placeholder="e.g. 65"
                             value={formData.gsmTested}
                             onChange={(e) => setFormData({ ...formData, gsmTested: e.target.value })}

@@ -69,24 +69,6 @@ const createPurchaseOrder = async (req, res) => {
             });
         }
 
-        if (expectedDelivery) {
-            const todayStr = (() => {
-                const d = new Date();
-                const year = d.getFullYear();
-                const month = String(d.getMonth() + 1).padStart(2, '0');
-                const day = String(d.getDate()).padStart(2, '0');
-                return `${year}-${month}-${day}`;
-            })();
-
-            const inputDeliveryStr = String(expectedDelivery).split('T')[0];
-            if (inputDeliveryStr < todayStr) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Expected Delivery date cannot be in the past.'
-                });
-            }
-        }
-
         // 2. Validate tenant-ownership of Supplier
         const supplierDoc = await Supplier.findOne({ _id: supplier, tenant: tenantId });
         if (!supplierDoc) {
@@ -167,8 +149,8 @@ const createPurchaseOrder = async (req, res) => {
             tenant: tenantId,
             poNumber,
             supplier,
-            poDate: new Date(),
-            expectedDelivery: expectedDelivery || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+            poDate: poDate ? new Date(poDate) : new Date(),
+            expectedDelivery: expectedDelivery ? new Date(expectedDelivery) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
             items: cleanedItems,
             totalValue: computedTotalValue,
             status: initialStatus,
@@ -226,7 +208,7 @@ const getPurchaseOrders = async (req, res) => {
             });
         }
 
-        const { status, supplier, search, page = 1, limit = 20 } = req.query;
+        const { status, supplier, search, startDate, endDate, page = 1, limit = 20 } = req.query;
 
         const filter = { tenant: tenantId };
 
@@ -242,19 +224,29 @@ const getPurchaseOrders = async (req, res) => {
             filter.poNumber = { $regex: search, $options: 'i' };
         }
 
+        if (startDate || endDate) {
+            filter.poDate = {};
+            if (startDate && startDate.trim()) {
+                filter.poDate.$gte = new Date(`${startDate.trim()}T00:00:00.000+05:30`);
+            }
+            if (endDate && endDate.trim()) {
+                filter.poDate.$lte = new Date(`${endDate.trim()}T23:59:59.999+05:30`);
+            }
+        }
+
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
         const limitNum = Math.max(1, parseInt(limit, 10) || 20);
         const skip = (pageNum - 1) * limitNum;
 
         const [purchaseOrders, total] = await Promise.all([
             PurchaseOrder.find(filter)
-                .populate('supplier', 'name code contactPerson phone email address city gstin')
+                .populate('supplier', 'name code contactPerson phone email address city gstin paymentTerms')
                 .populate('deliveryLocation', 'name code type')
                 .populate({
                     path: 'items.rawMaterial',
-                    select: 'name code uom'
+                    select: 'name code uom materialGrade materialQualityFabric materialQualityBags fabricGrammage fabricAverage fabricSize hsnCode'
                 })
-                .sort({ createdAt: -1 })
+                .sort({ poDate: -1, createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum),
             PurchaseOrder.countDocuments(filter)
@@ -312,9 +304,25 @@ const getPurchaseOrderById = async (req, res) => {
             });
         }
 
+        // Fetch date-wise receipt history (all GRNs created against this PO)
+        const GRN = require('../models/grn.model');
+        const grns = await GRN.find({ purchaseOrder: purchaseOrder._id, tenant: tenantId })
+            .populate({
+                path: 'items.rawMaterial',
+                select: 'name code uom',
+                populate: { path: 'uom', select: 'name symbol' }
+            })
+            .populate('receivingLocation', 'name code type')
+            .populate('receivedBy', 'name email')
+            .sort({ receivedDate: 1, createdAt: 1 })
+            .lean();
+
+        const poObj = purchaseOrder.toObject ? purchaseOrder.toObject() : { ...purchaseOrder };
+        poObj.receiptHistory = grns || [];
+
         return res.status(200).json({
             success: true,
-            data: purchaseOrder
+            data: poObj
         });
     } catch (error) {
         console.error('Error in getPurchaseOrderById:', error);
@@ -649,9 +657,174 @@ const deletePurchaseOrder = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get detailed line-item level Purchase Register with linked GRN inward receipts
+ * @route   GET /api/purchase-orders/purchase-register
+ * @access  Private (PROCUREMENT:READ permission)
+ */
+const getPurchaseRegister = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const { status, supplier, search, startDate, endDate } = req.query;
+        const filter = { tenant: tenantId };
+
+        if (status && status !== 'All' && status !== 'All Statuses') {
+            filter.status = status;
+        }
+
+        if (supplier) {
+            filter.supplier = supplier;
+        }
+
+        if (search) {
+            filter.poNumber = { $regex: search, $options: 'i' };
+        }
+
+        if (startDate || endDate) {
+            filter.poDate = {};
+            if (startDate && startDate.trim()) {
+                filter.poDate.$gte = new Date(`${startDate.trim()}T00:00:00.000+05:30`);
+            }
+            if (endDate && endDate.trim()) {
+                filter.poDate.$lte = new Date(`${endDate.trim()}T23:59:59.999+05:30`);
+            }
+        }
+
+        const GRN = require('../models/grn.model');
+
+        // Fetch all matching POs with populated supplier, deliveryLocation, and rawMaterials
+        const [purchaseOrders, allGrns] = await Promise.all([
+            PurchaseOrder.find(filter)
+                .populate('supplier', 'name code contactPerson phone email address city state gstin paymentTerms')
+                .populate('deliveryLocation', 'name code type')
+                .populate({
+                    path: 'items.rawMaterial',
+                    select: 'name code uom materialGrade materialQualityFabric materialQualityBags fabricGrammage fabricAverage fabricSize hsnCode'
+                })
+                .sort({ poDate: -1, createdAt: -1 })
+                .lean(),
+            GRN.find({ tenant: tenantId })
+                .select('grnNumber purchaseOrder receivedDate items notes')
+                .sort({ receivedDate: -1 })
+                .lean()
+        ]);
+
+        // Map GRNs by PO ID
+        const poGrnMap = new Map();
+        (allGrns || []).forEach((g) => {
+            if (!g || !g.purchaseOrder) return;
+            const poId = String(g.purchaseOrder);
+            if (!poGrnMap.has(poId)) poGrnMap.set(poId, []);
+            poGrnMap.get(poId).push(g);
+        });
+
+        // Flatten to 1 row per Purchase Line Item
+        const lineItems = [];
+        let lineItemIndex = 1;
+
+        for (const po of (purchaseOrders || [])) {
+            const poIdStr = String(po?._id || '');
+            const linkedGrns = poGrnMap.get(poIdStr) || [];
+            const grnNumbers = linkedGrns.map((g) => g?.grnNumber).filter(Boolean).join(', ');
+            const latestGrnDate = linkedGrns[0]?.receivedDate || null;
+
+            const supp = po?.supplier || {};
+            const suppName = supp?.name || supp?.companyName || 'Unknown Supplier';
+            const suppCode = supp?.code || 'N/A';
+            const suppGstin = supp?.gstin || 'N/A';
+            const suppCity = supp?.city || 'N/A';
+            const suppState = supp?.state || 'N/A';
+            const paymentTerms = supp?.paymentTerms || 'N/A';
+            const deliveryLocation = po?.deliveryLocation?.name || 'N/A';
+
+            const items = Array.isArray(po?.items) ? po.items : [];
+
+            for (const item of items) {
+                const rm = item?.rawMaterial || {};
+                const matName = rm?.name || 'Raw Material';
+                const matCode = rm?.code || 'N/A';
+                const rawUom = item?.unit || (typeof rm?.uom === 'object' ? rm?.uom?.name : rm?.uom);
+                const uom = (typeof rawUom === 'string' && !/^[0-9a-fA-F]{24}$/.test(rawUom.trim())) ? rawUom : 'Kg';
+                const orderedQty = Number(item?.orderedQuantity || 0);
+                const receivedQty = Number(item?.receivedQuantity || 0);
+                const pendingQty = Math.max(0, orderedQty - receivedQty);
+                const rate = Number(item?.ratePerUnit || 0);
+                const taxableValue = Number((orderedQty * rate).toFixed(2));
+                const receivedTaxableValue = Number((receivedQty * rate).toFixed(2));
+
+                // GST breakdown (Standard 18% for industrial polymer fabric & masterbatch)
+                const gstRate = 18;
+                const gstAmount = Number(((taxableValue * gstRate) / 100).toFixed(2));
+                const totalValueWithTax = Number((taxableValue + gstAmount).toFixed(2));
+
+                lineItems.push({
+                    id: `${po?._id || 'po'}_${matCode}_${lineItemIndex++}`,
+                    poId: po?._id,
+                    poNumber: po?.poNumber || 'N/A',
+                    poDate: po?.poDate || po?.createdAt || null,
+                    expectedDelivery: po?.expectedDelivery || null,
+                    actualReceivedDate: latestGrnDate,
+                    status: po?.status || 'N/A',
+                    supplierName: suppName,
+                    supplierCode: suppCode,
+                    supplierGstin: suppGstin,
+                    supplierCity: suppCity,
+                    supplierState: suppState,
+                    paymentTerms,
+                    deliveryLocation,
+                    materialName: matName,
+                    materialCode: matCode,
+                    materialGrade: rm?.materialGrade || 'N/A',
+                    qualitySpec: rm?.materialQualityFabric || rm?.materialQualityBags || 'N/A',
+                    grammage: rm?.fabricGrammage ? `${rm.fabricGrammage} GSM` : 'N/A',
+                    sizeSpec: rm?.fabricSize || 'N/A',
+                    hsnCode: rm?.hsnCode || '39012000',
+                    orderedQuantity: orderedQty,
+                    receivedQuantity: receivedQty,
+                    pendingQuantity: pendingQty,
+                    unit: uom,
+                    ratePerUnit: rate,
+                    taxableValue,
+                    receivedTaxableValue,
+                    gstRate,
+                    gstAmount,
+                    totalValueWithTax,
+                    poTotalValue: po?.totalValue || 0,
+                    linkedGrns: grnNumbers || 'N/A',
+                    remarks: po?.notes || po?.approvalRemarks || 'N/A'
+                });
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            count: lineItems.length,
+            totalPOs: (purchaseOrders || []).length,
+            data: lineItems
+        });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+const exportPurchaseRegisterCsv = getPurchaseRegister;
+
 module.exports = {
     createPurchaseOrder,
     getPurchaseOrders,
+    getPurchaseRegister,
+    exportPurchaseRegisterCsv,
     getPurchaseOrderById,
     updatePurchaseOrder,
     updateStatus,

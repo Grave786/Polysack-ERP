@@ -157,42 +157,50 @@ const getStageProductionStatus = async (tenantId, workOrderId, stageIdentifier, 
     let previousStageInfo = null;
 
     if (!isFirstActiveStage && currentStageIndex > 0) {
-        const prevStage = nonSkippedStages[currentStageIndex - 1];
-
-        // Aggregate actual good output logs for the previous stage
-        const prevAggPipeline = [
+        // Aggregate actual good output logs across all stages for this Work Order
+        const allPrevAggPipeline = [
             {
                 $match: {
                     tenant: tenantObjId,
-                    workOrder: woObjId,
-                    $or: [
-                        { stage: prevStage.stageName },
-                        { stageName: prevStage.stageName }
-                    ]
+                    workOrder: woObjId
                 }
             },
             {
                 $group: {
-                    _id: null,
+                    _id: { $ifNull: ['$stage', '$stageName'] },
                     total: { $sum: '$quantity' }
                 }
             }
         ];
 
-        let prevAggQuery = ProductionLog.aggregate(prevAggPipeline);
+        let prevAggQuery = ProductionLog.aggregate(allPrevAggPipeline);
         if (sessionOption.session) prevAggQuery = prevAggQuery.session(sessionOption.session);
         const prevAggResult = await prevAggQuery;
 
-        let prevStageGoodOutput = prevAggResult.length > 0 ? Number(prevAggResult[0].total || 0) : 0;
-        if (prevStageGoodOutput === 0) {
-            prevStageGoodOutput = Number(prevStage.goodOutputQty || prevStage.completedQuantity || 0);
+        const stageOutputMap = {};
+        (prevAggResult || []).forEach((row) => {
+            if (row._id) stageOutputMap[String(row._id).toUpperCase()] = Number(row.total || 0);
+        });
+
+        // The dynamic target for stage k is the cumulative bottleneck (minimum output) across ALL preceding stages 0..k-1
+        let runningTarget = workOrderOriginalTarget;
+        for (let j = 0; j < currentStageIndex; j++) {
+            const pSt = nonSkippedStages[j];
+            const pKey = String(pSt.stageName || '').toUpperCase();
+            let pOutput = stageOutputMap[pKey];
+            if (pOutput === undefined || pOutput === null || (pOutput === 0 && Number(pSt.completedQuantity || pSt.goodOutputQty || 0) > 0)) {
+                pOutput = Number(pSt.goodOutputQty || pSt.completedQuantity || 0);
+            }
+            runningTarget = Math.min(runningTarget, Number(pOutput || 0));
         }
 
-        stageTargetQuantity = prevStageGoodOutput;
+        stageTargetQuantity = runningTarget;
+
+        const immediatePrev = nonSkippedStages[currentStageIndex - 1];
         previousStageInfo = {
-            stageName: prevStage.stageName,
-            sequence: prevStage.sequence,
-            goodOutputQty: prevStageGoodOutput
+            stageName: immediatePrev.stageName,
+            sequence: immediatePrev.sequence,
+            goodOutputQty: runningTarget
         };
     }
 
@@ -280,7 +288,11 @@ const getStageProductionStatus = async (tenantId, workOrderId, stageIdentifier, 
 
     const isFinalStage = targetStage?.sequence === 8 || stageName === 'BALING_PACKING';
     if (isFinalStage) {
-        updateSet.completedQuantity = totalProduced;
+        const effectiveFinalCompleted = Math.min(stageTargetQuantity, totalProduced);
+        updateSet.completedQuantity = effectiveFinalCompleted;
+        const shortfall = Math.max(0, workOrderOriginalTarget - effectiveFinalCompleted);
+        updateSet.balanceQuantity = shortfall;
+        updateSet.balanceStatus = shortfall > 0 ? 'PENDING' : 'RESOLVED';
     }
 
     const updateQuery = WorkOrder.updateOne(
@@ -300,6 +312,7 @@ const getStageProductionStatus = async (tenantId, workOrderId, stageIdentifier, 
         targetQuantity: stageTargetQuantity,
         stageTargetQuantity,
         workOrderOriginalTarget,
+        unit: workOrder.unit || workOrder.jobOrderDetails?.totalOrderQuantityUnit || 'Bags',
         totalProduced,
         remainingQuantity,
         isFirstActiveStage,
@@ -380,7 +393,24 @@ const createProductionLog = async (req, res) => {
             });
         }
 
-        const { operator, date, quantity, shift, remarks, notes } = req.body;
+        const { operator, date, quantity, shift, remarks, notes, netWeight } = req.body;
+        const isBalingStage = targetStage.stageName === 'BALING_PACKING' || targetStage.sequence === 8;
+
+        // Stage-specific requirement for Baling & Packing
+        if (isBalingStage) {
+            if (!shift) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Shift is required for Baling & Packing stage.'
+                });
+            }
+            if (netWeight === undefined || netWeight === null || netWeight === '' || isNaN(Number(netWeight)) || Number(netWeight) <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Net Weight (Kg) is required and must be greater than 0 for Baling & Packing stage.'
+                });
+            }
+        }
 
         // 4. Validate Quantity is a positive number
         const numQty = Number(quantity);
@@ -495,6 +525,10 @@ const createProductionLog = async (req, res) => {
         }
 
         // 10. Create ProductionLog entry
+        const parsedNetWeight = (isBalingStage && netWeight !== undefined && netWeight !== null && netWeight !== '')
+            ? Number(netWeight)
+            : null;
+
         const createdLogs = await ProductionLog.create([{
             tenant: tenantObjId,
             workOrder: workOrder._id,
@@ -505,6 +539,7 @@ const createProductionLog = async (req, res) => {
             date: logDate,
             quantity: numQty,
             shift: shift || null,
+            netWeight: parsedNetWeight,
             remarks: remarks || notes || '',
             notes: notes || remarks || '',
             loggedBy: req.user?._id || req.user?.id,
@@ -751,10 +786,14 @@ const getProductionLogsSummary = async (req, res) => {
                 dateOperatorMatrix[dateStr][opId] = {
                     operatorId: opId,
                     operatorName: opName,
-                    quantity: 0
+                    quantity: 0,
+                    netWeight: 0
                 };
             }
             dateOperatorMatrix[dateStr][opId].quantity += qty;
+            if (log.netWeight) {
+                dateOperatorMatrix[dateStr][opId].netWeight += Number(log.netWeight || 0);
+            }
         });
 
         const sortedDates = Object.keys(dateMap).sort();
@@ -911,8 +950,24 @@ const updateProductionLog = async (req, res) => {
             });
         }
 
-        const { operator, date, quantity, shift, remarks, notes } = req.body;
+        const { operator, date, quantity, shift, remarks, notes, netWeight } = req.body;
         const stageName = log.stage || log.stageName;
+        const isBalingStage = stageName === 'BALING_PACKING' || log.stageSequence === 8;
+
+        if (isBalingStage) {
+            if (shift !== undefined && !shift) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Shift is required for Baling & Packing stage.'
+                });
+            }
+            if (netWeight !== undefined && (netWeight === null || netWeight === '' || isNaN(Number(netWeight)) || Number(netWeight) <= 0)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Net Weight (Kg) is required and must be greater than 0 for Baling & Packing stage.'
+                });
+            }
+        }
 
         try {
             session = await mongoose.startSession();
@@ -998,6 +1053,9 @@ const updateProductionLog = async (req, res) => {
         }
 
         if (shift !== undefined) log.shift = shift || null;
+        if (netWeight !== undefined) {
+            log.netWeight = (netWeight !== null && netWeight !== '' && !isNaN(Number(netWeight))) ? Number(netWeight) : null;
+        }
         if (remarks !== undefined) log.remarks = remarks;
         if (notes !== undefined) log.notes = notes;
 
@@ -1263,7 +1321,8 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
             }
 
             const stageRemaining = Math.max(0, stageTarget - stageTotalProduced);
-            previousStageOutput = stageTotalProduced;
+            // Cap output moving into the next stage to this stage's target (bottleneck)
+            previousStageOutput = Math.min(stageTarget, stageTotalProduced);
 
             stageSummaries.push({
                 stageName: stName,
@@ -1283,12 +1342,70 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
         // Same final stage rule as Analytics Production Yield: sequence 8 or BALING_PACKING or the last non-skipped stage
         const finalStageSummary = stageSummaries.find((s) => s.sequence === 8 || s.stageName === 'BALING_PACKING') || stageSummaries[stageSummaries.length - 1];
         const finalStageName = finalStageSummary?.stageName || 'BALING_PACKING';
-        const finishedGoodsQty = finalStageSummary ? finalStageSummary.totalProduced : (Number(workOrder.completedQuantity) || 0);
+        const rawFinalProduced = finalStageSummary ? finalStageSummary.totalProduced : (Number(workOrder.completedQuantity) || 0);
+        const finalStageTarget = finalStageSummary ? finalStageSummary.targetQuantity : Number(workOrder.targetQuantity || 0);
+        const finishedGoodsQty = Math.min(finalStageTarget, rawFinalProduced);
 
         const operatorsList = Object.values(operatorMap).map((op) => ({
             ...op,
             finishedGoodsQty: op.stages?.[finalStageName] || 0
         }));
+
+        // Build chronological date-wise production timeline across all stages
+        const dateTimelineMap = {};
+        allLogs.forEach((log) => {
+            const rawDate = log.date || log.createdAt;
+            const dateKey = rawDate ? new Date(rawDate).toISOString().split('T')[0] : 'Unknown';
+            const stageKey = (log.stage || log.stageName || 'GENERAL').toUpperCase();
+            const qty = Number(log.quantity || 0);
+
+            const op = log.operator;
+            const opName = op?.name || (log.remarks?.includes('legacy') ? 'Legacy Entry (Auto-migrated)' : 'Unassigned Operator');
+            const opCode = op?.employeeCode || '';
+            const opDisplay = opCode && opCode !== 'LEGACY' ? `${opCode} - ${opName}` : opName;
+
+            if (!dateTimelineMap[dateKey]) {
+                dateTimelineMap[dateKey] = {
+                    date: dateKey,
+                    totalBags: 0,
+                    stagesMap: {},
+                    operatorsSet: new Set()
+                };
+            }
+
+            dateTimelineMap[dateKey].totalBags += qty;
+            if (opDisplay) {
+                dateTimelineMap[dateKey].operatorsSet.add(opDisplay);
+            }
+
+            if (!dateTimelineMap[dateKey].stagesMap[stageKey]) {
+                dateTimelineMap[dateKey].stagesMap[stageKey] = {
+                    stageName: stageKey,
+                    stageLabel: stageKey.replace(/_/g, ' '),
+                    quantity: 0,
+                    operatorsSet: new Set()
+                };
+            }
+
+            dateTimelineMap[dateKey].stagesMap[stageKey].quantity += qty;
+            if (opDisplay) {
+                dateTimelineMap[dateKey].stagesMap[stageKey].operatorsSet.add(opDisplay);
+            }
+        });
+
+        const timeline = Object.values(dateTimelineMap)
+            .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+            .map((item) => ({
+                date: item.date,
+                totalBags: item.totalBags,
+                operators: Array.from(item.operatorsSet),
+                stages: Object.values(item.stagesMap).map((st) => ({
+                    stageName: st.stageName,
+                    stageLabel: st.stageLabel,
+                    quantity: st.quantity,
+                    operators: Array.from(st.operatorsSet)
+                }))
+            }));
 
         return res.status(200).json({
             success: true,
@@ -1297,10 +1414,12 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
                 workOrderNumber: workOrder.workOrderNumber,
                 status: workOrder.status,
                 targetQuantity: Number(workOrder.targetQuantity || 0),
+                unit: workOrder.unit || workOrder.jobOrderDetails?.totalOrderQuantityUnit || 'Bags',
                 finishedGoodsQty,
                 finishedGoodsStageName: finalStageSummary?.stageName || 'FINAL_STAGE',
                 stages: stageSummaries,
                 operators: operatorsList,
+                timeline,
                 hasLegacyStages: legacyStageCount > 0,
                 legacyStageCount
             }

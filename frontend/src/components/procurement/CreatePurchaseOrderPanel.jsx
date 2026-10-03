@@ -89,16 +89,9 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
             .finally(() => setIsLoadingData(false));
     }, [isOpen, editPo]);
 
-    // Handle Expected Delivery Date Change with Live Self-Correction
+    // Handle Expected Delivery Date Change
     const handleExpectedDeliveryChange = (e) => {
-        const val = e.target.value;
-        const todayStr = getTodayLocalDateString();
-        if (val && val < todayStr) {
-            setExpectedDelivery(todayStr);
-            toast.error("Expected delivery date cannot be in the past — reset to today's date.");
-        } else {
-            setExpectedDelivery(val);
-        }
+        setExpectedDelivery(e.target.value);
     };
 
     // Item rows handlers
@@ -270,7 +263,6 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <input
                             type="date"
                             required
-                            min={getTodayLocalDateString()}
                             value={expectedDelivery}
                             onChange={handleExpectedDeliveryChange}
                             className="w-full border border-border rounded-md p-2 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
@@ -356,7 +348,8 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                                         <div className="flex gap-2">
                                             <input
                                                 type="number"
-                                                min="1"
+                                                step="0.001"
+                                                min="0.001"
                                                 required
                                                 value={item.orderedQuantity}
                                                 onChange={(e) => handleItemChange(idx, 'orderedQuantity', e.target.value)}

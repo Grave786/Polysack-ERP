@@ -3,6 +3,7 @@ const router = express.Router();
 const {
     createPurchaseOrder,
     getPurchaseOrders,
+    getPurchaseRegister,
     getPurchaseOrderById,
     updatePurchaseOrder,
     updateStatus,
@@ -12,6 +13,13 @@ const { authenticate, checkPermission, checkTenantModule } = require('../middlew
 
 router.use(authenticate);
 router.use(checkTenantModule('PROCUREMENT'));
+
+/**
+ * @route   GET /api/purchase-orders/purchase-register
+ * @desc    Get detailed line-item level Purchase Register with linked GRN inward receipts
+ * @access  Private (PROCUREMENT:READ)
+ */
+router.get('/purchase-register', authenticate, checkPermission('PROCUREMENT', 'READ'), getPurchaseRegister);
 
 /**
  * @route   POST /api/purchase-orders

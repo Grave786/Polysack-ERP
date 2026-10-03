@@ -1,8 +1,9 @@
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { ResponsiveContainer, BarChart, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Bar } from 'recharts';
-import { DollarSign, TrendingUp, TrendingDown, PieChart, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
+import { DollarSign, TrendingUp, TrendingDown, PieChart, ShieldCheck, Loader2, AlertCircle, Download, Printer } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { generatePdfReport } from '../../utils/pdfExportUtils';
 
 const escapeCsvCell = (val) => {
     if (val === undefined || val === null) return '""';
@@ -133,8 +134,40 @@ const FinancialSummaryChart = forwardRef(function FinancialSummaryChart(props, r
         toast.success('Financial P&L executive audit report exported to CSV!');
     };
 
+    const exportPdf = () => {
+        const todayStr = getTodayDdMmYyyy();
+        const filename = `executive-audit-report-financial-pnl-${todayStr}.pdf`;
+
+        generatePdfReport({
+            title: 'Financial P&L Summary Audit Report',
+            subtitle: `Fiscal Year 2026-27 (${isLiveFromDb ? 'Live Aggregation' : 'Audited Baseline'})`,
+            generatedDate: todayStr,
+            filename,
+            summaryCards: [
+                { label: 'Gross Revenue', value: `₹${Number(totalRev || 0).toLocaleString('en-IN')}`, notes: 'Invoices sum' },
+                { label: 'Operating Expenses (COGS)', value: `₹${Number(totalCost || 0).toLocaleString('en-IN')}`, notes: 'Material purchases' },
+                { label: 'Net EBITDA Profit', value: `₹${Number(netProf || 0).toLocaleString('en-IN')}`, notes: `${marginPct}% Net margin` },
+                { label: 'Audit Status', value: isLiveFromDb ? 'Live DB Aggregated' : 'Audited Baseline', notes: 'Multi-Tenant GST' }
+            ],
+            sections: [
+                {
+                    title: 'FINANCIAL PERFORMANCE TREND BREAKDOWN',
+                    headers: ['Period', 'Gross Revenue (INR)', 'Operational Cost (INR)', 'Net EBITDA Profit (INR)'],
+                    rows: chartData.map((row) => [
+                        row.period || '-',
+                        `₹${Number(row.revenue || 0).toLocaleString('en-IN')}`,
+                        `₹${Number(row.cost || 0).toLocaleString('en-IN')}`,
+                        `₹${Number(row.profit || 0).toLocaleString('en-IN')}`
+                    ])
+                }
+            ]
+        });
+        toast.success('Financial P&L audit report exported to PDF!');
+    };
+
     useImperativeHandle(ref, () => ({
-        exportCsv
+        exportCsv,
+        exportPdf
     }));
 
     return (
@@ -202,7 +235,7 @@ const FinancialSummaryChart = forwardRef(function FinancialSummaryChart(props, r
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                         <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase font-mono border ${
                             isLiveFromDb
                                 ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
@@ -210,6 +243,26 @@ const FinancialSummaryChart = forwardRef(function FinancialSummaryChart(props, r
                         }`}>
                             • {isLiveFromDb ? 'MongoDB Pipeline Aggregation' : 'Database Financial Ledger'}
                         </span>
+
+                        <button
+                            type="button"
+                            onClick={exportCsv}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-card-bg hover:bg-app-bg text-text-main border border-border font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+                            title="Export Financial P&L to CSV"
+                        >
+                            <Download size={13} />
+                            <span>Export CSV</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={exportPdf}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+                            title="Export Financial P&L to PDF"
+                        >
+                            <Printer size={13} />
+                            <span>Export PDF</span>
+                        </button>
                     </div>
                 </div>
 

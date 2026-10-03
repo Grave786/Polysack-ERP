@@ -123,6 +123,15 @@ const GrnSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: [true, 'Received by user is required']
+    },
+    lastEditedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
+    lastEditedAt: {
+        type: Date,
+        default: null
     }
 }, { timestamps: true });
 

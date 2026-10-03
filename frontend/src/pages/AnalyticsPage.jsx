@@ -1,14 +1,15 @@
 import { useState, useRef } from 'react';
-import { Download, BarChart2, Activity, Package, Receipt, Users } from 'lucide-react';
+import { Download, Printer, BarChart2, Activity, Package, Receipt, Users, FileSpreadsheet } from 'lucide-react';
 import FinancialSummaryChart from '../components/analytics/FinancialSummaryChart';
 import ProductionYieldTab from '../components/analytics/ProductionYieldTab';
 import OperatorProductivityTab from '../components/analytics/OperatorProductivityTab';
 import InventoryValuationTab from '../components/analytics/InventoryValuationTab';
 import GstTaxRegisterTab from '../components/analytics/GstTaxRegisterTab';
+import MonthlyBusinessReportTab from '../components/analytics/MonthlyBusinessReportTab';
 import toast from 'react-hot-toast';
 
 export default function AnalyticsPage() {
-    const [activeTab, setActiveTab] = useState('yield');
+    const [activeTab, setActiveTab] = useState('monthly-report');
     const tabRef = useRef(null);
 
     const handleExportAuditReport = () => {
@@ -19,7 +20,16 @@ export default function AnalyticsPage() {
         }
     };
 
+    const handleExportAuditReportPdf = () => {
+        if (tabRef.current?.exportPdf) {
+            tabRef.current.exportPdf();
+        } else {
+            toast.error('PDF Export is currently unavailable for this tab.');
+        }
+    };
+
     const tabs = [
+        { id: 'monthly-report', label: 'Monthly Business Report', icon: FileSpreadsheet },
         { id: 'pnl', label: 'Financial P&L Summary', icon: BarChart2 },
         { id: 'yield', label: 'Production Yield & Scrap', icon: Activity },
         { id: 'operator-productivity', label: 'Operator Productivity', icon: Users },
@@ -40,16 +50,28 @@ export default function AnalyticsPage() {
                     </p>
                 </div>
 
-                {/* Primary Action Button (Export Executive Audit Report) */}
-                <button
-                    type="button"
-                    onClick={handleExportAuditReport}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer shrink-0"
-                    title="Export full executive audit report in CSV format"
-                >
-                    <Download size={16} />
-                    <span>Export Executive Audit Report (CSV)</span>
-                </button>
+                {/* Primary Action Buttons (Export CSV & Export PDF) */}
+                <div className="flex items-center gap-2 flex-wrap shrink-0">
+                    <button
+                        type="button"
+                        onClick={handleExportAuditReport}
+                        className="flex items-center gap-1.5 px-3.5 py-2.5 bg-card-bg hover:bg-app-bg text-text-main border border-border font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+                        title="Export full executive audit report in CSV format"
+                    >
+                        <Download size={15} />
+                        <span>Export Report (CSV)</span>
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={handleExportAuditReportPdf}
+                        className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
+                        title="Export full executive audit report in PDF format"
+                    >
+                        <Printer size={15} />
+                        <span>Export Report (PDF)</span>
+                    </button>
+                </div>
             </div>
 
             {/* Sub-Navigation Tabs Bar */}
@@ -78,6 +100,7 @@ export default function AnalyticsPage() {
 
             {/* Active Tab Component Render */}
             <div className="pt-2">
+                {activeTab === 'monthly-report' && <MonthlyBusinessReportTab ref={tabRef} />}
                 {activeTab === 'pnl' && <FinancialSummaryChart ref={tabRef} />}
                 {activeTab === 'yield' && <ProductionYieldTab ref={tabRef} />}
                 {activeTab === 'operator-productivity' && <OperatorProductivityTab ref={tabRef} />}

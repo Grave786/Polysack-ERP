@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../../store/authStore';
+import { isTenantAdmin } from '../../utils/permissionUtils';
 
 /**
  * Format IST Date for display (e.g., "30 Sep 2026") without toISOString() timezone shift
@@ -88,6 +90,7 @@ export default function OperatorWiseProductionTracker({
     }, [workOrder, selectedStageName]);
 
     const currentStageName = activeStage?.stageName || selectedStageName || 'TAPE_EXTRUSION';
+    const isBalingPackingStage = currentStageName === 'BALING_PACKING' || activeStage?.sequence === 8;
 
     const [summaryData, setSummaryData] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -105,9 +108,13 @@ export default function OperatorWiseProductionTracker({
         date: getIstTodayString(),
         quantity: '',
         shift: '',
+        netWeight: '',
         remarks: ''
     });
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const user = useAuthStore((state) => state.user);
+    const isAdmin = isTenantAdmin(user);
 
     // Work order status checks
     const woStatus = String(workOrder?.status || summaryData?.workOrderStatus || '').toUpperCase();
@@ -155,7 +162,7 @@ export default function OperatorWiseProductionTracker({
     const isExceedingPreviousStage = summaryData?.isExceedingPreviousStage ?? false;
 
     const totalProduced = Number(summaryData?.totalProduced ?? 0);
-    const remainingQty = Math.max(0, stageTargetQty - totalProduced);
+    const remainingQty = Math.max(0, Math.round((stageTargetQty - totalProduced) * 1000) / 1000);
     const hasNoTarget = stageTargetQty === 0 || summaryData?.hasNoTarget;
     const pct = stageTargetQty > 0 ? Math.min(100, Math.round((totalProduced / stageTargetQty) * 100)) : 0;
 
@@ -181,13 +188,13 @@ export default function OperatorWiseProductionTracker({
         if (hasNoTarget) return 0;
         if (editingLog) {
             const currentEntryQty = Number(editingLog.quantity || 0);
-            return remainingQty + currentEntryQty;
+            return Math.round((remainingQty + currentEntryQty) * 1000) / 1000;
         }
         return remainingQty;
     }, [remainingQty, editingLog, hasNoTarget]);
 
     const enteredQtyNum = Number(formData.quantity || 0);
-    const isOverRemaining = !hasNoTarget && enteredQtyNum > maxAllowedForForm;
+    const isOverRemaining = !hasNoTarget && enteredQtyNum > (maxAllowedForForm + 0.0001);
 
     // Open Modal for Create (always fetch fresh totals)
     const handleOpenCreateModal = async () => {
@@ -219,6 +226,7 @@ export default function OperatorWiseProductionTracker({
             date: getIstTodayString(),
             quantity: '',
             shift: '',
+            netWeight: '',
             remarks: ''
         });
         setEditingLog(null);
@@ -239,6 +247,7 @@ export default function OperatorWiseProductionTracker({
             date: log.date ? (typeof log.date === 'string' && log.date.includes('T') ? log.date.split('T')[0] : getIstDateString(log.date)) : getIstTodayString(),
             quantity: log.quantity || '',
             shift: log.shift?._id || log.shift || '',
+            netWeight: log.netWeight !== undefined && log.netWeight !== null ? String(log.netWeight) : '',
             remarks: log.remarks || log.notes || ''
         });
         setIsLogModalOpen(true);
@@ -265,13 +274,25 @@ export default function OperatorWiseProductionTracker({
             return;
         }
 
-        if (numQty > maxAllowedForForm) {
+        if (isBalingPackingStage) {
+            if (!formData.shift) {
+                toast.error('Shift is required for Baling & Packing stage.');
+                return;
+            }
+            const numNetWeight = Number(formData.netWeight);
+            if (isNaN(numNetWeight) || numNetWeight <= 0) {
+                toast.error('Please enter a valid Net Weight (Kg) greater than 0.');
+                return;
+            }
+        }
+
+        if (numQty > (maxAllowedForForm + 0.0001)) {
             const limitDesc = isFirstActiveStage
                 ? 'Work Order target'
                 : `available input from ${previousStage?.stageName?.replace(/_/g, ' ') || 'previous stage'}`;
             toast.error(maxAllowedForForm === 0
                 ? `Only 0 Bags remaining for this stage; ${limitDesc} already achieved.`
-                : `Only ${maxAllowedForForm.toLocaleString('en-IN')} Bags remaining from ${limitDesc}. Reduce the quantity.`);
+                : `Only ${maxAllowedForForm.toLocaleString('en-IN', { maximumFractionDigits: 3 })} Bags remaining from ${limitDesc}. Reduce the quantity.`);
             return;
         }
 
@@ -288,6 +309,7 @@ export default function OperatorWiseProductionTracker({
                 date: formData.date,
                 quantity: numQty,
                 shift: formData.shift || null,
+                netWeight: isBalingPackingStage && formData.netWeight !== '' ? Number(formData.netWeight) : null,
                 remarks: formData.remarks
             };
 
@@ -362,14 +384,14 @@ export default function OperatorWiseProductionTracker({
         return matrix.map((m) => m.date).sort();
     }, [matrix]);
 
-    // Build map for cell lookups: `date_operatorId` -> quantity
+    // Build map for cell lookups: `date_operatorId` -> entry object
     const cellMap = useMemo(() => {
         const map = {};
         matrix.forEach((m) => {
             const dateStr = m.date;
             (m.entries || []).forEach((entry) => {
                 const key = `${dateStr}_${entry.operatorId}`;
-                map[key] = entry.quantity;
+                map[key] = entry;
             });
         });
         return map;
@@ -502,12 +524,12 @@ export default function OperatorWiseProductionTracker({
                                 Stage Target / Available Input
                             </span>
                             <span className="text-[10px] bg-app-bg px-2 py-0.5 rounded border border-border font-mono text-text-muted">
-                                WO: {workOrderOriginalTarget.toLocaleString('en-IN')}
+                                WO: {workOrderOriginalTarget.toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                             </span>
                         </div>
                         <div className="mt-1 flex items-baseline gap-1.5">
                             <span className="text-xl font-bold font-mono text-text-main">
-                                {stageTargetQty.toLocaleString('en-IN')}
+                                {stageTargetQty.toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                             </span>
                             <span className="text-xs text-text-muted">Bags</span>
                         </div>
@@ -532,7 +554,7 @@ export default function OperatorWiseProductionTracker({
                         </div>
                         <div className="mt-1 flex items-baseline gap-1.5">
                             <span className="text-xl font-bold font-mono text-primary">
-                                {totalProduced.toLocaleString('en-IN')}
+                                {totalProduced.toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                             </span>
                             <span className="text-xs text-text-muted">Bags</span>
                         </div>
@@ -552,7 +574,7 @@ export default function OperatorWiseProductionTracker({
                         </span>
                         <div className="mt-1 flex items-baseline gap-1.5">
                             <span className={`text-xl font-bold font-mono ${remainingQty === 0 && stageTargetQty > 0 ? 'text-emerald-600' : 'text-text-main'}`}>
-                                {remainingQty.toLocaleString('en-IN')}
+                                {remainingQty.toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                             </span>
                             <span className="text-xs text-text-muted">Bags</span>
                         </div>
@@ -635,12 +657,23 @@ export default function OperatorWiseProductionTracker({
                                             </td>
                                             {distinctDates.map((dateStr) => {
                                                 const key = `${dateStr}_${op.operatorId}`;
-                                                const qty = cellMap[key];
+                                                const cellEntry = cellMap[key];
+                                                const qty = typeof cellEntry === 'object' && cellEntry !== null ? cellEntry.quantity : cellEntry;
+                                                const netWt = typeof cellEntry === 'object' && cellEntry !== null ? cellEntry.netWeight : null;
                                                 return (
-                                                    <td key={dateStr} className="px-3.5 py-2.5 text-center font-mono text-xs">
+                                                    <td
+                                                        key={dateStr}
+                                                        className="px-3.5 py-2.5 text-center font-mono text-xs"
+                                                        title={isBalingPackingStage && netWt > 0 ? `Net Weight: ${Number(netWt).toLocaleString('en-IN', { maximumFractionDigits: 3 })} Kg` : undefined}
+                                                    >
                                                         {qty !== undefined && qty !== null ? (
-                                                            <span className="font-bold text-text-main bg-primary/10 px-2 py-0.5 rounded">
-                                                                {Number(qty).toLocaleString('en-IN')}
+                                                            <span className="font-bold text-text-main bg-primary/10 px-2 py-0.5 rounded inline-flex flex-col items-center">
+                                                                <span>{Number(qty).toLocaleString('en-IN')}</span>
+                                                                {isBalingPackingStage && netWt > 0 && (
+                                                                    <span className="text-[9px] text-text-muted font-normal">
+                                                                        {Number(netWt).toLocaleString('en-IN', { maximumFractionDigits: 1 })} kg
+                                                                    </span>
+                                                                )}
                                                             </span>
                                                         ) : (
                                                             <span className="text-text-muted/40 font-normal">—</span>
@@ -649,7 +682,7 @@ export default function OperatorWiseProductionTracker({
                                                 );
                                             })}
                                             <td className="px-3.5 py-2.5 text-right font-mono font-extrabold text-primary border-l border-border bg-app-bg/30">
-                                                {Number(op.total).toLocaleString('en-IN')}
+                                                {Number(op.total).toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                                             </td>
                                         </tr>
                                     );
@@ -666,12 +699,12 @@ export default function OperatorWiseProductionTracker({
                                         const dayTotal = daySummary?.total || 0;
                                         return (
                                             <td key={dateStr} className="px-3.5 py-2.5 text-center font-mono font-bold text-text-main">
-                                                {Number(dayTotal).toLocaleString('en-IN')}
+                                                {Number(dayTotal).toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                                             </td>
                                         );
                                     })}
                                     <td className="px-3.5 py-2.5 text-right font-mono font-extrabold text-base text-primary border-l border-border bg-primary/10">
-                                        {totalProduced.toLocaleString('en-IN')}
+                                        {totalProduced.toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                                     </td>
                                 </tr>
                             </tfoot>
@@ -699,11 +732,12 @@ export default function OperatorWiseProductionTracker({
                                 <tr>
                                     <th className="px-3 py-2">Date (IST)</th>
                                     <th className="px-3 py-2">Operator</th>
-                                    <th className="px-3 py-2 text-right">Quantity</th>
+                                    <th className="px-3 py-2 text-right">{isBalingPackingStage ? 'Pcs / Qty' : 'Quantity'}</th>
+                                    {isBalingPackingStage && <th className="px-3 py-2 text-right">Net Wt (Kg)</th>}
                                     <th className="px-3 py-2">Shift</th>
                                     <th className="px-3 py-2">Notes / Remarks</th>
                                     <th className="px-3 py-2">Logged By</th>
-                                    {!readOnly && !isCancelledOrRejected && <th className="px-3 py-2 text-center">Actions</th>}
+                                    {!readOnly && !isCancelledOrRejected && isAdmin && <th className="px-3 py-2 text-center">Actions</th>}
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-border bg-card-bg">
@@ -723,8 +757,13 @@ export default function OperatorWiseProductionTracker({
                                                 {opName}
                                             </td>
                                             <td className="px-3 py-2 text-right font-mono font-bold text-text-main">
-                                                {Number(log.quantity || 0).toLocaleString('en-IN')}
+                                                {Number(log.quantity || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                                             </td>
+                                            {isBalingPackingStage && (
+                                                <td className="px-3 py-2 text-right font-mono font-semibold text-text-main">
+                                                    {log.netWeight != null ? `${Number(log.netWeight).toLocaleString('en-IN', { maximumFractionDigits: 3 })} Kg` : '-'}
+                                                </td>
+                                            )}
                                             <td className="px-3 py-2 text-text-muted">
                                                 {shiftName}
                                             </td>
@@ -734,14 +773,14 @@ export default function OperatorWiseProductionTracker({
                                             <td className="px-3 py-2 text-text-muted text-[11px]">
                                                 {loggedByName}
                                             </td>
-                                            {!readOnly && !isCancelledOrRejected && (
+                                            {!readOnly && !isCancelledOrRejected && isAdmin && (
                                                 <td className="px-3 py-2 text-center">
                                                     <div className="flex items-center justify-center gap-2">
                                                         <button
                                                             type="button"
                                                             onClick={() => handleOpenEditModal(log)}
-                                                            className="text-gray-500 hover:text-blue-600 transition-colors cursor-pointer"
-                                                            title="Edit Log"
+                                                            className="text-gray-500 hover:text-amber-600 transition-colors cursor-pointer"
+                                                            title="Edit Log (Tenant Admin Only)"
                                                         >
                                                             <Edit3 size={13} />
                                                         </button>
@@ -749,7 +788,7 @@ export default function OperatorWiseProductionTracker({
                                                             type="button"
                                                             onClick={() => setDeletingLogId(log._id)}
                                                             className="text-gray-500 hover:text-rose-600 transition-colors cursor-pointer"
-                                                            title="Delete Log"
+                                                            title="Delete Log (Tenant Admin Only)"
                                                         >
                                                             <Trash2 size={13} />
                                                         </button>
@@ -832,19 +871,19 @@ export default function OperatorWiseProductionTracker({
                             <div>
                                 <div className="flex items-center justify-between mb-1">
                                     <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted">
-                                        Quantity Produced (Bags) *
+                                        {isBalingPackingStage ? 'Number of Pcs (Quantity) *' : 'Quantity Produced (Bags) *'}
                                     </label>
                                     <span className={`text-[11px] font-mono font-bold ${maxAllowedForForm === 0 ? 'text-rose-500' : 'text-primary'}`}>
-                                        Remaining: {maxAllowedForForm.toLocaleString('en-IN')} Bags
+                                        Remaining: {maxAllowedForForm.toLocaleString('en-IN', { maximumFractionDigits: 3 })} {isBalingPackingStage ? 'Pcs' : 'Bags'}
                                     </span>
                                 </div>
                                 <input
                                     type="number"
-                                    min="1"
+                                    min="0.001"
                                     max={maxAllowedForForm}
-                                    step="1"
+                                    step="0.001"
                                     required
-                                    placeholder={`Max ${maxAllowedForForm.toLocaleString('en-IN')} bags`}
+                                    placeholder={`Max ${maxAllowedForForm.toLocaleString('en-IN', { maximumFractionDigits: 3 })} ${isBalingPackingStage ? 'pcs' : 'bags'}`}
                                     value={formData.quantity}
                                     onChange={(e) => setFormData((p) => ({ ...p, quantity: e.target.value }))}
                                     className={`w-full text-xs font-mono font-bold border rounded-lg p-2 bg-app-bg text-text-main focus:outline-none ${
@@ -855,28 +894,50 @@ export default function OperatorWiseProductionTracker({
                                 />
                                 <span className="text-[10px] text-text-muted mt-1 block">
                                     {isFirstActiveStage
-                                        ? `Cap enforced by Work Order target (${workOrderOriginalTarget.toLocaleString('en-IN')} Bags)`
-                                        : `Cap enforced by ${previousStage?.stageName?.replace(/_/g, ' ') || 'previous stage'} output (${stageTargetQty.toLocaleString('en-IN')} Bags available)`}
+                                        ? `Cap enforced by Work Order target (${workOrderOriginalTarget.toLocaleString('en-IN', { maximumFractionDigits: 3 })} Bags)`
+                                        : `Cap enforced by ${previousStage?.stageName?.replace(/_/g, ' ') || 'previous stage'} output (${stageTargetQty.toLocaleString('en-IN', { maximumFractionDigits: 3 })} Bags available)`}
                                 </span>
                                 {isOverRemaining && (
                                     <p className="text-[11px] font-bold text-rose-500 mt-1 flex items-center gap-1">
                                         <AlertTriangle size={12} />
-                                        <span>Entered quantity exceeds the remaining allowance ({maxAllowedForForm.toLocaleString('en-IN')} Bags).</span>
+                                        <span>Entered quantity exceeds the remaining allowance ({maxAllowedForForm.toLocaleString('en-IN', { maximumFractionDigits: 3 })} {isBalingPackingStage ? 'Pcs' : 'Bags'}).</span>
                                     </p>
                                 )}
                             </div>
 
-                            {/* Shift (Optional) */}
+                            {/* Net Weight (Kg) - Required ONLY for Baling & Packing stage */}
+                            {isBalingPackingStage && (
+                                <div>
+                                    <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-1">
+                                        Net Weight (Kg) <span className="text-rose-500">*</span>
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="0.001"
+                                        min="0.001"
+                                        required
+                                        placeholder="e.g. 250.500"
+                                        value={formData.netWeight}
+                                        onChange={(e) => setFormData((p) => ({ ...p, netWeight: e.target.value }))}
+                                        className="w-full text-xs font-mono font-bold border border-border rounded-lg p-2 bg-app-bg text-text-main focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+                            )}
+
+                            {/* Shift (Required for Baling & Packing, Optional for other stages) */}
                             <div>
                                 <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-1">
-                                    Shift (Optional)
+                                    Shift {isBalingPackingStage ? <span className="text-rose-500">*</span> : '(Optional)'}
                                 </label>
                                 <select
+                                    required={isBalingPackingStage}
                                     value={formData.shift}
                                     onChange={(e) => setFormData((p) => ({ ...p, shift: e.target.value }))}
                                     className="w-full text-xs font-semibold border border-border rounded-lg p-2 bg-app-bg text-text-main focus:outline-none focus:border-primary"
                                 >
-                                    <option value="">None / General Shift</option>
+                                    <option value="" disabled={isBalingPackingStage}>
+                                        {isBalingPackingStage ? 'Select Shift *' : 'None / General Shift'}
+                                    </option>
                                     {shiftsList.map((s) => (
                                         <option key={s._id} value={s._id}>
                                             {s.name || s.shiftCode} {s.startTime && s.endTime ? `(${s.startTime} - ${s.endTime})` : ''}
@@ -910,7 +971,14 @@ export default function OperatorWiseProductionTracker({
                                 </button>
                                 <button
                                     type="submit"
-                                    disabled={isSubmitting || isOverRemaining || maxAllowedForForm <= 0 || !formData.quantity || Number(formData.quantity) <= 0}
+                                    disabled={
+                                        isSubmitting ||
+                                        isOverRemaining ||
+                                        maxAllowedForForm <= 0 ||
+                                        !formData.quantity ||
+                                        Number(formData.quantity) <= 0 ||
+                                        (isBalingPackingStage && (!formData.shift || !formData.netWeight || Number(formData.netWeight) <= 0))
+                                    }
                                     className="px-4 py-1.5 text-xs font-bold text-sidebar-bg bg-primary hover:bg-primary-hover rounded-lg transition-all shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                                 >
                                     {isSubmitting ? 'Saving...' : editingLog ? 'Update Entry' : 'Save Production Log'}

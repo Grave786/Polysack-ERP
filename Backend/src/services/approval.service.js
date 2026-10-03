@@ -79,6 +79,28 @@ const approvalRegistry = {
                 await PurchaseOrder.updateOne(query, update);
             }
         }
+    },
+    CONTINUATION_WO: {
+        onApprove: async (approval) => {
+            const { createContinuationWorkOrderCore } = require('../controllers/workOrder.controller');
+            const WorkOrder = require('../models/workOrder.model');
+            const tenantId = String(approval.tenant);
+            const parentWoId = String(approval.referenceId);
+            // Create the continuation WO — this is the ONLY place it is ever actually created
+            await createContinuationWorkOrderCore(parentWoId, tenantId, null);
+        },
+        onReject: async (approval) => {
+            const WorkOrder = require('../models/workOrder.model');
+            await WorkOrder.updateOne(
+                { _id: approval.referenceId, tenant: approval.tenant },
+                {
+                    $set: {
+                        balanceStatus: 'REJECTED',
+                        continuationApprovalRemarks: approval.remarks || 'Continuation rejected by Tenant Admin'
+                    }
+                }
+            );
+        }
     }
 };
 
@@ -215,6 +237,90 @@ const createPoApprovalRequest = async (poDoc, creatorUser) => {
     } catch (err) {
         console.error('[Approval Service] Error creating PO approval request:', err.message);
         return null;
+    }
+};
+
+/**
+ * Create or retrieve an approval request for a Continuation Work Order.
+ * Called by resumeBalanceProduction; does NOT create the continuation WO itself.
+ */
+const createContinuationWoApprovalRequest = async (workOrderDoc, creatorUser, pendingBalance) => {
+    try {
+        if (!workOrderDoc || !workOrderDoc.tenant) return null;
+        const tenantId = String(workOrderDoc.tenant);
+
+        // Idempotent: return existing Pending approval if already created
+        const existing = await Approval.findOne({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            type: 'CONTINUATION_WO',
+            referenceId: workOrderDoc._id,
+            status: 'Pending'
+        });
+        if (existing) return existing;
+
+        const fgName = workOrderDoc.finishedGood?.name || workOrderDoc.finishedGood?.code || 'Finished Good';
+        const custName = workOrderDoc.customer?.companyName || workOrderDoc.customer?.name || 'Customer';
+        const woUnit = workOrderDoc.unit || 'Bags';
+        const summary = `${custName} | ${pendingBalance.toLocaleString('en-IN')} ${woUnit} balance from ${workOrderDoc.workOrderNumber}`;
+
+        const approvalNo = await Approval.generateNextApprovalNo(tenantId);
+        const requestedBy = creatorUser?._id || creatorUser?.id;
+
+        let validRequester = requestedBy;
+        if (!validRequester) {
+            const adminUser = await User.findOne({ tenant: tenantId, isActive: true }).sort({ createdAt: 1 }).lean();
+            validRequester = adminUser?._id;
+        }
+
+        const approval = await Approval.create({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            approvalNo,
+            type: 'CONTINUATION_WO',
+            referenceModel: 'WorkOrder',
+            referenceId: workOrderDoc._id,
+            referenceNo: workOrderDoc.workOrderNumber,
+            title: `Continuation WO Approval: ${workOrderDoc.workOrderNumber}`,
+            summary,
+            requestedBy: validRequester,
+            status: 'Pending',
+            reminderCount: 0,
+            nextReminderAt: new Date(Date.now() + REMINDER_INTERVAL_HOURS * 60 * 60 * 1000)
+        });
+
+        await notifyApprovers(tenantId, approval);
+        return approval;
+    } catch (err) {
+        console.error('[Approval Service] Error creating Continuation WO approval request:', err.message);
+        return null;
+    }
+};
+
+/**
+ * Idempotent: ensure any WO in PENDING_APPROVAL state has a live Pending Approval record.
+ */
+const syncPendingContinuationWoApprovals = async (tenantId) => {
+    try {
+        if (!tenantId) return;
+        const WorkOrder = require('../models/workOrder.model');
+
+        const pendingWOs = await WorkOrder.find({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            balanceStatus: 'PENDING_APPROVAL'
+        }).lean();
+
+        for (const wo of pendingWOs) {
+            const hasPendingApproval = await Approval.findOne({
+                tenant: new mongoose.Types.ObjectId(tenantId),
+                type: 'CONTINUATION_WO',
+                referenceId: wo._id,
+                status: 'Pending'
+            });
+            if (!hasPendingApproval) {
+                await createContinuationWoApprovalRequest(wo, null, wo.balanceQuantity || 0);
+            }
+        }
+    } catch (err) {
+        console.error('[Approval Service] Error syncing pending Continuation WO approvals:', err.message);
     }
 };
 
@@ -392,7 +498,9 @@ module.exports = {
     registerApprovalHandler,
     getApprovalHandler,
     createPoApprovalRequest,
+    createContinuationWoApprovalRequest,
     syncPendingPurchaseOrderApprovals,
+    syncPendingContinuationWoApprovals,
     notifyApprovers,
     notifyRequesterDecision,
     markApprovalNotificationsRead,

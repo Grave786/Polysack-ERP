@@ -108,6 +108,15 @@ export function useResourceApi(resourcePath, initialParams = {}, extraParams = {
         setPage(1);
     }, [resourcePath]);
 
+    // Reset page to 1 whenever extraParamsKey changes (e.g. date filter changes)
+    const prevExtraParamsKeyRef = useRef(extraParamsKey);
+    useEffect(() => {
+        if (prevExtraParamsKeyRef.current !== extraParamsKey) {
+            prevExtraParamsKeyRef.current = extraParamsKey;
+            setPage(1);
+        }
+    }, [extraParamsKey]);
+
     useEffect(() => {
         fetchData();
     }, [fetchData]);

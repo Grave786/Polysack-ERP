@@ -809,9 +809,13 @@ const getDispatches = async (req, res) => {
             });
         }
 
-        const { salesOrder, invoice, sourceType, deliveryStatus, search, page = 1, limit = 20 } = req.query;
+        const { salesOrder, invoice, sourceType, deliveryStatus, search, startDate, endDate, page = 1, limit = 20 } = req.query;
 
-        const filter = { tenant: tenantId };
+        const tenantObjId = mongoose.Types.ObjectId.isValid(tenantId)
+            ? new mongoose.Types.ObjectId(tenantId)
+            : tenantId;
+
+        const filter = { tenant: tenantObjId };
 
         if (salesOrder) filter.salesOrder = salesOrder;
         if (invoice) filter.invoice = invoice;
@@ -820,6 +824,17 @@ const getDispatches = async (req, res) => {
         const resolvedDeliveryStatus = deliveryStatus || req.query.status;
         if (resolvedDeliveryStatus && resolvedDeliveryStatus !== 'All' && resolvedDeliveryStatus !== 'All Statuses') {
             filter.deliveryStatus = resolvedDeliveryStatus;
+        }
+
+        // IST date boundaries for dispatchDate
+        if (startDate || endDate) {
+            filter.dispatchDate = {};
+            if (startDate && startDate.trim()) {
+                filter.dispatchDate.$gte = new Date(`${startDate.trim()}T00:00:00.000+05:30`);
+            }
+            if (endDate && endDate.trim()) {
+                filter.dispatchDate.$lte = new Date(`${endDate.trim()}T23:59:59.999+05:30`);
+            }
         }
 
         if (search) {
@@ -838,26 +853,26 @@ const getDispatches = async (req, res) => {
             Dispatch.find(filter)
                 .populate({
                     path: 'salesOrder',
-                    select: 'soNumber status customer totalValue',
+                    select: 'soNumber status customer totalValue orderDate deliveryDue',
                     populate: {
                         path: 'customer',
-                        select: 'companyName code contactPerson phone'
+                        select: 'companyName code contactPerson phone address city state gstin'
                     }
                 })
                 .populate({
                     path: 'invoice',
-                    select: 'invoiceNumber customer walkInCustomer grandTotal paymentStatus paymentMode dueAmount',
+                    select: 'invoiceNumber customer walkInCustomer grandTotal paymentStatus paymentMode dueAmount invoiceDate',
                     populate: {
                         path: 'customer',
-                        select: 'companyName code contactPerson phone'
+                        select: 'companyName code contactPerson phone address city state gstin'
                     }
                 })
                 .populate('dispatchLocation', 'name code type')
-                .populate('items.finishedGood', 'name code uom')
+                .populate('items.finishedGood', 'name code uom bagShape dimensions dimensionUnit fabricGSM')
                 .populate('dispatchedBy', 'name email')
                 .populate('pod.uploadedBy', 'name email')
                 .populate('pod.approvedBy', 'name email')
-                .sort({ createdAt: -1 })
+                .sort({ dispatchDate: -1, createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum),
             Dispatch.countDocuments(filter)
@@ -866,7 +881,7 @@ const getDispatches = async (req, res) => {
         // Attach linked invoice payment status to each sales-order-based dispatch
         const Invoice = require('../models/invoice.model');
         const soIds = dispatches.map((d) => d.salesOrder?._id || d.salesOrder).filter(Boolean);
-        const soInvoices = await Invoice.find({ salesOrder: { $in: soIds }, tenant: tenantId })
+        const soInvoices = await Invoice.find({ salesOrder: { $in: soIds }, tenant: tenantObjId })
             .select('invoiceNumber paymentStatus dueAmount grandTotal paidAmount salesOrder');
 
         const soInvoiceMap = new Map();
@@ -985,10 +1000,197 @@ const getDispatchById = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get detailed line-item level Delivery/Dispatch Register
+ * @route   GET /api/dispatches/delivery-register
+ * @access  Private (SALES:READ / DISPATCH:READ permission)
+ */
+const getDeliveryRegister = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const tenantObjId = mongoose.Types.ObjectId.isValid(tenantId)
+            ? new mongoose.Types.ObjectId(tenantId)
+            : tenantId;
+
+        const { deliveryStatus, status, search, startDate, endDate } = req.query;
+        const filter = { tenant: tenantObjId };
+
+        const resolvedStatus = deliveryStatus || status;
+        if (resolvedStatus && resolvedStatus !== 'All' && resolvedStatus !== 'All Statuses') {
+            filter.deliveryStatus = resolvedStatus;
+        }
+
+        if (startDate || endDate) {
+            filter.dispatchDate = {};
+            if (startDate && startDate.trim()) {
+                filter.dispatchDate.$gte = new Date(`${startDate.trim()}T00:00:00.000+05:30`);
+            }
+            if (endDate && endDate.trim()) {
+                filter.dispatchDate.$lte = new Date(`${endDate.trim()}T23:59:59.999+05:30`);
+            }
+        }
+
+        if (search) {
+            filter.$or = [
+                { dispatchNumber: { $regex: search, $options: 'i' } },
+                { vehicleNumber: { $regex: search, $options: 'i' } },
+                { transporter: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const dispatches = await Dispatch.find(filter)
+            .populate({
+                path: 'salesOrder',
+                select: 'soNumber status customer totalValue orderDate deliveryDue',
+                populate: {
+                    path: 'customer',
+                    select: 'companyName code contactPerson phone address city state gstin'
+                }
+            })
+            .populate({
+                path: 'invoice',
+                select: 'invoiceNumber customer walkInCustomer grandTotal paymentStatus paymentMode dueAmount invoiceDate',
+                populate: {
+                    path: 'customer',
+                    select: 'companyName code contactPerson phone address city state gstin'
+                }
+            })
+            .populate('dispatchLocation', 'name code type')
+            .populate('items.finishedGood', 'name code uom bagShape dimensions dimensionUnit fabricGSM')
+            .populate('dispatchedBy', 'name email')
+            .populate('pod.uploadedBy', 'name email')
+            .populate('pod.approvedBy', 'name email')
+            .sort({ dispatchDate: -1, createdAt: -1 })
+            .lean();
+
+        // Flatten to 1 row per Dispatch Line Item
+        const lineItems = [];
+        let lineItemIndex = 1;
+
+        for (const d of dispatches) {
+            const isPos = d.sourceType === 'POS_INVOICE' || Boolean(d.invoice && !d.salesOrder);
+            const refNumber = isPos
+                ? (d.invoice?.invoiceNumber || 'POS Invoice')
+                : (d.salesOrder?.soNumber || '-');
+
+            const orderDate = isPos
+                ? (d.invoice?.invoiceDate || d.createdAt)
+                : (d.salesOrder?.orderDate || d.createdAt);
+
+            const deliveryDueDate = isPos
+                ? (d.invoice?.invoiceDate || d.createdAt)
+                : (d.salesOrder?.deliveryDue || null);
+
+            const cust = isPos
+                ? (d.invoice?.customer || d.invoice?.walkInCustomer || {})
+                : (d.salesOrder?.customer || {});
+
+            const customerName = isPos
+                ? (d.invoice?.customer?.companyName || d.invoice?.customer?.name || d.invoice?.walkInCustomer?.name || 'Walk-in Retail Customer')
+                : (d.salesOrder?.customer?.companyName || d.salesOrder?.customer?.name || '-');
+
+            const customerCode = cust.code || '-';
+            const customerGstin = cust.gstin || '-';
+            const customerPhone = cust.phone || d.invoice?.walkInCustomer?.phone || '-';
+            const destinationCity = cust.city || '-';
+            const destinationAddress = cust.address ? `${cust.address}${cust.city ? ', ' + cust.city : ''}${cust.state ? ', ' + cust.state : ''}` : (cust.city || '-');
+
+            const sourceLocation = d.dispatchLocation?.name || 'Main Warehouse';
+            const transporter = d.transporter || 'V-Trans India Ltd';
+            const vehicleNumber = d.vehicleNumber || '-';
+            const driverName = d.driverName || '-';
+            const driverPhone = d.driverPhone || '-';
+            const deliveryStatus = d.deliveryStatus || 'IN_TRANSIT';
+            const podReceiverName = d.pod?.receiverName || '-';
+            const podReceiverPhone = d.pod?.receiverPhone || '-';
+            const podConfirmedDate = d.podConfirmedAt || d.pod?.approvedAt || null;
+            const dispatchedBy = d.dispatchedBy?.name || 'Dispatch Manager';
+
+            const items = Array.isArray(d.items) && d.items.length > 0
+                ? d.items
+                : [{ finishedGood: {}, dispatchedQuantity: 0, batchNumber: '' }];
+
+            for (const item of items) {
+                const fg = item.finishedGood || {};
+                const fgName = fg.name || 'Finished Goods Bag';
+                const fgCode = fg.code || '-';
+                const uom = (fg.uom && typeof fg.uom === 'object' && fg.uom.name)
+                    ? fg.uom.name
+                    : (typeof fg.uom === 'string' && !/^[0-9a-fA-F]{24}$/.test(fg.uom) ? fg.uom : 'Bags');
+                const dispatchedQty = Number(item.dispatchedQuantity || 0);
+                const batchNumber = item.batchNumber || '-';
+                const bagShape = fg.bagShape || '-';
+                const fabricGSM = fg.fabricGSM ? `${fg.fabricGSM} GSM` : '-';
+                const size = fg.dimensions?.width && fg.dimensions?.length
+                    ? `${fg.dimensions.width}x${fg.dimensions.length} ${fg.dimensionUnit || 'cm'}`
+                    : '-';
+
+                lineItems.push({
+                    id: `${d._id}_${fgCode}_${lineItemIndex++}`,
+                    dispatchId: d._id,
+                    dispatchNumber: d.dispatchNumber,
+                    dispatchDate: d.dispatchDate || d.createdAt,
+                    deliveryDueDate,
+                    orderDate,
+                    sourceType: isPos ? 'POS Sale' : 'Sales Order',
+                    referenceNumber: refNumber,
+                    customerName,
+                    customerCode,
+                    customerGstin,
+                    customerPhone,
+                    destinationCity,
+                    destinationAddress,
+                    sourceLocation,
+                    productName: fgName,
+                    productCode: fgCode,
+                    bagShape,
+                    fabricGSM,
+                    size,
+                    batchNumber,
+                    dispatchedQuantity: dispatchedQty,
+                    unit: uom,
+                    transporter,
+                    vehicleNumber,
+                    driverName,
+                    driverPhone,
+                    deliveryStatus,
+                    podReceiverName,
+                    podReceiverPhone,
+                    podConfirmedDate,
+                    dispatchedBy,
+                    remarks: d.notes || '-'
+                });
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            count: lineItems.length,
+            totalDispatches: dispatches.length,
+            data: lineItems
+        });
+    } catch (error) {
+        console.error('Error in getDeliveryRegister:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve Delivery Register.',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     getDispatchableSources,
     createDispatch,
     updateDeliveryStatus,
     getDispatches,
+    getDeliveryRegister,
     getDispatchById
 };

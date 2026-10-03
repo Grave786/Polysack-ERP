@@ -3,9 +3,10 @@ const router = express.Router();
 const {
     createGRN,
     getGRNs,
-    getGRNById
+    getGRNById,
+    updateGRN
 } = require('../controllers/grn.controller');
-const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule, requireTenantAdmin } = require('../middlewares/rbac.middleware');
 
 router.use(authenticate);
 router.use(checkTenantModule('PROCUREMENT'));
@@ -31,19 +32,25 @@ router.get('/', authenticate, checkPermission('PROCUREMENT', 'READ'), getGRNs);
  */
 router.get('/:id', authenticate, checkPermission('PROCUREMENT', 'READ'), getGRNById);
 
+/**
+ * @route   PUT /api/grns/:id
+ * @desc    Update a Goods Receipt Note (Tenant Admin only)
+ * @access  Private (Tenant Admin only)
+ */
+router.put('/:id', authenticate, requireTenantAdmin, updateGRN);
+router.patch('/:id', authenticate, requireTenantAdmin, updateGRN);
+
 const GRN = require('../models/grn.model');
 const { createBulkDeleteHandler } = require('../utils/bulkDeleteHelper');
 
-const rejectGRNModification = (req, res) => {
+const rejectGRNDeletion = (req, res) => {
     return res.status(403).json({
         success: false,
-        message: 'Goods Receipt Note (GRN) records are immutable audit records and cannot be modified or deleted after receipt.'
+        message: 'Goods Receipt Note (GRN) records cannot be deleted after receipt.'
     });
 };
 
-router.put('/:id', authenticate, rejectGRNModification);
-router.patch('/:id', authenticate, rejectGRNModification);
-router.delete('/:id', authenticate, rejectGRNModification);
+router.delete('/:id', authenticate, rejectGRNDeletion);
 router.post('/bulk-delete', authenticate, createBulkDeleteHandler(GRN, { resourceName: 'GRNs', isImmutable: true }));
 
 module.exports = router;

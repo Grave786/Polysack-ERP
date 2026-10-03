@@ -1,6 +1,11 @@
 import { Printer, X, CheckCircle, FileText } from 'lucide-react';
+import { useAuthStore } from '../../store/authStore';
 
 export default function PrintInvoiceModal({ isOpen, onClose, invoice }) {
+    const user = useAuthStore((state) => state.user);
+    const tenant = user?.tenant || user?.tenantData || {};
+    const companyName = tenant?.companyName || tenant?.name || user?.companyName || 'PP Poly & Paper Products';
+
     if (!isOpen || !invoice) return null;
 
     const invoiceNumber = invoice.invoiceNumber || 'INV-000';
@@ -82,7 +87,7 @@ export default function PrintInvoiceModal({ isOpen, onClose, invoice }) {
                             <h1 className="text-lg font-extrabold text-slate-900 tracking-tight uppercase">
                                 TAX INVOICE
                             </h1>
-                            <p className="text-[11px] font-bold text-slate-600">Polysack ERP - Packaging Solutions</p>
+                            <p className="text-[11px] font-bold text-slate-600">{companyName}</p>
                             <p className="text-[10px] text-slate-500">Industrial Estate, Phase 2, Factory Outlet</p>
                         </div>
 

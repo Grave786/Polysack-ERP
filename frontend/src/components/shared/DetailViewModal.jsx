@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
-import { X, Eye, Calendar, Layers, ShieldCheck, Tag, Edit3, Building, MapPin, Hash, CheckCircle2, XCircle, FileText, Download, ZoomIn, Paperclip, FileSpreadsheet } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Eye, Calendar, Layers, ShieldCheck, Tag, Edit3, Building, MapPin, Hash, CheckCircle2, XCircle, FileText, Download, ZoomIn, Paperclip, FileSpreadsheet, AlertTriangle, Clock } from 'lucide-react';
 import OperatorWiseProductionTracker from '../production/OperatorWiseProductionTracker';
+import axiosInstance from '../../api/axiosInstance';
+import { useAuthStore } from '../../store/authStore';
 
 /**
  * Helper to safely extract value or nested property
@@ -303,6 +305,242 @@ function PoAttachmentViewer({ images = [], pdfs = [], others = [] }) {
                 </div>
             )}
         </>
+    );
+}
+
+/**
+ * Self-contained Date-wise Receipt History Viewer for Purchase Orders.
+ * Displays overall Received vs Ordered vs Remaining summary cards, plus a
+ * chronological breakdown of every Goods Receipt Note (GRN) created against this PO
+ * with Delivery #, GRN No, Receipt Date, Items & Quantities, Running Total Received,
+ * and Running Remaining Balance.
+ */
+function PoReceiptHistoryViewer({ record }) {
+    const [grns, setGrns] = useState(record?.receiptHistory || []);
+    const [loading, setLoading] = useState(!record?.receiptHistory && Boolean(record?._id));
+
+    useEffect(() => {
+        if (record?.receiptHistory && Array.isArray(record.receiptHistory) && record.receiptHistory.length > 0) {
+            setGrns(record.receiptHistory);
+            setLoading(false);
+            return;
+        }
+        if (record?._id) {
+            setLoading(true);
+            axiosInstance.get(`/grns?purchaseOrder=${record._id}&limit=100`)
+                .then((res) => {
+                    const list = res.data?.data || res.data || [];
+                    setGrns(Array.isArray(list) ? list : []);
+                })
+                .catch((err) => {
+                    console.error('Failed to load receipt history for PO:', err);
+                })
+                .finally(() => setLoading(false));
+        }
+    }, [record?._id, record?.receiptHistory]);
+
+    // Calculate total ordered quantity from PO line items
+    const items = record?.items || [];
+    const totalOrderedQty = items.reduce((sum, item) => {
+        const qty = item.orderedQuantity != null ? Number(item.orderedQuantity) : (item.quantity != null ? Number(item.quantity) : 0);
+        return sum + (isNaN(qty) ? 0 : qty);
+    }, 0);
+
+    const defaultUnit = items[0]?.unit || (typeof items[0]?.rawMaterial === 'object' ? items[0]?.rawMaterial?.uom?.symbol || items[0]?.rawMaterial?.uom?.name : null) || 'Kg';
+
+    // Chronologically sort all GRNs (oldest receipt date to newest)
+    const sortedGrns = [...grns].sort((a, b) => {
+        const dateA = new Date(a.receivedDate || a.createdAt || 0).getTime();
+        const dateB = new Date(b.receivedDate || b.createdAt || 0).getTime();
+        return dateA - dateB;
+    });
+
+    // Compute running total received and running remaining sequentially across each delivery date
+    let cumulativeReceived = 0;
+    const historyRows = sortedGrns.map((grn, idx) => {
+        const thisGrnQty = (grn.items || []).reduce((s, itm) => s + (Number(itm.receivedQuantity) || 0), 0);
+        cumulativeReceived += thisGrnQty;
+        const runningRemaining = Math.max(0, totalOrderedQty - cumulativeReceived);
+
+        return {
+            ...grn,
+            deliveryNumber: idx + 1,
+            thisGrnQty,
+            runningTotalReceived: cumulativeReceived,
+            runningRemaining
+        };
+    });
+
+    const totalReceivedQty = cumulativeReceived;
+    const remainingBalance = Math.max(0, totalOrderedQty - totalReceivedQty);
+    const percentFulfilled = totalOrderedQty > 0 ? Math.min(100, Math.round((totalReceivedQty / totalOrderedQty) * 100)) : 0;
+
+    return (
+        <div className="space-y-4">
+            {/* Overall Fulfilment Summary Metrics */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3 bg-app-bg border border-border rounded-lg">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted block">
+                        Total Ordered
+                    </span>
+                    <span className="text-base font-bold text-text-main font-mono mt-0.5 block">
+                        {totalOrderedQty.toLocaleString('en-IN')} <span className="text-xs font-normal text-text-muted">{defaultUnit}</span>
+                    </span>
+                </div>
+
+                <div className="p-3 bg-emerald-50/60 border border-emerald-200/70 rounded-lg">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 block">
+                        Total Received
+                    </span>
+                    <span className="text-base font-bold text-emerald-700 font-mono mt-0.5 block">
+                        {totalReceivedQty.toLocaleString('en-IN')} <span className="text-xs font-normal text-emerald-600">{defaultUnit}</span>
+                    </span>
+                </div>
+
+                <div className="p-3 bg-amber-50/60 border border-amber-200/70 rounded-lg">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">
+                        Remaining Balance
+                    </span>
+                    <span className="text-base font-bold text-amber-700 font-mono mt-0.5 block">
+                        {remainingBalance.toLocaleString('en-IN')} <span className="text-xs font-normal text-amber-600">{defaultUnit}</span>
+                    </span>
+                </div>
+
+                <div className="p-3 bg-blue-50/60 border border-blue-200/70 rounded-lg">
+                    <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-blue-800 block">
+                            Fulfilment Progress
+                        </span>
+                        <span className="text-[11px] font-bold text-blue-700 font-mono">
+                            {percentFulfilled}%
+                        </span>
+                    </div>
+                    <div className="w-full bg-blue-200/60 h-2 rounded-full mt-2 overflow-hidden">
+                        <div
+                            className={`h-full transition-all duration-300 ${percentFulfilled >= 100 ? 'bg-emerald-500' : 'bg-blue-600'}`}
+                            style={{ width: `${percentFulfilled}%` }}
+                        />
+                    </div>
+                    <span className="text-[10px] text-blue-700 font-medium block mt-1">
+                        {historyRows.length} {historyRows.length === 1 ? 'GRN delivery recorded' : 'GRN deliveries recorded'}
+                    </span>
+                </div>
+            </div>
+
+            {/* Date-wise GRN Table */}
+            {loading ? (
+                <div className="py-6 text-center text-xs text-text-muted animate-pulse">
+                    Loading date-wise receipt history...
+                </div>
+            ) : historyRows.length === 0 ? (
+                <div className="p-4 bg-app-bg border border-dashed border-border rounded-lg text-center">
+                    <Clock size={20} className="mx-auto text-text-muted mb-1 opacity-70" />
+                    <p className="text-xs font-medium text-text-main">No GRNs recorded yet</p>
+                    <p className="text-[11px] text-text-muted mt-0.5">
+                        Once partial or full deliveries arrive and Goods Receipt Notes are generated, chronological receipt logs and running balances will appear here.
+                    </p>
+                </div>
+            ) : (
+                <div className="overflow-x-auto border border-border rounded-lg">
+                    <table className="w-full text-xs text-left">
+                        <thead className="bg-app-bg text-text-muted uppercase text-[10px] tracking-wider border-b border-border">
+                            <tr>
+                                <th className="px-3 py-2.5">Delivery</th>
+                                <th className="px-3 py-2.5">GRN No</th>
+                                <th className="px-3 py-2.5">Receipt Date</th>
+                                <th className="px-3 py-2.5">Items Received That Date</th>
+                                <th className="px-3 py-2.5 text-right">Received Qty</th>
+                                <th className="px-3 py-2.5 text-right">Running Total Received</th>
+                                <th className="px-3 py-2.5 text-right">Running Remaining</th>
+                                <th className="px-3 py-2.5">Location / Received By</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border font-sans">
+                            {historyRows.map((row) => {
+                                const receiptDateStr = row.receivedDate || row.createdAt;
+                                const formattedDate = receiptDateStr
+                                    ? new Date(receiptDateStr).toLocaleDateString('en-IN', {
+                                          year: 'numeric',
+                                          month: 'short',
+                                          day: 'numeric'
+                                      })
+                                    : '-';
+
+                                const locationDisplay = typeof row.receivingLocation === 'object'
+                                    ? (row.receivingLocation?.name || row.receivingLocation?.code || '-')
+                                    : (row.receivingLocation || '-');
+
+                                const receiverDisplay = typeof row.receivedBy === 'object'
+                                    ? (row.receivedBy?.name || '-')
+                                    : (row.receivedBy || '-');
+
+                                return (
+                                    <tr key={row._id || row.grnNumber} className="hover:bg-app-bg/50">
+                                        <td className="px-3 py-2.5 font-bold text-text-muted">
+                                            #{row.deliveryNumber}
+                                        </td>
+                                        <td className="px-3 py-2.5">
+                                            <span className="font-mono font-bold text-primary bg-primary/10 px-2 py-0.5 rounded text-xs inline-block">
+                                                {row.grnNumber}
+                                            </span>
+                                        </td>
+                                        <td className="px-3 py-2.5 whitespace-nowrap text-text-main font-medium">
+                                            {formattedDate}
+                                        </td>
+                                        <td className="px-3 py-2.5">
+                                            <div className="space-y-1">
+                                                {(row.items || []).map((itm, iIdx) => {
+                                                    const matName = typeof itm.rawMaterial === 'object'
+                                                        ? (itm.rawMaterial?.name || itm.rawMaterial?.code || 'Raw Material')
+                                                        : (itm.rawMaterial || 'Raw Material');
+                                                    const itmUnit = (typeof itm.rawMaterial === 'object' && itm.rawMaterial?.uom?.symbol)
+                                                        ? itm.rawMaterial?.uom?.symbol
+                                                        : defaultUnit;
+                                                    return (
+                                                        <div key={iIdx} className="flex items-center gap-1.5 text-[11px]">
+                                                            <span className="font-semibold text-text-main">{matName}</span>
+                                                            <span className="text-text-muted">:</span>
+                                                            <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/50">
+                                                                {itm.receivedQuantity} {itmUnit}
+                                                            </span>
+                                                            {itm.batchNumber && (
+                                                                <span className="text-[10px] text-text-muted">
+                                                                    (Batch: {itm.batchNumber})
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                                {row.rolls && row.rolls.length > 0 && (
+                                                    <span className="text-[10px] text-text-muted block">
+                                                        📦 {row.rolls.length} roll{row.rolls.length > 1 ? 's' : ''} inspected
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">
+                                            {row.thisGrnQty.toLocaleString('en-IN')} {defaultUnit}
+                                        </td>
+                                        <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-800 bg-emerald-50/30">
+                                            {row.runningTotalReceived.toLocaleString('en-IN')} {defaultUnit}
+                                        </td>
+                                        <td className={`px-3 py-2.5 text-right font-mono font-bold ${row.runningRemaining > 0 ? 'text-amber-700' : 'text-emerald-600'}`}>
+                                            {row.runningRemaining.toLocaleString('en-IN')} {defaultUnit}
+                                        </td>
+                                        <td className="px-3 py-2.5 text-[11px] text-text-muted whitespace-nowrap">
+                                            <div>{locationDisplay}</div>
+                                            {receiverDisplay !== '-' && (
+                                                <div className="text-[10px] text-text-muted/80">By: {receiverDisplay}</div>
+                                            )}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
     );
 }
 
@@ -890,8 +1128,8 @@ const MASTER_SCHEMAS = {
             title: 'Product & Plant Allocation',
             fields: [
                 { label: 'Finished Bag Specification', key: (r) => r.finishedGood?.name || '-', span: 2 },
-                { label: 'Target Bags', key: (r) => `${(r.targetQuantity || 0).toLocaleString('en-IN')} Bags` },
-                { label: 'Completed Bags', key: (r) => `${(r.completedQuantity || 0).toLocaleString('en-IN')} Bags` },
+                { label: 'Target Quantity', key: (r) => `${(r.targetQuantity || 0).toLocaleString('en-IN')} ${r.unit || r.jobOrderDetails?.totalOrderQuantityUnit || 'Bags'}` },
+                { label: 'Completed Quantity', key: (r) => `${(r.completedQuantity || 0).toLocaleString('en-IN')} ${r.unit || r.jobOrderDetails?.totalOrderQuantityUnit || 'Bags'}` },
                 { label: 'Overall Progress', key: (r) => `${r.progressPercentage || 0}%` },
                 { label: 'Assigned Machine', key: (r) => r.assignedMachine?.name || r.assignedMachine?.code || 'None' },
                 { label: 'Machine Operators', key: (r) => formatOperatorNames(r.assignedMachine) }
@@ -947,7 +1185,7 @@ const MASTER_SCHEMAS = {
                 {
                     label: 'Total Order Quantity (Job Card)',
                     key: (r) => r.jobOrderDetails?.totalOrderQuantity
-                        ? `${r.jobOrderDetails.totalOrderQuantity} ${r.jobOrderDetails.totalOrderQuantityUnit || 'Pcs'}`
+                        ? `${Number(r.jobOrderDetails.totalOrderQuantity).toLocaleString('en-IN')} ${r.jobOrderDetails.totalOrderQuantityUnit || r.unit || 'Bags'}`
                         : '-'
                 },
                 {
@@ -962,40 +1200,98 @@ const MASTER_SCHEMAS = {
             ]
         },
         {
-            title: 'Packing Slip & Roll Specifications',
+            title: 'Raw Material Rolls Used & Traceability',
             renderCustom: (record) => {
                 const rolls = record.jobOrderDetails?.rolls || [];
-                if (!rolls.length) return null;
+                if (!rolls.length) {
+                    return (
+                        <div className="p-4 border border-dashed border-border rounded-lg text-center bg-app-bg/50">
+                            <p className="text-xs text-text-muted italic">
+                                No raw material rolls logged or allocated for this Work Order yet.
+                            </p>
+                        </div>
+                    );
+                }
                 return (
-                    <div className="overflow-x-auto border border-border rounded-lg">
-                        <table className="w-full text-xs text-left">
-                            <thead className="bg-app-bg text-text-muted uppercase text-[10px] tracking-wider border-b border-border">
-                                <tr>
-                                    <th className="px-3 py-2">#</th>
-                                    <th className="px-3 py-2">Roll No.</th>
-                                    <th className="px-3 py-2">Fabric Length (M)</th>
-                                    <th className="px-3 py-2">Width (In)</th>
-                                    <th className="px-3 py-2">G.W. (Kg)</th>
-                                    <th className="px-3 py-2">N.W. (Kg)</th>
-                                    <th className="px-3 py-2">Total Qty (Kg)</th>
-                                    <th className="px-3 py-2">Total Qty (Pcs)</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border font-mono">
-                                {rolls.map((roll, idx) => (
-                                    <tr key={idx} className="hover:bg-app-bg/50">
-                                        <td className="px-3 py-2 text-text-muted">{idx + 1}</td>
-                                        <td className="px-3 py-2 font-bold text-text-main">{roll.rollNumber || '-'}</td>
-                                        <td className="px-3 py-2">{roll.fabricLength != null ? `${roll.fabricLength} m` : '-'}</td>
-                                        <td className="px-3 py-2">{roll.width != null ? `${roll.width}"` : '-'}</td>
-                                        <td className="px-3 py-2">{roll.grossWeight != null ? `${roll.grossWeight} kg` : '-'}</td>
-                                        <td className="px-3 py-2">{roll.netWeight != null ? `${roll.netWeight} kg` : '-'}</td>
-                                        <td className="px-3 py-2">{roll.totalQuantityKg != null ? `${roll.totalQuantityKg} kg` : '-'}</td>
-                                        <td className="px-3 py-2">{roll.totalQuantityPcs != null ? `${roll.totalQuantityPcs} pcs` : '-'}</td>
+                    <div className="space-y-2 font-sans">
+                        <div className="overflow-x-auto border border-border rounded-lg shadow-2xs">
+                            <table className="w-full text-xs text-left">
+                                <thead className="bg-app-bg text-text-muted uppercase text-[10px] tracking-wider border-b border-border">
+                                    <tr>
+                                        <th className="px-3 py-2.5">#</th>
+                                        <th className="px-3 py-2.5">Roll Number</th>
+                                        <th className="px-3 py-2.5">Inward Source (GRN / PO)</th>
+                                        <th className="px-3 py-2.5">Consumed Qty</th>
+                                        <th className="px-3 py-2.5">Roll Length (M)</th>
+                                        <th className="px-3 py-2.5">Width (In)</th>
+                                        <th className="px-3 py-2.5">G.W. / N.W. (Kg)</th>
+                                        <th className="px-3 py-2.5">Remaining on Roll</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody className="divide-y divide-border font-mono">
+                                    {rolls.map((roll, idx) => {
+                                        const consumed = roll.consumedLength != null
+                                            ? `${roll.consumedLength} m`
+                                            : roll.fabricLength != null
+                                            ? `${roll.fabricLength} m`
+                                            : roll.consumedWeightKg != null
+                                            ? `${roll.consumedWeightKg} kg`
+                                            : '-';
+
+                                        const sourceInfo = (roll.grnNumber || roll.poNumber) ? (
+                                            <div className="space-y-0.5">
+                                                {roll.grnNumber && (
+                                                    <span className="inline-block text-[10px] font-bold text-primary bg-primary/10 px-1.5 py-0.2 rounded border border-primary/20">
+                                                        {roll.grnNumber}
+                                                    </span>
+                                                )}
+                                                {roll.poNumber && (
+                                                    <div className="text-[10px] text-text-muted font-normal font-sans">
+                                                        PO: {roll.poNumber}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <span className="text-text-muted text-[11px] font-sans">Inward Stock</span>
+                                        );
+
+                                        return (
+                                            <tr key={idx} className="hover:bg-app-bg/50">
+                                                <td className="px-3 py-2 text-text-muted">{idx + 1}</td>
+                                                <td className="px-3 py-2 font-bold text-text-main">
+                                                    <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded text-[11px]">
+                                                        {roll.rollNumber || roll.rollNo || '-'}
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2">{sourceInfo}</td>
+                                                <td className="px-3 py-2 font-bold text-emerald-700">
+                                                    {consumed}
+                                                    {roll.consumedWeightKg != null && roll.consumedLength != null && (
+                                                        <span className="text-[10px] text-text-muted font-normal block font-sans">
+                                                            ({roll.consumedWeightKg} kg)
+                                                        </span>
+                                                    )}
+                                                </td>
+                                                <td className="px-3 py-2">{roll.fabricLength != null ? `${roll.fabricLength} m` : '-'}</td>
+                                                <td className="px-3 py-2">{roll.width != null ? `${roll.width}"` : '-'}</td>
+                                                <td className="px-3 py-2">
+                                                    {roll.grossWeight != null || roll.netWeight != null
+                                                        ? `${roll.grossWeight || 0} / ${roll.netWeight || 0} kg`
+                                                        : '-'}
+                                                </td>
+                                                <td className="px-3 py-2">
+                                                    {roll.remainingMeters != null ? (
+                                                        <span className={roll.remainingMeters > 0 ? 'text-text-main font-semibold' : 'text-text-muted'}>
+                                                            {roll.remainingMeters} m
+                                                        </span>
+                                                    ) : '-'}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 );
             }
@@ -1261,6 +1557,10 @@ const MASTER_SCHEMAS = {
             }
         },
         {
+            title: 'Receipt History (Date-wise Delivery Log)',
+            renderCustom: (record) => <PoReceiptHistoryViewer record={record} />
+        },
+        {
             title: 'Attachments & Uploads',
             renderCustom: (record) => {
                 const files = record.poAttachments || record.attachments || [];
@@ -1274,6 +1574,151 @@ const MASTER_SCHEMAS = {
                 { label: 'Created On', key: 'createdAt', type: 'date' },
                 { label: 'Last Updated', key: 'updatedAt', type: 'date' }
             ]
+        }
+    ],
+
+    'work-orders': [
+        {
+            title: 'Core Work Order Identification',
+            fields: [
+                { label: 'Work Order #', key: 'workOrderNumber', type: 'code' },
+                { label: 'Customer', key: (r) => r.customer?.companyName || r.customer?.name || '-', span: 2 },
+                { label: 'Finished Good', key: (r) => r.finishedGood?.name || r.finishedGood?.code || '-' },
+                { label: 'Target Quantity', key: (r) => `${(r.targetQuantity || 0).toLocaleString('en-IN')} ${r.unit || r.jobOrderDetails?.totalOrderQuantityUnit || 'Bags'}` },
+                { label: 'Completed Quantity', key: (r) => `${(r.completedQuantity || 0).toLocaleString('en-IN')} ${r.unit || r.jobOrderDetails?.totalOrderQuantityUnit || 'Bags'}` },
+                { label: 'Balance Pending', key: (r) => r.balanceQuantity > 0 ? `${Number(r.balanceQuantity).toLocaleString('en-IN')} ${r.unit || r.jobOrderDetails?.totalOrderQuantityUnit || 'Bags'} Pending` : `None (0 ${r.unit || r.jobOrderDetails?.totalOrderQuantityUnit || 'Bags'})` },
+                { label: 'Status', key: 'status', type: 'status' },
+                { label: 'Priority', key: 'priority' },
+                { label: 'Assigned Machine', key: (r) => (typeof r.assignedMachine === 'object' ? `${r.assignedMachine?.code ? `${r.assignedMachine.code} - ` : ''}${r.assignedMachine?.name || '-'}` : r.assignedMachine || '-') }
+            ]
+        },
+        {
+            title: 'Job Order Specifications',
+            fields: [
+                { label: 'Order Date', key: (r) => r.jobOrderDetails?.orderDate || r.createdAt, type: 'date' },
+                { label: 'Expected Delivery', key: (r) => r.jobOrderDetails?.expectedDeliveryDate, type: 'date' },
+                { label: 'Product Category', key: (r) => r.jobOrderDetails?.productCategory || '-' },
+                { label: 'Material Quality', key: (r) => r.jobOrderDetails?.materialQualityFabric || '-' },
+                { label: 'Grammage', key: (r) => r.jobOrderDetails?.fabricGrammage ? `${r.jobOrderDetails.fabricGrammage} GSM` : '-' },
+                { label: 'Lamination', key: (r) => r.jobOrderDetails?.fabricLaminationType || '-' },
+                { label: 'Bag Weight', key: (r) => r.jobOrderDetails?.bagWeightGms ? `${r.jobOrderDetails.bagWeightGms} gms` : '-' },
+                { label: 'Size (Inch)', key: (r) => (r.jobOrderDetails?.fabricSizeInInch?.width && r.jobOrderDetails?.fabricSizeInInch?.length) ? `${r.jobOrderDetails.fabricSizeInInch.width}" x ${r.jobOrderDetails.fabricSizeInInch.length}"` : '-' }
+            ]
+        },
+        {
+            title: 'System Audit',
+            fields: [
+                { label: 'Created On', key: 'createdAt', type: 'date' },
+                { label: 'Last Updated', key: 'updatedAt', type: 'date' }
+            ]
+        }
+    ],
+    grns: [
+        {
+            title: 'GRN Receipt Information',
+            fields: [
+                { label: 'GRN Number', key: 'grnNumber', type: 'code' },
+                { label: 'Received Date', key: 'receivedDate', type: 'date' },
+                { label: 'Purchase Order', key: (r) => (typeof r.purchaseOrder === 'object' ? r.purchaseOrder?.poNumber : r.purchaseOrder) || '-' },
+                { label: 'Supplier', key: (r) => (typeof r.supplier === 'object' ? (r.supplier?.companyName || r.supplier?.name) : r.supplier) || '-' },
+                { label: 'Receiving Location', key: (r) => (typeof r.receivingLocation === 'object' ? r.receivingLocation?.name : r.receivingLocation) || '-' },
+                { label: 'Inward Notes', key: (r) => r.notes || '-' }
+            ]
+        },
+        {
+            title: 'Inward Items & Rolls',
+            fields: [
+                { label: 'Items Received', key: (r) => (r.items || []).map(i => `${(typeof i.rawMaterial === 'object' ? i.rawMaterial?.name : 'Material')}: ${i.receivedQuantity} ${i.unit || 'Kg'}`).join(', ') || '-' },
+                { label: 'Rolls Inwarded', key: (r) => Array.isArray(r.rolls) && r.rolls.length > 0 ? `${r.rolls.length} Roll(s) (${r.rolls.map(ro => ro.rollNumber).join(', ')})` : 'None' }
+            ]
+        },
+        {
+            title: 'System & Edit Audit',
+            fields: [
+                { label: 'Received By', key: (r) => (typeof r.receivedBy === 'object' ? (r.receivedBy?.name || r.receivedBy?.email) : r.receivedBy) || '-' },
+                { label: 'Created On', key: 'createdAt', type: 'date' },
+                { label: 'Last Edited By', key: (r) => (typeof r.lastEditedBy === 'object' ? (r.lastEditedBy?.name || r.lastEditedBy?.email) : r.lastEditedBy) || '-' },
+                { label: 'Last Edited At', key: 'lastEditedAt', type: 'date' }
+            ]
+        }
+    ],
+    'fabric-rolls': [
+        {
+            title: 'Roll Identification & Specification',
+            fields: [
+                { label: 'Roll #', key: (r) => r.rollNumber || r.rollNo || '-', type: 'code' },
+                { label: 'Material Name', key: (r) => r.materialName || 'Woven Fabric Roll' },
+                { label: 'Material Code', key: (r) => r.materialCode || '-' },
+                { label: 'Status', key: 'status', type: 'status' },
+                { label: 'Width', key: (r) => r.width != null ? `${r.width}"` : '-' },
+                { label: 'Fabric Average', key: (r) => r.fabricAverage != null ? `${r.fabricAverage} g/m` : '-' }
+            ]
+        },
+        {
+            title: 'Measurements & Quantities',
+            fields: [
+                { label: 'Total Length (Meters)', key: (r) => r.totalMeters != null ? `${Number(r.totalMeters).toLocaleString('en-IN')} m` : '-' },
+                { label: 'Used Length (Meters)', key: (r) => r.usedMeters != null ? `${Number(r.usedMeters).toLocaleString('en-IN')} m` : '0 m' },
+                { label: 'Remaining Length (Meters)', key: (r) => r.remainingMeters != null ? `${Number(r.remainingMeters).toLocaleString('en-IN')} m` : '-' },
+                { label: 'Net Weight', key: (r) => r.netWeight != null ? `${Number(r.netWeight).toLocaleString('en-IN')} kg` : '-' },
+                { label: 'Gross Weight', key: (r) => r.grossWeight != null ? `${Number(r.grossWeight).toLocaleString('en-IN')} kg` : '-' },
+                { label: 'Remaining Weight', key: (r) => r.remainingWeightKg != null ? `${Number(r.remainingWeightKg).toLocaleString('en-IN')} kg` : '-' }
+            ]
+        },
+        {
+            title: 'Inward Source & Receipt Details',
+            fields: [
+                { label: 'GRN Number', key: 'grnNumber', type: 'code' },
+                { label: 'PO Number', key: (r) => r.poNumber || '-', type: 'code' },
+                { label: 'Received Date', key: 'receivedDate', type: 'date' },
+                { label: 'Supplier Name', key: (r) => r.supplierName || '-' },
+                { label: 'Supplier Code', key: (r) => r.supplierCode || '-' }
+            ]
+        },
+        {
+            title: 'Work Order Consumption',
+            renderCustom: (record) => {
+                const list = record.consumedByWorkOrders || [];
+                if (list.length === 0) {
+                    return (
+                        <div className="p-3 bg-app-bg/50 border border-border/60 rounded-lg text-xs text-text-muted italic">
+                            No work orders have consumed from this roll yet. Full stock is available.
+                        </div>
+                    );
+                }
+                return (
+                    <div className="overflow-x-auto rounded-lg border border-border/70">
+                        <table className="w-full text-xs text-left">
+                            <thead className="bg-app-bg text-text-muted font-bold uppercase text-[10px] tracking-wider border-b border-border">
+                                <tr>
+                                    <th className="p-2.5">Work Order #</th>
+                                    <th className="p-2.5">Customer</th>
+                                    <th className="p-2.5">Finished Good</th>
+                                    <th className="p-2.5 text-right">Consumed Meters</th>
+                                    <th className="p-2.5 text-right">Consumed Weight</th>
+                                    <th className="p-2.5 text-center">WO Status</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border/60 bg-card-bg">
+                                {list.map((u, i) => (
+                                    <tr key={i} className="hover:bg-app-bg/30">
+                                        <td className="p-2.5 font-mono font-bold text-primary">{u.workOrderNumber || '-'}</td>
+                                        <td className="p-2.5 text-text-main">{u.customerName || '-'}</td>
+                                        <td className="p-2.5 text-text-main">{u.finishedGoodName || '-'}</td>
+                                        <td className="p-2.5 text-right font-mono font-bold">{Number(u.consumedMeters || 0).toLocaleString('en-IN')} m</td>
+                                        <td className="p-2.5 text-right font-mono">{Number(u.consumedWeightKg || 0).toLocaleString('en-IN')} kg</td>
+                                        <td className="p-2.5 text-center">
+                                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/10 text-primary">
+                                                {u.status || '-'}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            }
         }
     ]
 };
@@ -1289,38 +1734,70 @@ export default function DetailViewModal({
     type = '',
     endpoint = ''
 }) {
+    const user = useAuthStore((state) => state.user);
+    const tenant = user?.tenant || user?.tenantData || {};
+    const companyName = tenant?.companyName || tenant?.name || user?.companyName || 'PP Poly & Paper Products';
+
     if (!isOpen || !record) return null;
 
-    const normalizedKey = (tabKey || '').toLowerCase().replace(/_/g, '-');
-    const baseSections = MASTER_SCHEMAS[normalizedKey] || (normalizedKey === 'customer' ? MASTER_SCHEMAS.customers : null) || (normalizedKey === 'supplier' ? MASTER_SCHEMAS.suppliers : null);
+    const normalizedKey = (tabKey || resourceType || type || '').toLowerCase().replace(/_/g, '-');
+    const baseSections = MASTER_SCHEMAS[normalizedKey] || (normalizedKey === 'workorders' ? MASTER_SCHEMAS['work-orders'] : null) || (normalizedKey === 'customer' ? MASTER_SCHEMAS.customers : null) || (normalizedKey === 'supplier' ? MASTER_SCHEMAS.suppliers : null);
     let sections;
     if (baseSections) {
         sections = baseSections;
     } else {
-        const fallbackFields = Object.keys(record)
-            .filter((k) => !['_id', 'tenant', 'tenantId', '__v', 'assignedBy', 'createdBy', 'updatedBy', 'poAttachments', 'attachments'].includes(k))
-            .filter((k) => {
-                const val = record[k];
-                if (typeof val !== 'object' || val === null) return true;
-                // Allow populated refs that have a human-readable name/code
-                if (val.name || val.companyName || val.code || val.title) return true;
-                // Block raw ObjectId references and empty objects
-                return false;
-            })
-            .slice(0, 14)
-            .map((k) => {
-                const isDateField = k.toLowerCase().includes('date') || k.toLowerCase().endsWith('at');
-                return {
-                    label: k.replace(/([A-Z])/g, ' $1').replace(/^./, (s) => s.toUpperCase()),
-                    key: k,
-                    type: k.toLowerCase().includes('status') ? 'status'
-                        : (k === 'isActive' ? 'boolean'
-                        : (isDateField ? 'date'
-                        : 'text'))
-                };
-            });
-
-        sections = [{ title: 'Record Attributes', fields: fallbackFields }];
+        sections = [{
+            title: 'Record Attributes',
+            renderCustom: (data) => (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
+                    {Object.entries(data)
+                        .filter(([key, value]) => {
+                            // Standard keys to hide
+                            const hiddenKeys = ['id', '_id', 'createdAt', 'updatedAt', '__v'];
+                            if (hiddenKeys.includes(key.toLowerCase())) return false;
+                            
+                            // Hide values that match MongoDB ObjectId pattern (24 hex chars) 
+                            // OR compound ID patterns (e.g., 6a9278..._FG-001_1)
+                            if (typeof value === 'string') {
+                                const isMongoId = /^[0-9a-fA-F]{24}$/.test(value);
+                                const isCompoundId = /^[0-9a-fA-F]{24}_.+/.test(value);
+                                if (isMongoId || isCompoundId) return false;
+                            }
+                            
+                            return true;
+                        })
+                        .map(([key, value]) => {
+                            const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, (s) => s.toUpperCase());
+                            let displayVal = value;
+                            if (typeof value === 'boolean') displayVal = value ? 'Yes' : 'No';
+                            else if (value === null || value === undefined || value === '') displayVal = '-';
+                            else if (typeof value === 'object') {
+                                displayVal = value.name || value.companyName || value.code || '-';
+                            } else if (key.toLowerCase().includes('date') && !isNaN(Date.parse(value))) {
+                                try {
+                                    displayVal = new Date(value).toLocaleDateString('en-GB').replace(/\//g, '-');
+                                } catch {
+                                    displayVal = String(value);
+                                }
+                            }
+                            return (
+                                <div
+                                    key={key}
+                                    className="p-2.5 rounded-lg border border-border/60 bg-app-bg/40"
+                                >
+                                    <span className="block text-[10.5px] font-bold uppercase tracking-wide text-text-muted mb-1">
+                                        {label}
+                                    </span>
+                                    <div className="text-xs font-semibold text-text-main break-words">
+                                        {String(displayVal)}
+                                    </div>
+                                </div>
+                            );
+                        })
+                    }
+                </div>
+            )
+        }];
         const files = record.poAttachments || record.attachments;
         if (Array.isArray(files) && files.length > 0) {
             sections.push({
@@ -1400,6 +1877,23 @@ export default function DetailViewModal({
                         </div>
                     )}
 
+                    {isWorkOrder && record.balanceQuantity > 0 && (() => {
+                        const u = record.unit || record.jobOrderDetails?.totalOrderQuantityUnit || 'Bags';
+                        return (
+                            <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2.5">
+                                <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                                <div>
+                                    <span className="font-extrabold block text-amber-800 dark:text-amber-200 uppercase tracking-wide text-[11px]">
+                                        Production Balance Pending: {Number(record.balanceQuantity).toLocaleString('en-IN')} {u}
+                                    </span>
+                                    <p className="mt-0.5 text-amber-700 dark:text-amber-300">
+                                        This Work Order finished with a shortfall of {Number(record.balanceQuantity).toLocaleString('en-IN')} {u} against the target of {Number(record.targetQuantity || 0).toLocaleString('en-IN')} {u}.
+                                    </p>
+                                </div>
+                            </div>
+                        );
+                    })()}
+
                     {isWorkOrder && (
                         <div className="col-span-full mb-4">
                             <span className="text-xs font-bold text-gray-500 block">WORK TITLE / REQUIREMENT</span>
@@ -1430,10 +1924,21 @@ export default function DetailViewModal({
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
                                         {section.fields?.map((f, fIdx) => {
                                             const key = typeof f.key === 'string' ? f.key : (f.label || '');
-                                            if (['_id', 'tenant', 'tenantId', '__v'].includes(key)) return null;
-                                            if (['_id', 'tenant', 'tenantId', '__v'].includes(String(f.label).toLowerCase().replace(/[^a-z0-9_]/g, ''))) return null;
+                                            const hiddenKeys = ['id', '_id', 'tenant', 'tenantid', 'createdat', 'updatedat', '__v', 'rollid', 'grnid', 'dispatchid', 'poid'];
+                                            if (hiddenKeys.includes(key.toLowerCase())) return null;
+                                            const normalizedLabel = String(f.label).toLowerCase().replace(/[^a-z0-9_]/g, '');
+                                            if (hiddenKeys.includes(normalizedLabel)) return null;
 
                                             let rawVal = resolveVal(record, f.key);
+                                            // Exclude raw 24-character hexadecimal MongoDB ObjectId string values or compound IDs from UI
+                                            if (typeof rawVal === 'string') {
+                                                const trimmed = rawVal.trim();
+                                                const isMongoId = /^[0-9a-fA-F]{24}$/.test(trimmed);
+                                                const isCompoundId = /^[0-9a-fA-F]{24}_.+/.test(trimmed);
+                                                if (isMongoId || isCompoundId) return null;
+                                            }
+                                            if (normalizedLabel === 'uom' && typeof rawVal === 'string') return null;
+
                                             if (key === 'customer' || key === 'customerRef' || String(f.label).toUpperCase() === 'CUSTOMER') {
                                                 rawVal = record?.customerRef?.name || record?.customerRef?.companyName || record?.newCustomerDetails?.company || record?.newCustomerDetails?.name || record?.customer?.companyName || record?.customer?.name || rawVal || '-';
                                             }
@@ -1474,7 +1979,7 @@ export default function DetailViewModal({
                 {/* Modal Footer */}
                 <div className="px-6 py-3.5 bg-app-bg/60 border-t border-border flex items-center justify-between shrink-0">
                     <div className="text-[11px] text-text-muted">
-                        PolySack ERP Industrial Master Registry
+                        {companyName} Industrial Master Registry
                     </div>
 
                     <div className="flex items-center gap-2.5">
