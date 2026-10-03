@@ -162,6 +162,8 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                 toast.error(`Item #${i + 1} rate per unit must be non-negative`);
                 return;
             }
+        }
+
         // Determine target status when editing existing PO
         let statusToSend = targetStatus;
         if (editPo?._id) {
