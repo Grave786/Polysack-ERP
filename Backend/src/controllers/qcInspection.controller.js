@@ -598,8 +598,322 @@ const getPendingQcTargets = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Update an existing Quality Control Inspection record in place
+ * @route   PUT /api/qc-inspections/:id
+ * @access  Private (Tenant Admin only)
+ */
+const updateQCInspection = async (req, res) => {
+    let session = null;
+    let useTransaction = true;
+
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const qcId = req.params.id;
+        const qc = await QCInspection.findOne({ _id: qcId, tenant: tenantId });
+        if (!qc) {
+            return res.status(404).json({
+                success: false,
+                message: 'QC Inspection not found in your organization.'
+            });
+        }
+
+        const {
+            sampleSize,
+            passedQty,
+            rejectedQty,
+            tensileStrength,
+            gsmTested,
+            defects
+        } = req.body;
+
+        const numSampleSize = sampleSize !== undefined ? Number(sampleSize) : (qc.sampleSize || 1);
+        const numPassedQty = passedQty !== undefined ? Number(passedQty) : (qc.passedQty || 0);
+        const numRejectedQty = rejectedQty !== undefined ? Number(rejectedQty) : (qc.rejectedQty || 0);
+
+        if (isNaN(numSampleSize) || numSampleSize <= 0 || isNaN(numPassedQty) || numPassedQty < 0 || isNaN(numRejectedQty) || numRejectedQty < 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'sampleSize must be > 0, and passedQty/rejectedQty must be non-negative numbers.'
+            });
+        }
+
+        const totalTested = Number((numPassedQty + numRejectedQty).toFixed(3));
+        if (totalTested <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Total tested quantity (passedQty + rejectedQty) must be greater than 0.'
+            });
+        }
+
+        let computedQcStatus = 'PASSED';
+        if (numRejectedQty === 0) computedQcStatus = 'PASSED';
+        else if (numPassedQty === 0) computedQcStatus = 'FAILED';
+        else computedQcStatus = 'PARTIAL';
+
+        try {
+            session = await mongoose.startSession();
+            session.startTransaction();
+        } catch {
+            useTransaction = false;
+        }
+
+        const sessionOption = useTransaction ? { session } : {};
+        const oldPassed = Number(qc.passedQty || 0);
+        const oldRejected = Number(qc.rejectedQty || 0);
+        const diffPassed = Number((numPassedQty - oldPassed).toFixed(3));
+
+        if (qc.inspectionType === 'INBOUND') {
+            const rmDoc = await RawMaterial.findOne({ _id: qc.rawMaterial, tenant: tenantId });
+            if (!rmDoc) {
+                if (useTransaction && session) await session.abortTransaction();
+                return res.status(400).json({
+                    success: false,
+                    message: 'Linked Raw Material not found in your organization.'
+                });
+            }
+
+            let grnDoc = null;
+            if (qc.grn) {
+                grnDoc = await GRN.findOne({ _id: qc.grn, tenant: tenantId });
+                if (grnDoc) {
+                    const grnItem = (grnDoc.items || []).find(item => String(item.rawMaterial) === String(qc.rawMaterial));
+                    const totalReceivedQty = grnItem ? grnItem.receivedQuantity : (qc.receivedQty || totalTested);
+
+                    // Check other QCs on this GRN line item
+                    const otherQcs = await QCInspection.find({
+                        tenant: tenantId,
+                        inspectionType: 'INBOUND',
+                        grn: grnDoc._id,
+                        rawMaterial: qc.rawMaterial,
+                        _id: { $ne: qc._id }
+                    }).select('passedQty rejectedQty');
+
+                    const otherInspected = Number(otherQcs.reduce((sum, q) => sum + (q.passedQty || 0) + (q.rejectedQty || 0), 0).toFixed(3));
+                    const maxInspectable = Number((totalReceivedQty - otherInspected).toFixed(3));
+
+                    if (totalTested > (maxInspectable + 0.0001)) {
+                        if (useTransaction && session) await session.abortTransaction();
+                        return res.status(400).json({
+                            success: false,
+                            message: `Cannot inspect ${totalTested} units. Maximum remaining inspectable quantity for this GRN line item is ${maxInspectable} (Received: ${totalReceivedQty}, Inspected by other QCs: ${otherInspected}).`
+                        });
+                    }
+
+                    // Check downstream consumption of fabric rolls
+                    const activeWorkOrders = await WorkOrder.find({
+                        tenant: tenantId,
+                        status: { $in: ['IN_PROGRESS', 'COMPLETED'] },
+                        'jobOrderDetails.rolls': { $exists: true, $ne: [] }
+                    }).select('workOrderNumber jobOrderDetails.rolls');
+
+                    let totalRollConsumedKg = 0;
+                    const consumedWorkOrders = new Set();
+                    const grnRollIdSet = new Set((grnDoc.rolls || []).map(r => String(r._id)));
+                    const grnRollNumMap = {};
+                    (grnDoc.rolls || []).forEach(r => {
+                        if (r.rollNumber) grnRollNumMap[String(r.rollNumber).trim().toUpperCase()] = true;
+                    });
+
+                    for (const wo of activeWorkOrders) {
+                        for (const r of (wo.jobOrderDetails?.rolls || [])) {
+                            const rId = r.rollId ? String(r.rollId) : (r._id ? String(r._id) : '');
+                            const rNum = String(r.rollNumber || r.rollNo || '').trim().toUpperCase();
+                            if ((r.grnId && String(r.grnId) === String(grnDoc._id)) ||
+                                (r.grnNumber && String(r.grnNumber).toUpperCase() === String(grnDoc.grnNumber).toUpperCase()) ||
+                                (rId && grnRollIdSet.has(rId)) ||
+                                (rNum && grnRollNumMap[rNum])) {
+                                const cKg = Number(r.consumedWeightKg != null ? r.consumedWeightKg : (r.netWeight != null ? r.netWeight : (r.grossWeight || 0))) || 0;
+                                totalRollConsumedKg += cKg;
+                                consumedWorkOrders.add(wo.workOrderNumber);
+                            }
+                        }
+                    }
+
+                    if (totalRollConsumedKg > 0 && numPassedQty < (totalRollConsumedKg - 0.001)) {
+                        if (useTransaction && session) await session.abortTransaction();
+                        return res.status(400).json({
+                            success: false,
+                            message: `Cannot reduce passed quantity to ${numPassedQty} units. A total of ${totalRollConsumedKg.toFixed(2)} Kg of fabric rolls from this GRN has already been consumed by Work Order(s): ${Array.from(consumedWorkOrders).join(', ')}.`
+                        });
+                    }
+                }
+            }
+
+            // Downstream stock check: cannot reduce passed quantity if stock has already been consumed
+            if (diffPassed < 0) {
+                const reduction = Math.abs(diffPassed);
+                if (Number(rmDoc.currentStock || 0) < reduction) {
+                    if (useTransaction && session) await session.abortTransaction();
+                    return res.status(400).json({
+                        success: false,
+                        message: `Cannot reduce passed quantity from ${oldPassed} to ${numPassedQty} (${reduction} units reduction). The approved raw material stock has already been consumed downstream by Work Orders. Current available stock is only ${rmDoc.currentStock || 0} units.`
+                    });
+                }
+
+                await executeStockTransactionCore({
+                    tenantId,
+                    referenceNumber: qc.qcCertificateNumber,
+                    itemType: 'RAW_MATERIAL',
+                    item: rmDoc._id,
+                    transactionType: 'STOCK_OUT',
+                    quantity: reduction,
+                    notes: `Inbound QC ${qc.qcCertificateNumber} edited: approved quantity reduced by ${reduction} units`,
+                    performedBy: req.user._id || req.user.id
+                }, sessionOption);
+            } else if (diffPassed > 0) {
+                await executeStockTransactionCore({
+                    tenantId,
+                    referenceNumber: qc.qcCertificateNumber,
+                    itemType: 'RAW_MATERIAL',
+                    item: rmDoc._id,
+                    transactionType: 'QC_PASSED',
+                    quantity: diffPassed,
+                    notes: `Inbound QC ${qc.qcCertificateNumber} edited: additional ${diffPassed} units approved`,
+                    performedBy: req.user._id || req.user.id
+                }, sessionOption);
+            }
+        } else {
+            // OUTBOUND FINISHED GOODS QC UPDATE
+            const woDoc = await WorkOrder.findOne({ _id: qc.workOrder, tenant: tenantId });
+            const fgDoc = await FinishedGood.findOne({ _id: qc.finishedGood, tenant: tenantId });
+
+            if (!fgDoc) {
+                if (useTransaction && session) await session.abortTransaction();
+                return res.status(400).json({
+                    success: false,
+                    message: 'Finished Good reference not found in your organization.'
+                });
+            }
+
+            const totalProduced = woDoc ? (woDoc.completedQuantity || woDoc.targetQuantity || 0) : (qc.receivedQty || totalTested);
+
+            // Check other QCs on this Work Order
+            const otherQcs = await QCInspection.find({
+                tenant: tenantId,
+                inspectionType: 'OUTBOUND',
+                workOrder: qc.workOrder,
+                _id: { $ne: qc._id }
+            }).select('passedQty rejectedQty');
+
+            const otherInspected = Number(otherQcs.reduce((sum, q) => sum + (q.passedQty || 0) + (q.rejectedQty || 0), 0).toFixed(3));
+            const maxInspectable = Number((totalProduced - otherInspected).toFixed(3));
+
+            if (totalTested > (maxInspectable + 0.0001)) {
+                if (useTransaction && session) await session.abortTransaction();
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot inspect ${totalTested} units. Maximum remaining inspectable quantity for Work Order '${woDoc?.workOrderNumber || ''}' is ${maxInspectable} (Produced: ${totalProduced}, Inspected by other QCs: ${otherInspected}).`
+                });
+            }
+
+            // Downstream stock check: cannot reduce passed finished bags if already dispatched/sold
+            if (diffPassed < 0) {
+                const reduction = Math.abs(diffPassed);
+                if (Number(fgDoc.currentStock || 0) < reduction) {
+                    if (useTransaction && session) await session.abortTransaction();
+                    return res.status(400).json({
+                        success: false,
+                        message: `Cannot reduce passed quantity from ${oldPassed} to ${numPassedQty} (${reduction} bags reduction). These finished goods have already been dispatched or sold downstream. Current available stock is only ${fgDoc.currentStock || 0} bags.`
+                    });
+                }
+
+                // Adjust stock balances in-place
+                fgDoc.currentStock = Math.max(0, Number(((fgDoc.currentStock || 0) - reduction).toFixed(3)));
+                fgDoc.pendingQCStock = Number(((fgDoc.pendingQCStock || 0) + reduction).toFixed(3));
+                await fgDoc.save(sessionOption);
+
+                await executeStockTransactionCore({
+                    tenantId,
+                    referenceNumber: qc.qcCertificateNumber,
+                    itemType: 'FINISHED_GOOD',
+                    item: fgDoc._id,
+                    transactionType: 'STOCK_OUT',
+                    quantity: reduction,
+                    notes: `Outbound QC ${qc.qcCertificateNumber} edited: passed quantity reduced by ${reduction} bags returned to pending QC`,
+                    performedBy: req.user._id || req.user.id
+                }, sessionOption);
+            } else if (diffPassed > 0) {
+                fgDoc.pendingQCStock = Math.max(0, Number(((fgDoc.pendingQCStock || 0) - diffPassed).toFixed(3)));
+                fgDoc.currentStock = Number(((fgDoc.currentStock || 0) + diffPassed).toFixed(3));
+                await fgDoc.save(sessionOption);
+
+                await executeStockTransactionCore({
+                    tenantId,
+                    referenceNumber: qc.qcCertificateNumber,
+                    itemType: 'FINISHED_GOOD',
+                    item: fgDoc._id,
+                    transactionType: 'QC_PASSED',
+                    quantity: diffPassed,
+                    notes: `Outbound QC ${qc.qcCertificateNumber} edited: additional ${diffPassed} bags approved`,
+                    performedBy: req.user._id || req.user.id
+                }, sessionOption);
+            }
+
+            // Adjust pendingQCStock for changes in rejectedQty
+            const diffRejected = Number((numRejectedQty - oldRejected).toFixed(3));
+            if (diffRejected > 0) {
+                fgDoc.pendingQCStock = Math.max(0, Number(((fgDoc.pendingQCStock || 0) - diffRejected).toFixed(3)));
+                await fgDoc.save(sessionOption);
+            } else if (diffRejected < 0) {
+                fgDoc.pendingQCStock = Number(((fgDoc.pendingQCStock || 0) + Math.abs(diffRejected)).toFixed(3));
+                await fgDoc.save(sessionOption);
+            }
+        }
+
+        // Update QC record in place
+        qc.sampleSize = numSampleSize;
+        qc.passedQty = numPassedQty;
+        qc.rejectedQty = numRejectedQty;
+        if (tensileStrength !== undefined) qc.tensileStrength = tensileStrength !== '' ? Number(tensileStrength) : undefined;
+        if (gsmTested !== undefined) qc.gsmTested = gsmTested !== '' ? Number(gsmTested) : undefined;
+        if (defects !== undefined) qc.defects = defects;
+        qc.qcStatus = computedQcStatus;
+        await qc.save(sessionOption);
+
+        if (useTransaction && session) {
+            await session.commitTransaction();
+            session.endSession();
+        }
+
+        await qc.populate([
+            { path: 'workOrder', select: 'workOrderNumber status targetQuantity completedQuantity' },
+            { path: 'finishedGood', select: 'name code uom currentStock pendingQCStock' },
+            { path: 'grn', select: 'grnNumber' },
+            { path: 'rawMaterial', select: 'name code uom currentStock' },
+            { path: 'supplier', select: 'name' },
+            { path: 'inspectedBy', select: 'name email' }
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: `QC Inspection '${qc.qcCertificateNumber}' updated successfully. Status: '${computedQcStatus}'.`,
+            data: qc
+        });
+    } catch (error) {
+        if (useTransaction && session) {
+            if (session.inTransaction()) await session.abortTransaction();
+            session.endSession();
+        }
+        console.error('Error in updateQCInspection:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to update QC Inspection.',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     createQCInspection,
+    updateQCInspection,
     getQCInspections,
     getQCInspectionById,
     getPendingQcTargets

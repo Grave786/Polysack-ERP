@@ -122,6 +122,120 @@ const formatStatusName = (status) => {
 };
 
 /**
+ * Forward recalculate dynamic caps across all stages and sync WorkOrder document
+ */
+const recalculateForwardStageCapsAndSync = async (tenantObjId, woObjId, sessionOption = {}) => {
+    const query = WorkOrder.findOne({ _id: woObjId, tenant: tenantObjId });
+    if (sessionOption.session) query.session(sessionOption.session);
+    const workOrder = await query;
+    if (!workOrder) return null;
+
+    const nonSkippedStages = (workOrder.stages || []).filter((s) => s.status !== 'SKIPPED');
+    if (nonSkippedStages.length === 0) return { workOrder, exceededStages: [] };
+
+    const workOrderOriginalTarget = Number(workOrder.targetQuantity || 0);
+
+    const allAggPipeline = [
+        {
+            $match: {
+                tenant: tenantObjId,
+                workOrder: woObjId
+            }
+        },
+        {
+            $group: {
+                _id: { $ifNull: ['$stage', '$stageName'] },
+                total: { $sum: '$quantity' }
+            }
+        }
+    ];
+
+    let aggQuery = ProductionLog.aggregate(allAggPipeline);
+    if (sessionOption.session) aggQuery = aggQuery.session(sessionOption.session);
+    const aggResult = await aggQuery;
+
+    const stageOutputMap = {};
+    (aggResult || []).forEach((row) => {
+        if (row._id) stageOutputMap[String(row._id).toUpperCase()] = Number(row.total || 0);
+    });
+
+    const exceededStages = [];
+    let runningTarget = workOrderOriginalTarget;
+    let finalStageCompleted = 0;
+
+    for (let i = 0; i < nonSkippedStages.length; i++) {
+        const st = nonSkippedStages[i];
+        const stKey = String(st.stageName || '').toUpperCase();
+        const stageTarget = i === 0 ? workOrderOriginalTarget : runningTarget;
+
+        let totalProduced = stageOutputMap[stKey];
+        if (totalProduced === undefined || totalProduced === null) {
+            totalProduced = Number(st.goodOutputQty || st.completedQuantity || 0);
+        }
+
+        const isExceeding = totalProduced > stageTarget && stageTarget > 0;
+        const excessQty = isExceeding ? Math.round((totalProduced - stageTarget) * 1000) / 1000 : 0;
+
+        if (isExceeding) {
+            const prevSt = i > 0 ? nonSkippedStages[i - 1] : null;
+            exceededStages.push({
+                stageName: st.stageName,
+                stageLabel: (st.stageName || '').replace(/_/g, ' '),
+                sequence: st.sequence || (i + 1),
+                stageTarget,
+                totalProduced,
+                excessQty,
+                previousStageName: prevSt?.stageName || '',
+                previousStageLabel: (prevSt?.stageName || 'preceding stage').replace(/_/g, ' ')
+            });
+        }
+
+        const isFinalStage = st.sequence === 8 || st.stageName === 'BALING_PACKING' || i === nonSkippedStages.length - 1;
+        if (isFinalStage) {
+            finalStageCompleted = Math.min(stageTarget, totalProduced);
+        }
+
+        // Output available for next stage is capped to this stage's actual good output (cumulative bottleneck)
+        runningTarget = Math.min(stageTarget, totalProduced);
+
+        await WorkOrder.updateOne(
+            { _id: woObjId, tenant: tenantObjId },
+            {
+                $set: {
+                    'stages.$[st].completedQuantity': totalProduced,
+                    'stages.$[st].goodOutputQty': totalProduced
+                }
+            },
+            {
+                arrayFilters: [{ 'st.stageName': st.stageName }],
+                ...(sessionOption.session ? { session: sessionOption.session } : {})
+            }
+        );
+    }
+
+    const shortfall = Math.max(0, workOrderOriginalTarget - finalStageCompleted);
+    const woUpdateSet = {
+        completedQuantity: finalStageCompleted,
+        balanceQuantity: shortfall
+    };
+    const specialBalanceStatuses = ['CONTINUED', 'PENDING_APPROVAL', 'REJECTED'];
+    if (!specialBalanceStatuses.includes(workOrder.balanceStatus)) {
+        woUpdateSet.balanceStatus = shortfall > 0 ? 'PENDING' : 'RESOLVED';
+    }
+
+    await WorkOrder.updateOne(
+        { _id: woObjId, tenant: tenantObjId },
+        { $set: woUpdateSet },
+        sessionOption.session ? { session: sessionOption.session } : {}
+    );
+
+    return {
+        workOrder,
+        exceededStages
+    };
+};
+
+/**
  * SINGLE BACKEND SOURCE OF TRUTH:
  * Computes dynamic stage targetQuantity, totalProduced (from ProductionLog sum), and remainingQuantity.
  * Dynamic rule:
@@ -281,30 +395,8 @@ const getStageProductionStatus = async (tenantId, workOrderId, stageIdentifier, 
     const remainingQuantity = Math.max(0, stageTargetQuantity - totalProduced);
     const isExceedingPreviousStage = totalProduced > stageTargetQuantity && stageTargetQuantity > 0;
 
-    // 5. Safely synchronize stage completedQuantity and goodOutputQty via updateOne
-    const updateSet = {
-        'stages.$[st].completedQuantity': totalProduced,
-        'stages.$[st].goodOutputQty': totalProduced
-    };
-
-    const isFinalStage = targetStage?.sequence === 8 || stageName === 'BALING_PACKING';
-    if (isFinalStage) {
-        const effectiveFinalCompleted = Math.min(stageTargetQuantity, totalProduced);
-        updateSet.completedQuantity = effectiveFinalCompleted;
-        const shortfall = Math.max(0, workOrderOriginalTarget - effectiveFinalCompleted);
-        updateSet.balanceQuantity = shortfall;
-        updateSet.balanceStatus = shortfall > 0 ? 'PENDING' : 'RESOLVED';
-    }
-
-    const updateQuery = WorkOrder.updateOne(
-        { _id: woObjId, tenant: tenantObjId },
-        { $set: updateSet },
-        {
-            arrayFilters: [{ 'st.stageName': stageName }],
-            ...(sessionOption.session ? { session: sessionOption.session } : {})
-        }
-    );
-    await updateQuery;
+    // 5. Forward recalculate dynamic caps and synchronize WorkOrder document
+    const forwardSync = await recalculateForwardStageCapsAndSync(tenantObjId, woObjId, sessionOption);
 
     return {
         workOrder,
@@ -320,7 +412,8 @@ const getStageProductionStatus = async (tenantId, workOrderId, stageIdentifier, 
         previousStage: previousStageInfo,
         isTargetAchieved: remainingQuantity === 0 && stageTargetQuantity > 0,
         hasNoTarget: stageTargetQuantity === 0,
-        isExceedingPreviousStage
+        isExceedingPreviousStage,
+        exceededStages: forwardSync?.exceededStages || []
     };
 };
 
@@ -376,12 +469,20 @@ const createProductionLog = async (req, res) => {
             });
         }
 
-        // 2. Block production log creation on CANCELLED, REJECTED, and COMPLETED Work Orders
+        // 2. Block production log creation on CANCELLED and REJECTED Work Orders.
+        // For COMPLETED Work Orders: only Tenant Admin may add corrective/compensating entries (remaining cap is still enforced below).
         const woStatusUpper = String(workOrder.status || '').toUpperCase();
-        if (woStatusUpper === 'CANCELLED' || woStatusUpper === 'REJECTED' || woStatusUpper === 'COMPLETED') {
+        const isAdminUser = await isTenantAdmin(req.user);
+        if (woStatusUpper === 'CANCELLED' || woStatusUpper === 'REJECTED') {
             return res.status(400).json({
                 success: false,
                 message: `Cannot add production for a ${formatStatusName(workOrder.status)} Work Order.`
+            });
+        }
+        if (woStatusUpper === 'COMPLETED' && !isAdminUser) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot add production for a Completed Work Order.'
             });
         }
 
@@ -871,6 +972,7 @@ const getProductionLogsSummary = async (req, res) => {
                 isFirstActiveStage,
                 previousStage,
                 isExceedingPreviousStage,
+                exceededStages: status.exceededStages || [],
                 progressPercentage: stageTargetQuantity > 0 ? Math.min(100, Math.round((totalProduced / stageTargetQuantity) * 100)) : 0,
                 byOperator,
                 byDate,
@@ -1439,6 +1541,7 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
 
 module.exports = {
     getStageProductionStatus,
+    recalculateForwardStageCapsAndSync,
     createProductionLog,
     getProductionLogs,
     getProductionLogsSummary,

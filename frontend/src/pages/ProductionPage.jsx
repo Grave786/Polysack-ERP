@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import ProductionStageMonitor from '../components/production/ProductionStageMonitor';
 import CreateWorkOrderModal from '../components/production/CreateWorkOrderModal';
@@ -24,8 +25,28 @@ export default function ProductionPage() {
     const user = useAuthStore((state) => state.user);
     const isAdmin = isTenantAdmin(user) || checkIsSuperAdmin(user);
 
+    const [searchParams] = useSearchParams();
+    const tabFromUrl = searchParams.get('tab');
+    const woIdFromUrl = searchParams.get('id');
+
     const [selectedWorkOrderId, setSelectedWorkOrderId] = useState(null);
-    const [activeTabKey, setActiveTabKey] = useState('work-orders');
+    const [activeTabKey, setActiveTabKey] = useState(tabFromUrl || 'work-orders');
+
+    useEffect(() => {
+        if (tabFromUrl && tabFromUrl !== activeTabKey) {
+            setActiveTabKey(tabFromUrl);
+        }
+    }, [tabFromUrl, activeTabKey]);
+
+    useEffect(() => {
+        if (woIdFromUrl) {
+            axiosInstance.get(`/work-orders/${woIdFromUrl}`).then((res) => {
+                if (res.data?.success && res.data?.data) {
+                    setViewOrderRecord(res.data.data);
+                }
+            }).catch(() => {});
+        }
+    }, [woIdFromUrl]);
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
     const [editOrderRecord, setEditOrderRecord] = useState(null);
     const [viewOrderRecord, setViewOrderRecord] = useState(null);
@@ -359,7 +380,7 @@ export default function ProductionPage() {
     return (
         <>
             <TabbedResourcePage
-                key={refreshKey}
+                key={`${refreshKey}`}
                 title="Shop Floor Manufacturing Engine"
                 description="Manage factory Work Orders, monitor live production pipeline stage progress, and configure Bill of Materials (BOM) recipes."
                 tabs={tabs}

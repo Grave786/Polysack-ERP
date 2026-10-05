@@ -85,6 +85,24 @@ const WorkOrderStageSchema = new mongoose.Schema({
     inheritedQuantity: {
         type: Number,
         default: 0
+    },
+    isWoSkipped: {
+        type: Boolean,
+        default: false
+    },
+    skipReason: {
+        type: String,
+        trim: true,
+        default: null
+    },
+    skippedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
+    skippedAt: {
+        type: Date,
+        default: null
     }
 }, { _id: false });
 

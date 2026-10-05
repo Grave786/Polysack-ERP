@@ -9,6 +9,7 @@ const ProductionLog = require('../models/productionLog.model');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
 const {
     getStageProductionStatus,
+    recalculateForwardStageCapsAndSync,
     getValidOperatorIds
 } = require('./productionLog.controller');
 
@@ -1217,7 +1218,8 @@ const getWorkOrderById = async (req, res) => {
                     { path: 'currentOperator', select: 'name employeeCode department' }
                 ]
             })
-            .populate('stages.machine', 'name code section currentOperators currentOperator');
+            .populate('stages.machine', 'name code section currentOperators currentOperator')
+            .populate('stages.skippedBy', 'name email role');
 
         if (!workOrder) {
             return res.status(404).json({
@@ -1254,12 +1256,28 @@ const getWorkOrderById = async (req, res) => {
             let hasChange = false;
             const nonSkippedStages = workOrder.stages.filter((s) => s.status !== 'SKIPPED');
             let runningBottleneck = Number(workOrder.targetQuantity || 0);
+            const exceededStages = [];
 
             for (let i = 0; i < nonSkippedStages.length; i++) {
                 const st = nonSkippedStages[i];
                 const key = String(st.stageName || '').toUpperCase();
                 const rawLogQty = logMap[key];
                 const totalQty = rawLogQty !== undefined ? rawLogQty : Number(st.completedQuantity || st.goodOutputQty || 0);
+
+                const stageCap = i === 0 ? Number(workOrder.targetQuantity || 0) : runningBottleneck;
+                if (totalQty > stageCap && stageCap > 0) {
+                    const prevSt = i > 0 ? nonSkippedStages[i - 1] : null;
+                    exceededStages.push({
+                        stageName: st.stageName,
+                        stageLabel: (st.stageName || '').replace(/_/g, ' '),
+                        sequence: st.sequence || (i + 1),
+                        stageTarget: stageCap,
+                        totalProduced: totalQty,
+                        excessQty: Math.round((totalQty - stageCap) * 1000) / 1000,
+                        previousStageName: prevSt?.stageName || '',
+                        previousStageLabel: (prevSt?.stageName || 'preceding stage').replace(/_/g, ' ')
+                    });
+                }
 
                 if (st.completedQuantity !== totalQty || st.goodOutputQty !== totalQty) {
                     st.completedQuantity = totalQty;
@@ -1268,7 +1286,7 @@ const getWorkOrderById = async (req, res) => {
                 }
 
                 // Cumulative bottleneck: each stage can at most produce what came into it
-                runningBottleneck = Math.min(runningBottleneck, totalQty);
+                runningBottleneck = Math.min(stageCap, totalQty);
             }
 
             const finalStage = workOrder.stages.find((s) => s.sequence === 8 || s.stageName === 'BALING_PACKING') || nonSkippedStages[nonSkippedStages.length - 1];
@@ -1299,6 +1317,15 @@ const getWorkOrderById = async (req, res) => {
             if (hasChange) {
                 await workOrder.save();
             }
+
+            const woData = workOrder.toObject ? workOrder.toObject() : workOrder;
+            woData.exceededStages = exceededStages;
+
+            return res.status(200).json({
+                success: true,
+                data: woData,
+                exceededStages
+            });
         }
 
         return res.status(200).json({
@@ -1794,6 +1821,280 @@ const updateWorkOrder = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Skip a specific stage for an individual Work Order (Tenant Admin only)
+ * @route   PATCH /api/work-orders/:id/stages/:stageName/skip
+ * @access  Private (Tenant Admin only)
+ */
+const skipStage = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid.'
+            });
+        }
+        const tenantObjId = new mongoose.Types.ObjectId(tenantId);
+        const { id, stageName } = req.params;
+        const { reason } = req.body;
+
+        if (!reason || !reason.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: 'A short reason/remark is required when skipping a stage (e.g. "Not needed for this order\'s spec").'
+            });
+        }
+
+        const workOrder = await WorkOrder.findOne({ _id: id, tenant: tenantObjId });
+        if (!workOrder) {
+            return res.status(404).json({
+                success: false,
+                message: 'Work Order not found.'
+            });
+        }
+
+        const woStatusUpper = String(workOrder.status || '').toUpperCase();
+        if (['COMPLETED', 'CANCELLED', 'REJECTED'].includes(woStatusUpper)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot skip stages on a ${woStatusUpper} Work Order.`
+            });
+        }
+
+        const normalizedStageName = String(stageName || '').toUpperCase();
+        const stageIndex = (workOrder.stages || []).findIndex(
+            (s) => String(s.stageName).toUpperCase() === normalizedStageName
+        );
+
+        if (stageIndex === -1) {
+            return res.status(404).json({
+                success: false,
+                message: `Stage '${stageName}' not found on this Work Order.`
+            });
+        }
+
+        const targetStage = workOrder.stages[stageIndex];
+
+        if (targetStage.status === 'COMPLETED') {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot skip stage '${targetStage.stageName.replace(/_/g, ' ')}' because it is already Completed.`
+            });
+        }
+
+        if (targetStage.status === 'ACTIVE') {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot skip stage '${targetStage.stageName.replace(/_/g, ' ')}' while it is currently active. Skipping is only allowed for upcoming stages before they become active.`
+            });
+        }
+
+        if (targetStage.status === 'SKIPPED') {
+            return res.status(400).json({
+                success: false,
+                message: `Stage '${targetStage.stageName.replace(/_/g, ' ')}' is already skipped.`
+            });
+        }
+
+        // Check if remaining non-skipped stages exist
+        const otherNonSkipped = (workOrder.stages || []).filter(
+            (s) => s.status !== 'SKIPPED' && String(s.stageName).toUpperCase() !== normalizedStageName
+        );
+        if (otherNonSkipped.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot skip this stage: At least one stage must remain active in the Work Order pipeline.'
+            });
+        }
+
+        // Production log check: if any logs exist, block skipping
+        const existingLogsCount = await ProductionLog.countDocuments({
+            tenant: tenantObjId,
+            workOrder: workOrder._id,
+            $or: [
+                { stage: targetStage.stageName },
+                { stageName: targetStage.stageName }
+            ]
+        });
+
+        if (existingLogsCount > 0 || Number(targetStage.completedQuantity || 0) > 0 || Number(targetStage.goodOutputQty || 0) > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot skip stage '${targetStage.stageName.replace(/_/g, ' ')}': This stage already has logged production entries.`
+            });
+        }
+
+        // Mark as skipped for this individual WO
+        targetStage.status = 'SKIPPED';
+        targetStage.isWoSkipped = true;
+        targetStage.skipReason = reason.trim();
+        targetStage.skippedBy = req.user._id || req.user.id;
+        targetStage.skippedAt = new Date();
+
+        // Recalculate progress percentage
+        const activeOrCompleted = (workOrder.stages || []).filter((s) => s.status !== 'SKIPPED');
+        const completedCount = activeOrCompleted.filter((s) => s.status === 'COMPLETED').length;
+        workOrder.progressPercentage = workOrder.status === 'COMPLETED'
+            ? 100
+            : (activeOrCompleted.length > 0 ? Math.min(100, Math.round((completedCount / activeOrCompleted.length) * 100)) : 100);
+
+        await workOrder.save({ validateModifiedOnly: true });
+
+        // Forward recalculate dynamic caps across all stages
+        const syncRes = await recalculateForwardStageCapsAndSync(tenantObjId, workOrder._id);
+
+        const updatedWorkOrder = await WorkOrder.findById(workOrder._id)
+            .populate('customer', 'companyName code contactPerson phone')
+            .populate('finishedGood', 'name code')
+            .populate('assignedMachine', 'name code currentOperators currentOperator')
+            .populate('assignedOperators', 'name employeeCode department')
+            .populate('stages.machine', 'name code currentOperators currentOperator')
+            .populate('stages.skippedBy', 'name email role')
+            .lean();
+
+        if (updatedWorkOrder) {
+            updatedWorkOrder.exceededStages = syncRes?.exceededStages || [];
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Stage '${targetStage.stageName.replace(/_/g, ' ')}' marked as Skipped — Not Required for this Work Order.`,
+            data: updatedWorkOrder
+        });
+    } catch (error) {
+        console.error('Error in skipStage:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to skip stage.'
+        });
+    }
+};
+
+/**
+ * @desc    Un-skip (revert back to required/pending) a WO-level skipped stage (Tenant Admin only)
+ * @route   PATCH /api/work-orders/:id/stages/:stageName/unskip
+ * @access  Private (Tenant Admin only)
+ */
+const unskipStage = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid.'
+            });
+        }
+        const tenantObjId = new mongoose.Types.ObjectId(tenantId);
+        const { id, stageName } = req.params;
+
+        const workOrder = await WorkOrder.findOne({ _id: id, tenant: tenantObjId });
+        if (!workOrder) {
+            return res.status(404).json({
+                success: false,
+                message: 'Work Order not found.'
+            });
+        }
+
+        const woStatusUpper = String(workOrder.status || '').toUpperCase();
+        if (['COMPLETED', 'CANCELLED', 'REJECTED'].includes(woStatusUpper)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot un-skip stages on a ${woStatusUpper} Work Order.`
+            });
+        }
+
+        const normalizedStageName = String(stageName || '').toUpperCase();
+        const stageIndex = (workOrder.stages || []).findIndex(
+            (s) => String(s.stageName).toUpperCase() === normalizedStageName
+        );
+
+        if (stageIndex === -1) {
+            return res.status(404).json({
+                success: false,
+                message: `Stage '${stageName}' not found on this Work Order.`
+            });
+        }
+
+        const targetStage = workOrder.stages[stageIndex];
+
+        if (targetStage.status !== 'SKIPPED') {
+            return res.status(400).json({
+                success: false,
+                message: `Stage '${targetStage.stageName.replace(/_/g, ' ')}' is not in Skipped status.`
+            });
+        }
+
+        // Only allow un-skipping for WO-level skipped stages, not company starting-stage policy
+        const tenantDoc = await Tenant.findById(tenantObjId).lean();
+        const startingStageKey = tenantDoc?.productionSettings?.activeStartingStage || 'FLEXO_PRINTING';
+        const startingIndex = ALL_8_STAGES.indexOf(startingStageKey);
+
+        if (stageIndex < startingIndex && !targetStage.isWoSkipped) {
+            return res.status(400).json({
+                success: false,
+                message: `This stage was skipped by Company Settings policy (${startingStageKey.replace(/_/g, ' ')} start) and cannot be un-skipped on an individual Work Order.`
+            });
+        }
+
+        // Check if the pipeline has already progressed past this stage
+        const hasBeenPassed = (workOrder.stages || []).some(
+            (s) => s.sequence > targetStage.sequence && (s.status === 'ACTIVE' || s.status === 'COMPLETED')
+        );
+
+        if (hasBeenPassed) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot un-skip '${targetStage.stageName.replace(/_/g, ' ')}': The production pipeline has already progressed past this stage.`
+            });
+        }
+
+        // Revert back to PENDING
+        targetStage.status = 'PENDING';
+        targetStage.isWoSkipped = false;
+        targetStage.skipReason = null;
+        targetStage.skippedBy = null;
+        targetStage.skippedAt = null;
+
+        // Recalculate progress percentage
+        const activeOrCompleted = (workOrder.stages || []).filter((s) => s.status !== 'SKIPPED');
+        const completedCount = activeOrCompleted.filter((s) => s.status === 'COMPLETED').length;
+        workOrder.progressPercentage = workOrder.status === 'COMPLETED'
+            ? 100
+            : (activeOrCompleted.length > 0 ? Math.min(100, Math.round((completedCount / activeOrCompleted.length) * 100)) : 100);
+
+        await workOrder.save({ validateModifiedOnly: true });
+
+        // Forward recalculate dynamic caps
+        const syncRes = await recalculateForwardStageCapsAndSync(tenantObjId, workOrder._id);
+
+        const updatedWorkOrder = await WorkOrder.findById(workOrder._id)
+            .populate('customer', 'companyName code contactPerson phone')
+            .populate('finishedGood', 'name code')
+            .populate('assignedMachine', 'name code currentOperators currentOperator')
+            .populate('assignedOperators', 'name employeeCode department')
+            .populate('stages.machine', 'name code currentOperators currentOperator')
+            .populate('stages.skippedBy', 'name email role')
+            .lean();
+
+        if (updatedWorkOrder) {
+            updatedWorkOrder.exceededStages = syncRes?.exceededStages || [];
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Stage '${targetStage.stageName.replace(/_/g, ' ')}' restored to pipeline (Pending).`,
+            data: updatedWorkOrder
+        });
+    } catch (error) {
+        console.error('Error in unskipStage:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to un-skip stage.'
+        });
+    }
+};
+
 module.exports = {
     createWorkOrder,
     updateWorkOrder,
@@ -1805,5 +2106,7 @@ module.exports = {
     getWorkOrders,
     getWorkOrderById,
     getAvailableRolls,
-    getRollsTraceability
+    getRollsTraceability,
+    skipStage,
+    unskipStage
 };

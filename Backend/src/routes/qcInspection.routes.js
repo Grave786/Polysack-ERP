@@ -2,11 +2,12 @@ const express = require('express');
 const router = express.Router();
 const {
     createQCInspection,
+    updateQCInspection,
     getQCInspections,
     getQCInspectionById,
     getPendingQcTargets
 } = require('../controllers/qcInspection.controller');
-const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule, requireTenantAdmin } = require('../middlewares/rbac.middleware');
 
 router.use(authenticate);
 router.use(checkTenantModule('QUALITY'));
@@ -52,8 +53,8 @@ const rejectQCModification = (req, res) => {
     });
 };
 
-router.put('/:id', authenticate, rejectQCModification);
-router.patch('/:id', authenticate, rejectQCModification);
+router.put('/:id', authenticate, requireTenantAdmin, updateQCInspection);
+router.patch('/:id', authenticate, requireTenantAdmin, updateQCInspection);
 router.delete('/:id', authenticate, rejectQCModification);
 router.post('/bulk-delete', authenticate, createBulkDeleteHandler(QCInspection, { resourceName: 'QC Inspections', isImmutable: true }));
 

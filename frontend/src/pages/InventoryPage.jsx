@@ -10,7 +10,7 @@ import StockAdjustmentPanel from '../components/inventory/StockAdjustmentPanel';
 export default function InventoryPage() {
     const [searchParams] = useSearchParams();
     const tabFromUrl = searchParams.get('tab');
-    const searchFromUrl = searchParams.get('search');
+
 
     const [activeTabKey, setActiveTabKey] = useState(tabFromUrl || 'finished-goods');
     const [viewMode, setViewMode] = useState('cards'); // 'cards' | 'table'
@@ -468,13 +468,12 @@ export default function InventoryPage() {
     return (
         <>
             <TabbedResourcePage
-                key={`${refreshKey}-${searchFromUrl || ''}`}
+                key={`${refreshKey}`}
                 title="Poly & Paper Bag Inventory Master"
                 description="Editable Bag Specifications: Custom GSM, Shape, Size Dimensions (Length/Width/Capacity), Pricing & Stock Management"
                 tabs={tabs}
                 activeTabKey={activeTabKey}
                 onTabChange={setActiveTabKey}
-                initialSearch={searchFromUrl || ''}
                 headerActions={renderHeaderActionButtons}
                 tabBarActions={renderViewModeToggle}
             />

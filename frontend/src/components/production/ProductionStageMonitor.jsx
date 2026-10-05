@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { CheckCircle2, Play, ArrowRight, AlertCircle, RefreshCw, Ban, Search, ChevronDown, Check, X, AlertTriangle, Edit3, PackageCheck, Clock } from 'lucide-react';
+import { CheckCircle2, Play, ArrowRight, AlertCircle, RefreshCw, Ban, Search, ChevronDown, Check, X, AlertTriangle, Edit3, PackageCheck, Clock, Info, SkipForward, RotateCcw } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../store/authStore';
@@ -29,6 +29,12 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [showPartialAdvanceModal, setShowPartialAdvanceModal] = useState(false);
     const [isResumingBalance, setIsResumingBalance] = useState(false);
+    const [selectedStageForTracking, setSelectedStageForTracking] = useState(null);
+    const [stageToSkip, setStageToSkip] = useState(null);
+    const [skipReasonInput, setSkipReasonInput] = useState('');
+    const [isSkipping, setIsSkipping] = useState(false);
+    const [auditStageModal, setAuditStageModal] = useState(null);
+    const [restoreModal, setRestoreModal] = useState({ isOpen: false, stageId: null, stageName: '' });
 
     // Searchable combobox & status filter states for Select Job
     const [jobStatusFilter, setJobStatusFilter] = useState('ALL');
@@ -246,6 +252,49 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
             toast.error(err.response?.data?.message || 'Failed to advance stage');
         } finally {
             setIsSubmitting(false);
+        }
+    };
+
+    const handleConfirmSkip = async () => {
+        if (!stageToSkip || !skipReasonInput.trim()) {
+            toast.error('Please enter a short reason for skipping this stage.');
+            return;
+        }
+        try {
+            setIsSkipping(true);
+            const res = await axiosInstance.patch(`/work-orders/${workOrder._id}/stages/${stageToSkip.key}/skip`, {
+                reason: skipReasonInput.trim()
+            });
+            if (res.data?.success) {
+                toast.success(res.data.message || `Stage '${stageToSkip.label}' skipped.`);
+                setStageToSkip(null);
+                setSkipReasonInput('');
+                await fetchWorkOrderDetail(workOrder._id);
+            }
+        } catch (err) {
+            console.error('Error skipping stage:', err);
+            toast.error(err.response?.data?.message || 'Failed to skip stage');
+        } finally {
+            setIsSkipping(false);
+        }
+    };
+
+    const handleUnskipStage = (stageKey, stageLabel) => {
+        setRestoreModal({ isOpen: true, stageId: stageKey, stageName: stageLabel });
+    };
+
+    const handleConfirmRestore = async () => {
+        const { stageId, stageName } = restoreModal;
+        setRestoreModal({ isOpen: false, stageId: null, stageName: '' });
+        try {
+            const res = await axiosInstance.patch(`/work-orders/${workOrder._id}/stages/${stageId}/unskip`);
+            if (res.data?.success) {
+                toast.success(res.data.message || `Stage '${stageName}' restored.`);
+                await fetchWorkOrderDetail(workOrder._id);
+            }
+        } catch (err) {
+            console.error('Error un-skipping stage:', err);
+            toast.error(err.response?.data?.message || 'Failed to restore stage');
         }
     };
 
@@ -491,11 +540,58 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                         const isActive = status === 'ACTIVE';
                         const isSkipped = status === 'SKIPPED' && !isInherited;
 
+                        const isWoFinishedOrCancelled = ['COMPLETED', 'CANCELLED', 'REJECTED'].includes(String(workOrder.status || '').toUpperCase());
+
+                        // Check if this pending stage can be skipped:
+                        // 1. User is Tenant Admin
+                        // 2. WO status not completed, cancelled, or rejected
+                        // 3. Stage is PENDING (not active, not completed, not inherited, not already skipped)
+                        // 4. No production logged
+                        const hasLogs = Number(stageData?.completedQuantity || 0) > 0 || Number(stageData?.goodOutputQty || 0) > 0;
+                        const canSkipStage = isAdmin && !isWoFinishedOrCancelled && !isActive && !isCompleted && !isInherited && !isSkipped && !hasLogs;
+
+                        // Check if a skipped stage can be un-skipped:
+                        // 1. User is Tenant Admin
+                        // 2. WO is not finished/cancelled
+                        // 3. Stage is skipped at WO level (stageData?.isWoSkipped || stageData?.skipReason)
+                        // 4. Pipeline has not passed this stage yet: no subsequent stage (sequence > cfg.sequence) is ACTIVE or COMPLETED
+                        const hasBeenPassedInPipeline = (workOrder.stages || []).some(
+                            (s) => s.sequence > cfg.sequence && (s.status === 'ACTIVE' || s.status === 'COMPLETED')
+                        );
+                        const canUnskipStage = isAdmin && !isWoFinishedOrCancelled && isSkipped && (stageData?.isWoSkipped || stageData?.skipReason) && !hasBeenPassedInPipeline;
+
+                        const currentTrackedStage = selectedStageForTracking || activeStage?.stageName;
+                        const isCurrentlyTracked = currentTrackedStage === cfg.key;
+                        const isOverCap = Array.isArray(workOrder?.exceededStages) && workOrder.exceededStages.some((ex) => ex.stageName === cfg.key);
+                        const canAdminClick = isAdmin && (isCompleted || isActive);
+                        const hasAuditInfo = isSkipped && Boolean(stageData?.skipReason);
+
                         return (
                             <div
                                 key={cfg.key}
-                                className={`rounded-lg p-2.5 flex flex-col justify-between transition-all duration-200 min-h-[90px] ${
-                                    isInherited
+                                onClick={() => {
+                                    if (hasAuditInfo) {
+                                        setAuditStageModal({
+                                            label: cfg.label,
+                                            sequence: cfg.sequence,
+                                            stageData
+                                        });
+                                        return;
+                                    }
+                                    if (canAdminClick) {
+                                        setSelectedStageForTracking(cfg.key);
+                                    }
+                                }}
+                                className={`rounded-lg p-2.5 flex flex-col justify-between transition-all duration-200 min-h-[95px] relative ${
+                                    canAdminClick || hasAuditInfo ? 'cursor-pointer hover:border-primary/60 hover:shadow-md' : ''
+                                } ${
+                                    isCurrentlyTracked && isCompleted
+                                        ? 'bg-amber-50/90 border-2 border-amber-500 shadow-md ring-2 ring-amber-400/40 text-amber-900'
+                                        : isCurrentlyTracked && isActive
+                                        ? 'bg-orange-50 border-2 border-orange-500 text-orange-800 shadow-md ring-2 ring-orange-400/40'
+                                        : isOverCap
+                                        ? 'bg-rose-50 border-2 border-rose-400 text-rose-800 shadow-xs'
+                                        : isInherited
                                         ? 'bg-emerald-50/70 border border-emerald-300 text-emerald-800'
                                         : isCompleted
                                         ? 'bg-green-50 border border-green-200 text-green-700'
@@ -505,6 +601,13 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                                         ? 'bg-gray-100/70 border border-gray-200 text-gray-400 opacity-60'
                                         : 'bg-transparent border border-gray-200 text-gray-400'
                                 }`}
+                                title={
+                                    hasAuditInfo
+                                        ? `Skipped: "${stageData.skipReason}"${stageData.skippedBy?.name ? ` by ${stageData.skippedBy.name}` : ''}${stageData.skippedAt ? ` on ${new Date(stageData.skippedAt).toLocaleDateString('en-IN')}` : ''} (Click for audit details)`
+                                        : canAdminClick
+                                        ? `Click to inspect and edit logs for ${cfg.label}`
+                                        : undefined
+                                }
                             >
                                 <div className="flex justify-between items-start">
                                     <span className={`text-[10px] font-bold uppercase tracking-wider ${
@@ -513,15 +616,27 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                                         STEP 0{cfg.sequence}
                                     </span>
 
-                                    {isInherited ? (
-                                        <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
-                                    ) : isCompleted ? (
-                                        <CheckCircle2 size={14} className="text-green-600 shrink-0" />
-                                    ) : isActive ? (
-                                        <Play size={14} className="text-orange-600 fill-orange-600 shrink-0 animate-pulse" />
-                                    ) : isSkipped ? (
-                                        <Ban size={14} className="text-gray-400 shrink-0" />
-                                    ) : null}
+                                    <div className="flex items-center gap-1">
+                                        {isOverCap && (
+                                            <span className="text-[8px] bg-rose-500 text-white font-black px-1 py-0.2 rounded uppercase" title="Output exceeds preceding stage cap">
+                                                Over-Cap
+                                            </span>
+                                        )}
+                                        {isCurrentlyTracked && isCompleted && (
+                                            <span className="text-[8px] bg-amber-500 text-white font-extrabold px-1.5 py-0.2 rounded uppercase">
+                                                Viewing
+                                            </span>
+                                        )}
+                                        {isInherited ? (
+                                            <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                                        ) : isCompleted ? (
+                                            <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                                        ) : isActive ? (
+                                            <Play size={14} className="text-orange-600 fill-orange-600 shrink-0 animate-pulse" />
+                                        ) : isSkipped ? (
+                                            <Ban size={14} className="text-gray-400 shrink-0" />
+                                        ) : null}
+                                    </div>
                                 </div>
 
                                 <div className="mt-1">
@@ -542,6 +657,11 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                                     {isCompleted && !isInherited && (
                                         <div className="text-[9px] text-green-600 font-medium mt-1">
                                             <p>Good: {stageData?.goodOutputQty || 0} | Defect: {stageData?.rejectedQty || 0}</p>
+                                            {canAdminClick && !isCurrentlyTracked && (
+                                                <span className="text-[8.5px] text-primary/80 font-bold hover:underline block mt-0.5">
+                                                    Edit Logs &rarr;
+                                                </span>
+                                            )}
                                         </div>
                                     )}
 
@@ -552,15 +672,87 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                                     )}
 
                                     {isSkipped && (
-                                        <span className="inline-block text-[9px] font-bold text-gray-400 bg-gray-200/80 px-1 py-0.5 rounded mt-1">
-                                            Skipped — Not Required
-                                        </span>
+                                        <div className="mt-1">
+                                            <span className="inline-block text-[9px] font-bold text-gray-400 bg-gray-200/80 px-1 py-0.5 rounded">
+                                                Skipped — Not Required
+                                            </span>
+                                            {stageData?.skipReason && (
+                                                <p className="text-[8.5px] text-gray-500 italic mt-0.5 leading-tight line-clamp-2" title={`Skip Reason: ${stageData.skipReason}`}>
+                                                    &ldquo;{stageData.skipReason}&rdquo;
+                                                </p>
+                                            )}
+                                            {canUnskipStage && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleUnskipStage(cfg.key, cfg.label);
+                                                    }}
+                                                    className="mt-1 text-[8.5px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-1.5 py-0.5 rounded transition-all flex items-center gap-1 cursor-pointer"
+                                                    title="Restore this stage to pipeline (Pending)"
+                                                >
+                                                    <RotateCcw size={9} />
+                                                    <span>Un-skip</span>
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {canSkipStage && (
+                                        <div className="mt-1.5">
+                                            <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setStageToSkip({ key: cfg.key, label: cfg.label });
+                                                    setSkipReasonInput('');
+                                                }}
+                                                className="text-[8.5px] font-bold text-gray-600 hover:text-rose-700 bg-gray-100 hover:bg-rose-50 border border-gray-300 hover:border-rose-300 px-1.5 py-0.5 rounded transition-all flex items-center gap-1 cursor-pointer"
+                                                title={`Skip ${cfg.label} for this Work Order`}
+                                            >
+                                                <SkipForward size={9} />
+                                                <span>Skip</span>
+                                            </button>
+                                        </div>
                                     )}
                                 </div>
                             </div>
                         );
                     })}
                 </div>
+
+                {/* Over-Cap Warning Banners for entire pipeline */}
+                {Array.isArray(workOrder?.exceededStages) && workOrder.exceededStages.length > 0 && (
+                    <div className="space-y-2 mt-2.5">
+                        {workOrder.exceededStages.map((ex) => (
+                            <div
+                                key={ex.stageName}
+                                className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shadow-2xs font-sans"
+                            >
+                                <div className="flex items-start gap-2.5">
+                                    <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                                    <div>
+                                        <span className="font-extrabold block uppercase tracking-wide text-[11px] text-amber-900">
+                                            Stage Cap Exceeded: {ex.stageLabel}
+                                        </span>
+                                        <p className="mt-0.5 text-amber-800 font-medium">
+                                            Stage {ex.stageLabel} now exceeds available input from the corrected {ex.previousStageLabel} by {Number(ex.excessQty).toLocaleString('en-IN')} Bags — please review.
+                                        </p>
+                                    </div>
+                                </div>
+                                {isAdmin && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedStageForTracking(ex.stageName)}
+                                        className="px-3 py-1 bg-amber-200/90 hover:bg-amber-300 text-amber-900 font-bold text-[11px] rounded-lg transition-colors cursor-pointer shrink-0"
+                                    >
+                                        Inspect {ex.stageLabel}
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
 
             {/* Panel: Stage Advance & Scrap Logging */}
@@ -842,11 +1034,36 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
 
             {/* Operator-wise, Day-wise Production Tracking Section */}
             {workOrder && (
-                <div className="pt-2 space-y-5">
+                <div className="pt-2 space-y-4">
+                    {/* Admin Past Stage Inspection Notice & Return Button */}
+                    {selectedStageForTracking && selectedStageForTracking !== activeStage?.stageName && (
+                        <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs font-sans shadow-2xs">
+                            <div className="flex items-center gap-2">
+                                <Info size={16} className="text-amber-600 shrink-0" />
+                                <span className="text-amber-900 font-bold">
+                                    Inspecting Completed Stage: <strong className="font-extrabold">{STAGE_CONFIG.find((c) => c.key === selectedStageForTracking)?.label || selectedStageForTracking}</strong>
+                                </span>
+                                <span className="text-[10px] bg-amber-200/90 text-amber-900 font-extrabold px-1.5 py-0.5 rounded uppercase tracking-wider">
+                                    Correction Mode
+                                </span>
+                            </div>
+                            {activeStage && (
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedStageForTracking(null)}
+                                    className="px-3 py-1.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold text-xs rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0"
+                                >
+                                    <span>Return to Active Stage ({STAGE_CONFIG.find((c) => c.key === activeStage?.stageName)?.label || activeStage?.stageName})</span>
+                                    <ArrowRight size={13} />
+                                </button>
+                            )}
+                        </div>
+                    )}
+
                     <OperatorWiseProductionTracker
                         workOrder={workOrder}
                         workOrderId={workOrder._id}
-                        selectedStageName={activeStage?.stageName}
+                        selectedStageName={selectedStageForTracking || activeStage?.stageName}
                         onProductionLogged={() => fetchWorkOrderDetail(workOrder._id)}
                     />
 
@@ -855,6 +1072,202 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                         workOrderId={workOrder._id}
                         lastUpdated={workOrder.updatedAt}
                     />
+                </div>
+            )}
+
+            {/* Modal: Confirm Skip Stage for this Work Order */}
+            {stageToSkip && (
+                <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+                    <div className="bg-card-bg border border-border rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4 font-sans animate-in fade-in zoom-in-95 duration-150">
+                        <div className="flex items-start justify-between">
+                            <div className="flex items-center gap-2.5">
+                                <div className="p-2 bg-rose-50 text-rose-600 rounded-xl border border-rose-200">
+                                    <SkipForward size={20} />
+                                </div>
+                                <div>
+                                    <h4 className="text-sm font-bold text-text-primary">
+                                        Skip Stage: {stageToSkip.label}
+                                    </h4>
+                                    <p className="text-xs text-text-muted mt-0.5">
+                                        Work Order: <strong className="font-mono text-text-primary">{workOrder.workOrderNumber}</strong>
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => { setStageToSkip(null); setSkipReasonInput(''); }}
+                                className="text-text-muted hover:text-text-primary p-1 rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <p className="text-xs text-text-secondary leading-relaxed">
+                            Mark <strong>{stageToSkip.label}</strong> as <em>Skipped — Not Required</em> for this Work Order only. The dynamic stage cap and pipeline progression will automatically walk past this stage.
+                        </p>
+
+                        <div>
+                            <label className="block text-xs font-bold text-text-primary mb-1.5">
+                                Reason / Remark for Skipping <span className="text-rose-500">*</span>
+                            </label>
+                            <textarea
+                                rows={3}
+                                value={skipReasonInput}
+                                onChange={(e) => setSkipReasonInput(e.target.value)}
+                                placeholder="e.g. Not needed for this order's spec (plain bags without stitching)"
+                                className="w-full text-xs p-2.5 bg-input-bg border border-input-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/40 text-text-primary placeholder:text-text-muted"
+                            />
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                                {[
+                                    "Not needed for this order's spec",
+                                    "Customer supplied pre-processed fabric",
+                                    "Standard unprinted plain order",
+                                    "Direct cutting to packaging requirement"
+                                ].map((preset) => (
+                                    <button
+                                        key={preset}
+                                        type="button"
+                                        onClick={() => setSkipReasonInput(preset)}
+                                        className="text-[10px] px-2 py-0.5 rounded-full bg-neutral-100 hover:bg-neutral-200 text-text-secondary font-medium transition-colors border border-border cursor-pointer"
+                                    >
+                                        + {preset}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-border">
+                            <button
+                                type="button"
+                                onClick={() => { setStageToSkip(null); setSkipReasonInput(''); }}
+                                className="px-4 py-2 text-xs font-semibold text-text-secondary hover:text-text-primary hover:bg-neutral-100 rounded-xl transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!skipReasonInput.trim() || isSkipping}
+                                onClick={handleConfirmSkip}
+                                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+                            >
+                                {isSkipping ? (
+                                    <>
+                                        <RefreshCw size={13} className="animate-spin" />
+                                        <span>Skipping...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <SkipForward size={13} />
+                                        <span>Confirm Skip</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal: View Skipped Stage Audit Details */}
+            {auditStageModal && (
+                <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+                    <div className="bg-card-bg border border-border rounded-2xl max-w-sm w-full p-5 shadow-xl space-y-3 font-sans animate-in fade-in zoom-in-95 duration-150">
+                        <div className="flex items-start justify-between">
+                            <div className="flex items-center gap-2">
+                                <Ban size={18} className="text-gray-500" />
+                                <div>
+                                    <h4 className="text-sm font-bold text-text-primary">
+                                        {auditStageModal.label} (Step 0{auditStageModal.sequence})
+                                    </h4>
+                                    <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">
+                                        Skipped Stage Audit Info
+                                    </span>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setAuditStageModal(null)}
+                                className="text-text-muted hover:text-text-primary p-1 rounded-lg hover:bg-neutral-100 cursor-pointer"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs space-y-2">
+                            <div>
+                                <span className="text-[10px] uppercase font-bold text-text-muted block">Skip Reason / Remark</span>
+                                <p className="text-text-primary font-medium mt-0.5 italic">
+                                    &ldquo;{auditStageModal.stageData?.skipReason || 'Skipped as not required for this order.'}&rdquo;
+                                </p>
+                            </div>
+                            {auditStageModal.stageData?.skippedBy && (
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Skipped By</span>
+                                    <p className="text-text-primary font-medium mt-0.5">
+                                        {auditStageModal.stageData.skippedBy.name || auditStageModal.stageData.skippedBy.email || 'Admin'}
+                                    </p>
+                                </div>
+                            )}
+                            {auditStageModal.stageData?.skippedAt && (
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Skipped At</span>
+                                    <p className="text-text-primary font-medium mt-0.5 font-mono">
+                                        {new Date(auditStageModal.stageData.skippedAt).toLocaleString('en-IN')}
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex justify-end pt-1">
+                            <button
+                                type="button"
+                                onClick={() => setAuditStageModal(null)}
+                                className="px-4 py-1.5 text-xs font-semibold text-text-secondary hover:text-text-primary hover:bg-neutral-100 rounded-xl transition-colors cursor-pointer"
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* Modal: Confirm Restore (Un-skip) Stage */}
+            {restoreModal.isOpen && (
+                <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+                    <div className="bg-card-bg border border-border rounded-2xl max-w-sm w-full p-5 shadow-xl space-y-4 font-sans animate-in fade-in zoom-in-95 duration-150">
+                        <div className="flex items-start gap-3">
+                            <div className="mt-0.5 flex-shrink-0 p-2 bg-amber-100 rounded-xl">
+                                <RotateCcw size={18} className="text-amber-700" />
+                            </div>
+                            <div>
+                                <h4 className="text-sm font-bold text-text-primary">Restore Stage to Pipeline?</h4>
+                                <p className="text-xs text-text-muted mt-0.5">
+                                    This will restore <span className="font-semibold text-text-primary">{restoreModal.stageName}</span> back into the active production sequence for this Work Order.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start gap-2">
+                            <AlertTriangle size={13} className="shrink-0 mt-0.5 text-amber-600" />
+                            <span>The pipeline cap logic will re-include this stage. Make sure production quantities are correct before proceeding.</span>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2.5 pt-1 border-t border-border">
+                            <button
+                                type="button"
+                                onClick={() => setRestoreModal({ isOpen: false, stageId: null, stageName: '' })}
+                                className="px-4 py-2 text-xs font-semibold text-text-secondary hover:text-text-primary hover:bg-neutral-100 rounded-xl transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleConfirmRestore}
+                                className="px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+                            >
+                                <RotateCcw size={13} />
+                                <span>Yes, Restore Stage</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

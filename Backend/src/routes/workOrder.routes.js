@@ -10,7 +10,9 @@ const {
     getWorkOrders,
     getWorkOrderById,
     getAvailableRolls,
-    getRollsTraceability
+    getRollsTraceability,
+    skipStage,
+    unskipStage
 } = require('../controllers/workOrder.controller');
 const {
     createProductionLog,
@@ -144,5 +146,19 @@ router.patch('/:id/resume-balance', authenticate, checkPermission('PRODUCTION', 
  * @access  Private (PRODUCTION:UPDATE)
  */
 router.patch('/:id/cancel', authenticate, checkPermission('PRODUCTION', 'UPDATE'), cancelWorkOrder);
+
+/**
+ * @route   PATCH /api/work-orders/:id/stages/:stageName/skip
+ * @desc    Skip a specific stage for this individual Work Order (Tenant Admin only)
+ * @access  Private (Tenant Admin only)
+ */
+router.patch('/:id/stages/:stageName/skip', authenticate, requireTenantAdmin, skipStage);
+
+/**
+ * @route   PATCH /api/work-orders/:id/stages/:stageName/unskip
+ * @desc    Un-skip a specific stage for this individual Work Order (Tenant Admin only)
+ * @access  Private (Tenant Admin only)
+ */
+router.patch('/:id/stages/:stageName/unskip', authenticate, requireTenantAdmin, unskipStage);
 
 module.exports = router;

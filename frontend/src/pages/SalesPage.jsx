@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ShoppingCart, Plus, FileText, CreditCard, Eye, Pencil, Receipt, CheckCircle2 } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreateSalesOrderModal from '../components/sales/CreateSalesOrderModal';
@@ -8,7 +9,18 @@ import ViewSalesOrderModal from '../components/sales/ViewSalesOrderModal';
 import ViewInvoiceModal from '../components/sales/ViewInvoiceModal';
 
 export default function SalesPage() {
-    const [activeTabKey, setActiveTabKey] = useState('sales-orders');
+    const [searchParams] = useSearchParams();
+    const tabFromUrl = searchParams.get('tab');
+
+
+    const [activeTabKey, setActiveTabKey] = useState(tabFromUrl || 'sales-orders');
+
+    useEffect(() => {
+        if (tabFromUrl && tabFromUrl !== activeTabKey) {
+            setActiveTabKey(tabFromUrl);
+        }
+    }, [tabFromUrl, activeTabKey]);
+
     const [refreshKey, setRefreshKey] = useState(0);
 
     // Modals State

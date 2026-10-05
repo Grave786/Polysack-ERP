@@ -1,7 +1,29 @@
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import { Users, Truck, UserCheck, Settings, Layers, Package } from 'lucide-react';
 
 export default function MasterDataPage() {
+    const [searchParams, setSearchParams] = useSearchParams();
+    const tabFromUrl = searchParams.get('tab');
+
+
+    const [activeTabKey, setActiveTabKey] = useState(tabFromUrl || 'customers');
+
+    useEffect(() => {
+        if (tabFromUrl && tabFromUrl !== activeTabKey) {
+            setActiveTabKey(tabFromUrl);
+        }
+    }, [tabFromUrl, activeTabKey]);
+
+    const handleTabChange = (key) => {
+        setActiveTabKey(key);
+        setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            next.set('tab', key);
+            return next;
+        });
+    };
     const tabs = [
         {
             key: 'customers',
@@ -303,9 +325,12 @@ export default function MasterDataPage() {
 
     return (
         <TabbedResourcePage
+            key={`${activeTabKey}`}
             title="Master Data Management"
             description="Central master records for Customers, Suppliers, Employees, Machines, Materials, and Finished Bags."
             tabs={tabs}
+            activeTabKey={activeTabKey}
+            onTabChange={handleTabChange}
         />
     );
 }

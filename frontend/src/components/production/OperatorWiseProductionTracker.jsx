@@ -207,7 +207,8 @@ export default function OperatorWiseProductionTracker({
             return;
         }
 
-        if (isCompletedWO) {
+        // For COMPLETED WOs: only Tenant Admin may add corrective entries when remaining > 0
+        if (isCompletedWO && !isAdmin) {
             toast.error('Cannot add new production for a Completed Work Order.');
             return;
         }
@@ -219,8 +220,30 @@ export default function OperatorWiseProductionTracker({
             return;
         }
 
-        await fetchSummary();
-        const defaultOp = summaryData?.assignedOperators?.[0]?._id || '';
+        // Fetch fresh summary so remainingQty reflects any recent corrective edits
+        let freshRemaining = remainingQty;
+        let freshAssignedOps = summaryData?.assignedOperators || [];
+        try {
+            const res = await axiosInstance.get(`/work-orders/${targetWoId}/stages/${currentStageName}/logs/summary`);
+            if (res.data?.success) {
+                setSummaryData(res.data.data);
+                const d = res.data.data;
+                const freshTarget = Number(d.targetQuantity ?? d.stageTargetQuantity ?? 0);
+                const freshProduced = Number(d.totalProduced ?? 0);
+                freshRemaining = Math.max(0, Math.round((freshTarget - freshProduced) * 1000) / 1000);
+                freshAssignedOps = d.assignedOperators || [];
+            }
+        } catch (err) {
+            console.error('Error refreshing summary before create modal:', err);
+        }
+
+        // After refresh: if target is now fully consumed and this is a COMPLETED WO, block
+        if (isCompletedWO && freshRemaining <= 0) {
+            toast.error('No remaining allowance — the stage target is already fully achieved. Reduce an existing entry first.');
+            return;
+        }
+
+        const defaultOp = freshAssignedOps[0]?._id || '';
         setFormData({
             operator: defaultOp,
             date: getIstTodayString(),
@@ -232,6 +255,7 @@ export default function OperatorWiseProductionTracker({
         setEditingLog(null);
         setIsLogModalOpen(true);
     };
+
 
     // Open Modal for Edit
     const handleOpenEditModal = async (log) => {
@@ -492,7 +516,7 @@ export default function OperatorWiseProductionTracker({
                     <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
                     <div>
                         <span className="font-bold block uppercase tracking-wide text-[11px] text-amber-900">
-                            Logged Output Exceeds Previous Stage Available Input
+                            Stage {currentStageObj?.stageName?.replace(/_/g, ' ') || 'This stage'} now exceeds available input from the corrected previous stage by {Math.max(0, totalProduced - stageTargetQty).toLocaleString('en-IN')} Bags — please review
                         </span>
                         <p className="mt-0.5 text-amber-800 font-medium">
                             Total logged output ({totalProduced.toLocaleString('en-IN')} Bags) is higher than the good output from the preceding stage ({stageTargetQty.toLocaleString('en-IN')} Bags available from {previousStage?.stageName?.replace(/_/g, ' ') || 'previous stage'}). Please review and adjust individual production logs if needed.

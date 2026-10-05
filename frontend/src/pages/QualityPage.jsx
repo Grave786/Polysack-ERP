@@ -1,11 +1,17 @@
 import { useState } from 'react';
-import { Plus, ShieldCheck, ArrowDownLeft, ArrowUpRight, Eye } from 'lucide-react';
+import { Plus, ShieldCheck, ArrowDownLeft, ArrowUpRight, Eye, Pencil } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreateQCInspectionModal from '../components/quality/CreateQCInspectionModal';
 import ViewQCInspectionModal from '../components/quality/ViewQCInspectionModal';
+import { useAuthStore } from '../store/authStore';
+import { isTenantAdmin, checkIsSuperAdmin } from '../utils/permissionUtils';
 
 export default function QualityPage() {
+    const user = useAuthStore((state) => state.user);
+    const isAdmin = isTenantAdmin(user) || checkIsSuperAdmin(user);
+
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+    const [editingQcData, setEditingQcData] = useState(null);
     const [viewingQcData, setViewingQcData] = useState(null);
     const [modalType, setModalType] = useState('INBOUND');
     const [refreshKey, setRefreshKey] = useState(0);
@@ -111,6 +117,20 @@ export default function QualityPage() {
                     header: 'ACTIONS',
                     render: (row) => (
                         <div className="flex items-center justify-end">
+                            {isAdmin && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setEditingQcData(row);
+                                        setModalType('INBOUND');
+                                        setIsCreateModalOpen(true);
+                                    }}
+                                    className="text-gray-500 hover:text-amber-600 mr-1.5 cursor-pointer"
+                                    title="Edit QC Inspection (Tenant Admin Only)"
+                                >
+                                    <Pencil size={14} />
+                                </button>
+                            )}
                             <button
                                 type="button"
                                 onClick={() => setViewingQcData(row)}
@@ -225,6 +245,20 @@ export default function QualityPage() {
                     header: 'ACTIONS',
                     render: (row) => (
                         <div className="flex items-center justify-end">
+                            {isAdmin && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setEditingQcData(row);
+                                        setModalType('OUTBOUND');
+                                        setIsCreateModalOpen(true);
+                                    }}
+                                    className="text-gray-500 hover:text-amber-600 mr-1.5 cursor-pointer"
+                                    title="Edit QC Inspection (Tenant Admin Only)"
+                                >
+                                    <Pencil size={14} />
+                                </button>
+                            )}
                             <button
                                 type="button"
                                 onClick={() => setViewingQcData(row)}
@@ -246,6 +280,7 @@ export default function QualityPage() {
             <button
                 type="button"
                 onClick={() => {
+                    setEditingQcData(null);
                     setModalType('INBOUND');
                     setIsCreateModalOpen(true);
                 }}
@@ -258,6 +293,7 @@ export default function QualityPage() {
             <button
                 type="button"
                 onClick={() => {
+                    setEditingQcData(null);
                     setModalType('OUTBOUND');
                     setIsCreateModalOpen(true);
                 }}
@@ -282,8 +318,16 @@ export default function QualityPage() {
             <CreateQCInspectionModal
                 isOpen={isCreateModalOpen}
                 defaultType={modalType}
-                onClose={() => setIsCreateModalOpen(false)}
-                onSuccess={() => setRefreshKey((prev) => prev + 1)}
+                inspectionToEdit={editingQcData}
+                onClose={() => {
+                    setIsCreateModalOpen(false);
+                    setEditingQcData(null);
+                }}
+                onSuccess={() => {
+                    setIsCreateModalOpen(false);
+                    setEditingQcData(null);
+                    setRefreshKey((prev) => prev + 1);
+                }}
             />
 
             <ViewQCInspectionModal

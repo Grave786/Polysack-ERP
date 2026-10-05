@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Download, Truck, FileText, Check, Eye, Pencil, X } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreatePurchaseOrderPanel from '../components/procurement/CreatePurchaseOrderPanel';
@@ -13,13 +14,23 @@ import { isTenantAdmin } from '../utils/permissionUtils';
 export default function ProcurementPage() {
     const user = useAuthStore((state) => state.user);
     const isAdmin = isTenantAdmin(user);
+    const [searchParams] = useSearchParams();
+    const tabFromUrl = searchParams.get('tab');
+
+
     const [isCreatePoOpen, setIsCreatePoOpen] = useState(false);
     const [editPo, setEditPo] = useState(null);
     const [selectedPoForGrn, setSelectedPoForGrn] = useState(null);
     const [editGrn, setEditGrn] = useState(null);
     const [isGrnPanelOpen, setIsGrnPanelOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
-    const [activeTab, setActiveTab] = useState('purchase-orders');
+    const [activeTab, setActiveTab] = useState(tabFromUrl || 'purchase-orders');
+
+    useEffect(() => {
+        if (tabFromUrl && tabFromUrl !== activeTab) {
+            setActiveTab(tabFromUrl);
+        }
+    }, [tabFromUrl, activeTab]);
 
     // Detail View Modal State
     const [viewRecord, setViewRecord] = useState(null);
@@ -936,7 +947,7 @@ export default function ProcurementPage() {
     return (
         <>
             <TabbedResourcePage
-                key={refreshKey}
+                key={`${refreshKey}-${activeTab}`}
                 title="Purchase & GRN Management"
                 description="Manage Purchase Orders, Goods Receipt Notes (GRN) and Item-Wise Detailed Purchase Register"
                 tabs={tabs}

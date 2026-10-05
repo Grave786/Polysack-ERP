@@ -1,11 +1,84 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, Loader2, X, Users, ShoppingBag } from 'lucide-react';
+import {
+    Search,
+    Loader2,
+    X,
+    Users,
+    ShoppingBag,
+    Layers,
+    Package,
+    Truck,
+    UserCheck,
+    Settings,
+    FileText,
+    Receipt,
+    ScrollText,
+    Hash
+} from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import { useNavigate } from 'react-router-dom';
 
+const getTypeBadgeStyle = (type) => {
+    switch (type) {
+        case 'Fabric Roll':
+            return 'bg-amber-100 text-amber-800 border-amber-200';
+        case 'Raw Material':
+            return 'bg-teal-100 text-teal-800 border-teal-200';
+        case 'Finished Bag':
+            return 'bg-emerald-100 text-emerald-800 border-emerald-200';
+        case 'Customer':
+            return 'bg-blue-100 text-blue-800 border-blue-200';
+        case 'Supplier':
+            return 'bg-purple-100 text-purple-800 border-purple-200';
+        case 'Employee':
+            return 'bg-indigo-100 text-indigo-800 border-indigo-200';
+        case 'Machine':
+            return 'bg-slate-100 text-slate-800 border-slate-200';
+        case 'Work Order':
+            return 'bg-violet-100 text-violet-800 border-violet-200';
+        case 'Invoice':
+            return 'bg-sky-100 text-sky-800 border-sky-200';
+        case 'Sales Order':
+            return 'bg-green-100 text-green-800 border-green-200';
+        case 'GRN / Lot Number':
+            return 'bg-rose-100 text-rose-800 border-rose-200';
+        default:
+            return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+};
+
+const getTypeIcon = (type) => {
+    switch (type) {
+        case 'Fabric Roll':
+            return <ScrollText size={13} className="text-amber-600" />;
+        case 'Raw Material':
+            return <Layers size={13} className="text-teal-600" />;
+        case 'Finished Bag':
+            return <Package size={13} className="text-emerald-600" />;
+        case 'Customer':
+            return <Users size={13} className="text-blue-600" />;
+        case 'Supplier':
+            return <Truck size={13} className="text-purple-600" />;
+        case 'Employee':
+            return <UserCheck size={13} className="text-indigo-600" />;
+        case 'Machine':
+            return <Settings size={13} className="text-slate-600" />;
+        case 'Work Order':
+            return <FileText size={13} className="text-violet-600" />;
+        case 'Invoice':
+            return <Receipt size={13} className="text-sky-600" />;
+        case 'Sales Order':
+            return <ShoppingBag size={13} className="text-green-600" />;
+        case 'GRN / Lot Number':
+            return <Hash size={13} className="text-rose-600" />;
+        default:
+            return <Search size={13} className="text-text-muted" />;
+    }
+};
+
 export default function GlobalSearchBar() {
     const [query, setQuery] = useState('');
-    const [results, setResults] = useState({ customers: [], salesOrders: [] });
+    const [results, setResults] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isOpen, setIsOpen] = useState(false);
     const searchRef = useRef(null);
@@ -22,10 +95,11 @@ export default function GlobalSearchBar() {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    // Debounced search logic (400ms)
+    // Debounced search logic (350ms) across all transactions, Master Data, and Fabric Rolls
     useEffect(() => {
-        if (!query.trim() || query.trim().length < 2) {
-            setResults({ customers: [], salesOrders: [] });
+        const trimmed = query.trim();
+        if (!trimmed || trimmed.length < 2) {
+            setResults([]);
             setIsLoading(false);
             setIsOpen(false);
             return;
@@ -33,29 +107,74 @@ export default function GlobalSearchBar() {
 
         const timer = setTimeout(async () => {
             setIsLoading(true);
-            setIsOpen(true);
             try {
-                const [custRes, soRes] = await Promise.allSettled([
-                    axiosInstance.get('/customers', { params: { search: query.trim(), limit: 5 } }),
-                    axiosInstance.get('/sales-orders', { params: { search: query.trim(), limit: 5 } })
-                ]);
-
-                const customers = custRes.status === 'fulfilled' && custRes.value.data?.success ? custRes.value.data.data : [];
-                const salesOrders = soRes.status === 'fulfilled' && soRes.value.data?.success ? soRes.value.data.data : [];
-
-                setResults({ customers, salesOrders });
+                const res = await axiosInstance.get('/dashboard/global-search', {
+                    params: { q: trimmed }
+                });
+                const list = res.data?.data || [];
+                setResults(list);
+                setIsOpen(true);
             } catch (err) {
-                console.warn('Global search failed:', err.message);
-                setResults({ customers: [], salesOrders: [] });
+                console.warn('Global search query failed:', err.message);
+                setResults([]);
             } finally {
                 setIsLoading(false);
             }
-        }, 400);
+        }, 350);
 
         return () => clearTimeout(timer);
     }, [query]);
 
-    const hasResults = results.customers.length > 0 || results.salesOrders.length > 0;
+    // Handle Enter keypress for instant navigation to exact or top match
+    const handleKeyDown = async (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const trimmed = query.trim().toLowerCase();
+            if (!trimmed) return;
+
+            if (results.length > 0) {
+                const exact = results.find((r) => (r.code || '').toLowerCase() === trimmed);
+                const target = exact || results[0];
+                if (target?.url) {
+                    setQuery('');
+                    setResults([]);
+                    setIsOpen(false);
+                    navigate(target.url);
+                    return;
+                }
+            }
+
+            // If not yet loaded or debounced, fetch immediately on Enter
+            try {
+                setIsLoading(true);
+                const res = await axiosInstance.get('/dashboard/global-search', {
+                    params: { q: query.trim() }
+                });
+                const list = res.data?.data || [];
+                setResults(list);
+                if (list.length > 0) {
+                    const exact = list.find((r) => (r.code || '').toLowerCase() === trimmed);
+                    const target = exact || list[0];
+                    if (target?.url) {
+                        setQuery('');
+                        setResults([]);
+                        setIsOpen(false);
+                        navigate(target.url);
+                    }
+                } else {
+                    setIsOpen(true);
+                }
+            } catch (err) {
+                console.warn('Enter search execution failed:', err.message);
+            } finally {
+                setIsLoading(false);
+            }
+        } else if (e.key === 'Escape') {
+            setIsOpen(false);
+        }
+    };
+
+    const hasResults = results.length > 0;
 
     return (
         <div className="flex-1 max-w-lg mx-4 relative font-sans" ref={searchRef}>
@@ -65,6 +184,7 @@ export default function GlobalSearchBar() {
                     type="text"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={handleKeyDown}
                     onFocus={() => {
                         if (query.trim().length >= 2) setIsOpen(true);
                     }}
@@ -76,9 +196,11 @@ export default function GlobalSearchBar() {
                         type="button"
                         onClick={() => {
                             setQuery('');
+                            setResults([]);
                             setIsOpen(false);
                         }}
                         className="absolute right-3 text-sidebar-text hover:text-sidebar-text-active cursor-pointer"
+                        title="Clear Search"
                     >
                         <X size={14} />
                     </button>
@@ -98,65 +220,45 @@ export default function GlobalSearchBar() {
                             No records found matching "<span className="font-semibold text-text-main">{query}</span>"
                         </div>
                     ) : (
-                        <>
-                            {/* Customers Section */}
-                            {results.customers.length > 0 && (
-                                <div className="p-2">
-                                    <div className="px-3 py-1.5 text-[10px] font-bold text-text-muted uppercase tracking-wider flex items-center gap-1.5">
-                                        <Users size={13} className="text-primary" />
-                                        <span>Customers ({results.customers.length})</span>
-                                    </div>
-                                    {results.customers.map((c) => (
-                                        <div
-                                            key={c._id}
-                                            onClick={() => {
-                                                setIsOpen(false);
-                                                navigate('/master-data');
-                                            }}
-                                            className="px-3 py-2 hover:bg-app-bg rounded-lg cursor-pointer flex items-center justify-between transition-colors"
-                                        >
-                                            <div>
-                                                <div className="font-bold text-text-main">{c.companyName}</div>
-                                                <div className="text-[11px] text-text-muted">{c.code || c.customerCode} {c.city ? `• ${c.city}` : ''}</div>
-                                            </div>
-                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                                                Master Data
-                                            </span>
+                        <div className="p-2 space-y-1">
+                            <div className="px-2.5 py-1 text-[10px] font-bold text-text-muted uppercase tracking-wider flex items-center justify-between border-b border-border/40 pb-1.5 mb-1">
+                                <span>Search Results ({results.length})</span>
+                                <span className="text-[10px] text-text-muted font-normal lowercase">Press Enter or click to navigate</span>
+                            </div>
+                            {results.map((item, idx) => (
+                                <div
+                                    key={item.id || `${item.type}-${item.code}-${idx}`}
+                                    onClick={() => {
+                                        setQuery('');
+                                        setResults([]);
+                                        setIsOpen(false);
+                                        navigate(item.url);
+                                    }}
+                                    className="px-3 py-2 hover:bg-app-bg rounded-lg cursor-pointer flex items-center justify-between gap-3 transition-colors border-b border-border/30 last:border-0"
+                                >
+                                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                                        <div className="mt-0.5 shrink-0">
+                                            {getTypeIcon(item.type)}
                                         </div>
-                                    ))}
-                                </div>
-                            )}
-
-                            {/* Sales Orders Section */}
-                            {results.salesOrders.length > 0 && (
-                                <div className="p-2">
-                                    <div className="px-3 py-1.5 text-[10px] font-bold text-text-muted uppercase tracking-wider flex items-center gap-1.5">
-                                        <ShoppingBag size={13} className="text-primary" />
-                                        <span>Sales Orders ({results.salesOrders.length})</span>
-                                    </div>
-                                    {results.salesOrders.map((so) => (
-                                        <div
-                                            key={so._id}
-                                            onClick={() => {
-                                                setIsOpen(false);
-                                                navigate('/sales');
-                                            }}
-                                            className="px-3 py-2 hover:bg-app-bg rounded-lg cursor-pointer flex items-center justify-between transition-colors"
-                                        >
-                                            <div>
-                                                <div className="font-bold text-text-main">{so.soNumber || 'SO-RECORD'}</div>
-                                                <div className="text-[11px] text-text-muted">
-                                                    {typeof so.customer === 'object' ? so.customer?.companyName : 'Customer Order'}
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                <span className="font-mono font-bold text-text-main text-xs">{item.code}</span>
+                                                <span className="text-text-muted text-xs">—</span>
+                                                <span className="font-semibold text-text-main text-xs truncate">{item.name}</span>
+                                            </div>
+                                            {item.subtitle && (
+                                                <div className="text-[11px] text-text-muted truncate mt-0.5">
+                                                    {item.subtitle}
                                                 </div>
-                                            </div>
-                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                                                ₹{so.totalAmount ? Number(so.totalAmount).toLocaleString() : '0'}
-                                            </span>
+                                            )}
                                         </div>
-                                    ))}
+                                    </div>
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${getTypeBadgeStyle(item.type)}`}>
+                                        {item.type}
+                                    </span>
                                 </div>
-                            )}
-                        </>
+                            ))}
+                        </div>
                     )}
                 </div>
             )}

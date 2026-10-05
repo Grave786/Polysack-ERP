@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useResourceApi } from '../../hooks/useResourceApi';
 import DataTable from './DataTable';
 import { Construction, Plus, X, Clock, Sparkles, Pencil, Trash2, MapPin } from 'lucide-react';
@@ -373,6 +374,10 @@ export default function TabbedResourcePage({
     activeTabKey: controlledActiveTabKey,
     onTabChange
 }) {
+    const [searchParams] = useSearchParams();
+    const deepLinkId = searchParams.get('id');
+    const deepLinkRoll = searchParams.get('roll');
+
     const [internalActiveTabKey, setInternalActiveTabKey] = useState(tabs[0]?.key || '');
 
     useEffect(() => {
@@ -628,12 +633,52 @@ export default function TabbedResourcePage({
         bulkDeleteItems
     } = useResourceApi(
         isTabPlaceholder ? null : activeTab?.resourcePath,
-        // Only pass a non-"All" defaultStatus as initial param; 'All Statuses' is the hook's own default
-        (activeTab?.defaultStatus && activeTab.defaultStatus !== 'All Statuses' && activeTab.defaultStatus !== 'All')
-            ? { status: activeTab.defaultStatus }
-            : undefined,
+        {
+            ...((activeTab?.defaultStatus && activeTab.defaultStatus !== 'All Statuses' && activeTab.defaultStatus !== 'All')
+                ? { status: activeTab.defaultStatus }
+                : {})
+        },
         mergedExtraParams
     );
+
+    // Deep-link modal opener: open record detail when URL has &id=... or &roll=...
+    useEffect(() => {
+        if (!activeTab || isTabPlaceholder) return;
+
+        if (deepLinkId && activeTab.resourcePath) {
+            axiosInstance.get(`${activeTab.resourcePath}/${deepLinkId}`)
+                .then((res) => {
+                    if (res.data?.success && res.data?.data) {
+                        setDetailModal({
+                            isOpen: true,
+                            record: res.data.data,
+                            tabKey: activeTabKey
+                        });
+                    }
+                })
+                .catch((err) => {
+                    console.warn('Failed to load deep-linked record:', err?.message);
+                });
+        } else if (deepLinkRoll && activeTabKey === 'fabric-rolls') {
+            axiosInstance.get('/work-orders/rolls-traceability', { params: { search: deepLinkRoll } })
+                .then((res) => {
+                    const list = res.data?.data || res.data?.rolls || [];
+                    const match = list.find(
+                        (r) => String(r.rollNumber || r.rollNo || '').toLowerCase() === deepLinkRoll.toLowerCase()
+                    ) || list[0];
+                    if (match) {
+                        setDetailModal({
+                            isOpen: true,
+                            record: match,
+                            tabKey: 'fabric-rolls'
+                        });
+                    }
+                })
+                .catch((err) => {
+                    console.warn('Failed to load deep-linked roll:', err?.message);
+                });
+        }
+    }, [deepLinkId, deepLinkRoll, activeTabKey, activeTab?.resourcePath, isTabPlaceholder]);
 
     // When the user switches tabs, reset the status filter to that tab's defaultStatus.
     // setStatusFilter is now a stable useCallback reference so it is safe to omit from deps.
