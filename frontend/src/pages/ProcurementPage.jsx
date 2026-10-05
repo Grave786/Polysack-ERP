@@ -132,24 +132,53 @@ export default function ProcurementPage() {
             header: 'ORDERED vs RECEIVED',
             exportValue: (row) => {
                 const items = Array.isArray(row.items) ? row.items : [];
-                const ord = items.reduce((s, i) => s + Number(i.orderedQuantity || 0), 0);
-                const rcv = items.reduce((s, i) => s + Number(i.receivedQuantity || 0), 0);
-                return `${rcv} / ${ord}`;
+                const byUnit = {};
+                for (const i of items) {
+                    const u = (typeof i.unit === 'string' && !/^[0-9a-fA-F]{24}$/.test(i.unit.trim())) ? i.unit.trim() : 'Kg';
+                    if (!byUnit[u]) byUnit[u] = { ord: 0, rcv: 0 };
+                    byUnit[u].ord += Number(i.orderedQuantity || 0);
+                    byUnit[u].rcv += Number(i.receivedQuantity || 0);
+                }
+                const entries = Object.entries(byUnit);
+                return entries.length > 0
+                    ? entries.map(([u, d]) => `${d.rcv} / ${d.ord} ${u}`).join(', ')
+                    : '0 / 0 Kg';
             },
             render: (row) => {
                 const items = Array.isArray(row.items) ? row.items : [];
-                const totalOrdered = items.reduce((sum, i) => sum + Number(i.orderedQuantity || 0), 0);
-                const totalReceived = items.reduce((sum, i) => sum + Number(i.receivedQuantity || 0), 0);
-                const remaining = Math.max(0, totalOrdered - totalReceived);
-                const rawUnit = items[0]?.unit;
-                const primaryUnit = (typeof rawUnit === 'string' && !/^[0-9a-fA-F]{24}$/.test(rawUnit.trim())) ? rawUnit : 'Kg';
-                const pct = totalOrdered > 0 ? Math.min(100, Math.round((totalReceived / totalOrdered) * 100)) : 0;
+                const byUnit = {};
+                let totalOrdAll = 0;
+                let totalRcvAll = 0;
+                for (const i of items) {
+                    const u = (typeof i.unit === 'string' && !/^[0-9a-fA-F]{24}$/.test(i.unit.trim())) ? i.unit.trim() : 'Kg';
+                    if (!byUnit[u]) byUnit[u] = { ord: 0, rcv: 0 };
+                    const ord = Number(i.orderedQuantity || 0);
+                    const rcv = Number(i.receivedQuantity || 0);
+                    byUnit[u].ord += ord;
+                    byUnit[u].rcv += rcv;
+                    totalOrdAll += ord;
+                    totalRcvAll += rcv;
+                }
+
+                const unitEntries = Object.entries(byUnit);
+                const pct = totalOrdAll > 0 ? Math.min(100, Math.round((totalRcvAll / totalOrdAll) * 100)) : 0;
+
+                const orderedVsRcvText = unitEntries.length > 0
+                    ? unitEntries.map(([u, d]) => `${d.rcv % 1 === 0 ? d.rcv.toLocaleString('en-IN') : Number(d.rcv.toFixed(3)).toLocaleString('en-IN')} / ${d.ord % 1 === 0 ? d.ord.toLocaleString('en-IN') : Number(d.ord.toFixed(3)).toLocaleString('en-IN')} ${u}`).join(', ')
+                    : '0 / 0 Kg';
+
+                const remainingText = unitEntries.length > 0
+                    ? unitEntries.map(([u, d]) => {
+                        const rem = Math.max(0, d.ord - d.rcv);
+                        return `${rem % 1 === 0 ? rem.toLocaleString('en-IN') : Number(rem.toFixed(3)).toLocaleString('en-IN')} ${u}`;
+                    }).join(', ')
+                    : '0 Kg';
 
                 return (
                     <div className="space-y-1 min-w-[130px]">
                         <div className="flex items-center justify-between text-[11px] font-mono">
                             <span className="font-bold text-text-main">
-                                {totalReceived.toLocaleString('en-IN')} / {totalOrdered.toLocaleString('en-IN')} {primaryUnit}
+                                {orderedVsRcvText}
                             </span>
                             <span className={`text-[10px] font-bold ${pct === 100 ? 'text-emerald-600' : pct > 0 ? 'text-blue-600' : 'text-text-muted'}`}>
                                 {pct}%
@@ -162,7 +191,7 @@ export default function ProcurementPage() {
                             />
                         </div>
                         <div className="text-[10px] text-text-muted flex justify-between font-mono">
-                            <span>Remaining: <strong className={remaining > 0 ? 'text-amber-600' : 'text-emerald-600'}>{remaining.toLocaleString('en-IN')} {primaryUnit}</strong></span>
+                            <span>Remaining: <strong className={pct < 100 ? 'text-amber-600' : 'text-emerald-600'}>{remainingText}</strong></span>
                         </div>
                     </div>
                 );
@@ -392,13 +421,30 @@ export default function ProcurementPage() {
         },
         {
             header: 'RECEIVED ITEMS & ROLLS',
-            exportValue: (row) => (row.items || []).map(i => `${i.receivedQuantity || 0} Kg`).join(', '),
+            exportValue: (row) => {
+                const byUnit = {};
+                for (const i of row.items || []) {
+                    const u = i.unit || 'Kg';
+                    byUnit[u] = (byUnit[u] || 0) + (Number(i.receivedQuantity) || 0);
+                }
+                return Object.entries(byUnit).map(([u, q]) => `${q % 1 === 0 ? q : q.toFixed(3)} ${u}`).join(', ');
+            },
             render: (row) => {
-                const totalQty = (row.items || []).reduce((sum, it) => sum + (Number(it.receivedQuantity) || 0), 0);
+                const items = row.items || [];
+                const byUnit = {};
+                for (const it of items) {
+                    const u = it.unit || 'Kg';
+                    const q = Number(it.receivedQuantity) || 0;
+                    byUnit[u] = (byUnit[u] || 0) + q;
+                }
+                const unitEntries = Object.entries(byUnit);
+                const qtyText = unitEntries.length > 0
+                    ? unitEntries.map(([u, q]) => `${q % 1 === 0 ? q.toLocaleString('en-IN') : Number(q.toFixed(3)).toLocaleString('en-IN')} ${u}`).join(', ')
+                    : '0 Kg';
                 const rollCount = Array.isArray(row.rolls) ? row.rolls.length : 0;
                 return (
                     <div className="text-xs">
-                        <span className="font-mono font-bold text-emerald-800">{totalQty.toFixed(3)} Kg</span>
+                        <span className="font-mono font-bold text-emerald-800">{qtyText}</span>
                         {rollCount > 0 && (
                             <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
                                 {rollCount} Roll{rollCount > 1 ? 's' : ''}

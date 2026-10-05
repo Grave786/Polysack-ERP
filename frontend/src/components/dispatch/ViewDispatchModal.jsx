@@ -26,7 +26,7 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
 
     const items = dispatch.items || [];
     const totalBags = items.reduce((acc, i) => acc + Number(i.dispatchedQuantity || i.quantity || 0), 0);
-    const totalBales = totalBags > 0 ? Math.ceil(totalBags / 300) : 0;
+    const totalBales = items.reduce((acc, i) => acc + Number(i.dispatchedBales !== undefined && i.dispatchedBales !== null ? i.dispatchedBales : (i.dispatchedQuantity ? Math.ceil(i.dispatchedQuantity / 300) : 0)), 0);
 
     // Linked Invoice & Payment Check
     const invoice = dispatch.invoice;
@@ -208,7 +208,7 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
                                     const fg = typeof it.finishedGood === 'object' ? it.finishedGood : null;
                                     const fgName = fg?.name || it.finishedGoodName || 'Finished Poly Bag';
                                     const qty = Number(it.dispatchedQuantity || it.quantity || 0);
-                                    const bales = qty > 0 ? Math.ceil(qty / 300) : 0;
+                                    const bales = it.dispatchedBales !== undefined && it.dispatchedBales !== null ? Number(it.dispatchedBales) : (qty > 0 ? Math.ceil(qty / 300) : 0);
 
                                     return (
                                         <tr key={idx} className="hover:bg-app-bg/50">

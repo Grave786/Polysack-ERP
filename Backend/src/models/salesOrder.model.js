@@ -71,7 +71,7 @@ const SalesOrderSchema = new mongoose.Schema({
         type: String,
         default: 'DRAFT',
         enum: {
-            values: ['DRAFT', 'CONFIRMED', 'READY_FOR_DISPATCH', 'DISPATCHED', 'DELIVERED', 'CANCELLED'],
+            values: ['DRAFT', 'CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED', 'DISPATCHED', 'FULLY_DISPATCHED', 'DELIVERED', 'CANCELLED'],
             message: '{VALUE} is not a valid SO status.'
         }
     },

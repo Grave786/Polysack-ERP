@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const ProductionLog = require('../models/productionLog.model');
 const WorkOrder = require('../models/workOrder.model');
 const Employee = require('../models/employee.model');
+const { isTenantAdmin } = require('../middlewares/rbac.middleware');
 
 /**
  * Format Date object / string to IST YYYY-MM-DD string without toISOString() timezone shift
@@ -509,11 +510,12 @@ const createProductionLog = async (req, res) => {
             }
         }
 
-        // 9. Parse IST Date & disallow future dates
+        // 9. Parse IST Date & disallow future dates for non-admins (Tenant Admin can enter any date)
         const logDate = parseIstDate(date);
         const todayIstStr = getIstDateString(new Date());
         const logIstStr = getIstDateString(logDate);
-        if (logIstStr > todayIstStr) {
+        const isAdmin = await isTenantAdmin(req.user);
+        if (!isAdmin && logIstStr > todayIstStr) {
             if (useTransaction && session) {
                 await session.abortTransaction();
                 session.endSession();
@@ -1042,7 +1044,8 @@ const updateProductionLog = async (req, res) => {
             const parsed = parseIstDate(date);
             const todayIstStr = getIstDateString(new Date());
             const logIstStr = getIstDateString(parsed);
-            if (logIstStr > todayIstStr) {
+            const isAdmin = await isTenantAdmin(req.user);
+            if (!isAdmin && logIstStr > todayIstStr) {
                 if (useTransaction && session) { await session.abortTransaction(); session.endSession(); }
                 return res.status(400).json({
                     success: false,

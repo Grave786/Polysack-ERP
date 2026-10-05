@@ -1,4 +1,6 @@
-import { Plus, Trash2, Layers, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Plus, Trash2, Layers, AlertCircle, Search, ChevronDown, X, Loader2 } from 'lucide-react';
+import axiosInstance from '../../api/axiosInstance';
 
 /**
  * Empty roll template
@@ -19,6 +21,240 @@ export const createEmptyRoll = (index = 1) => ({
 });
 
 /**
+ * Searchable Combobox for Available Inventory Rolls.
+ * Queries /work-orders/available-rolls with debounce or filters provided availableRolls.
+ */
+function SearchableRollPicker({
+    roll,
+    idx,
+    required,
+    onSelectRoll,
+    onClearRoll,
+    availableRolls = []
+}) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [inputValue, setInputValue] = useState(roll.rollNumber || roll.rollNo || '');
+    const [options, setOptions] = useState([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const containerRef = useRef(null);
+    const inputRef = useRef(null);
+
+    // Sync input value with current roll
+    useEffect(() => {
+        setInputValue(roll.rollNumber || roll.rollNo || '');
+    }, [roll.rollNumber, roll.rollNo]);
+
+    // Handle outside clicks to close dropdown
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (containerRef.current && !containerRef.current.contains(e.target)) {
+                setIsOpen(false);
+                setInputValue(roll.rollNumber || roll.rollNo || '');
+                setSearchQuery('');
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [roll.rollNumber, roll.rollNo]);
+
+    // Query available rolls with debounce or in-memory if availableRolls is provided
+    useEffect(() => {
+        if (!isOpen) return;
+
+        if (availableRolls && availableRolls.length > 0) {
+            const q = searchQuery.trim().toLowerCase();
+            if (!q) {
+                setOptions(availableRolls.slice(0, 20));
+            } else {
+                const terms = q.split(/\s+/).filter(Boolean);
+                const filtered = availableRolls.filter((r) => {
+                    const combined = `${r.rollNo || r.rollNumber || ''} ${r.materialName || ''} ${r.color || ''} ${r.materialQualityFabric || ''} ${r.laminationType || ''} ${r.fabricGrammage || ''} ${r.fabricAverage != null ? `${r.fabricAverage} gsm ${r.fabricAverage}` : ''} ${r.width != null ? `${r.width} inch ${r.width}" ${r.width}` : ''} ${r.grossWeight != null ? `${r.grossWeight} kg ${r.grossWeight}` : ''} ${r.grnNumber || ''}`.toLowerCase();
+                    return terms.every((t) => combined.includes(t));
+                });
+                setOptions(filtered.slice(0, 20));
+            }
+            return;
+        }
+
+        setIsLoading(true);
+        const timer = setTimeout(async () => {
+            try {
+                const params = { limit: 20 };
+                if (searchQuery.trim()) {
+                    params.search = searchQuery.trim();
+                }
+                const res = await axiosInstance.get('/work-orders/available-rolls', { params });
+                if (res.data?.success && Array.isArray(res.data?.data)) {
+                    setOptions(res.data.data);
+                } else {
+                    setOptions([]);
+                }
+            } catch (err) {
+                console.error('Failed to fetch available rolls:', err);
+                setOptions([]);
+            } finally {
+                setIsLoading(false);
+            }
+        }, 250);
+
+        return () => clearTimeout(timer);
+    }, [isOpen, searchQuery, availableRolls]);
+
+    const handleFocus = (e) => {
+        setIsOpen(true);
+        e.target.select();
+        setSearchQuery('');
+    };
+
+    const handleChange = (e) => {
+        const val = e.target.value;
+        setInputValue(val);
+        setSearchQuery(val);
+        if (!isOpen) setIsOpen(true);
+    };
+
+    const handleSelectOption = (item) => {
+        const rNo = item.rollNo || item.rollNumber || '';
+        setInputValue(rNo);
+        setSearchQuery('');
+        setIsOpen(false);
+        onSelectRoll(idx, item);
+    };
+
+    const handleClear = (e) => {
+        e.stopPropagation();
+        setInputValue('');
+        setSearchQuery('');
+        onClearRoll(idx);
+        inputRef.current?.focus();
+    };
+
+    const hasSelection = Boolean(roll.rollId || roll.rollNumber || roll.rollNo);
+
+    return (
+        <div className="relative w-full" ref={containerRef}>
+            <div className="relative flex items-center">
+                <Search size={13} className="absolute left-2 text-text-muted pointer-events-none" />
+                <input
+                    ref={inputRef}
+                    type="text"
+                    required={required && !hasSelection}
+                    placeholder="Search roll #, spec, color..."
+                    value={inputValue}
+                    onFocus={handleFocus}
+                    onChange={handleChange}
+                    className="w-full pl-7 pr-12 py-1.5 bg-card-bg border border-border rounded text-xs font-mono font-bold text-text-main placeholder:font-sans placeholder:font-normal placeholder:text-text-muted focus:outline-none focus:border-primary truncate"
+                />
+                <div className="absolute right-1.5 flex items-center gap-0.5">
+                    {isLoading && (
+                        <Loader2 size={12} className="animate-spin text-primary" />
+                    )}
+                    {hasSelection && !isLoading && (
+                        <button
+                            type="button"
+                            onClick={handleClear}
+                            className="p-1 text-text-muted hover:text-danger rounded hover:bg-danger/10 transition-colors cursor-pointer"
+                            title="Clear roll selection"
+                        >
+                            <X size={12} />
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (!isOpen) {
+                                setIsOpen(true);
+                                inputRef.current?.focus();
+                            } else {
+                                setIsOpen(false);
+                            }
+                        }}
+                        className="p-1 text-text-muted hover:text-text-main rounded transition-colors cursor-pointer"
+                    >
+                        <ChevronDown size={13} className={`transition-transform duration-150 ${isOpen ? 'rotate-180 text-primary' : ''}`} />
+                    </button>
+                </div>
+            </div>
+
+            {/* Dropdown Options List */}
+            {isOpen && (
+                <div className="absolute left-0 top-full mt-1 w-72 sm:w-84 max-w-[90vw] bg-card-bg border border-border rounded-lg shadow-2xl z-50 overflow-hidden font-sans animate-in fade-in zoom-in-95 duration-100">
+                    <div className="px-2.5 py-1.5 border-b border-border bg-app-bg/60 flex items-center justify-between text-[10px] font-bold text-text-muted uppercase tracking-wider">
+                        <span>Available Inventory Rolls</span>
+                        <span>{isLoading ? 'Searching...' : `${options.length} rolls`}</span>
+                    </div>
+
+                    <ul className="max-h-56 overflow-y-auto divide-y divide-border/50 text-xs">
+                        {isLoading && options.length === 0 ? (
+                            <li className="p-4 text-center text-text-muted text-[11px] flex items-center justify-center gap-2">
+                                <Loader2 size={14} className="animate-spin text-primary" />
+                                <span>Searching available rolls...</span>
+                            </li>
+                        ) : options.length === 0 ? (
+                            <li className="p-4 text-center text-text-muted text-[11px]">
+                                {searchQuery ? `No available rolls match "${searchQuery}"` : 'No available rolls found with stock > 0'}
+                            </li>
+                        ) : (
+                            options.map((item) => {
+                                const isCurrent = String(roll.rollId || roll._id) === String(item._id);
+                                const specParts = [
+                                    item.materialName,
+                                    item.color,
+                                    item.materialQualityFabric,
+                                    item.width != null ? `${item.width}"` : '',
+                                    item.fabricAverage != null ? `${item.fabricAverage} GSM` : (item.fabricGrammage ? `${item.fabricGrammage} GSM` : ''),
+                                    item.laminationType
+                                ].filter(Boolean);
+
+                                return (
+                                    <li
+                                        key={item._id}
+                                        onClick={() => handleSelectOption(item)}
+                                        className={`p-2 hover:bg-primary/10 transition-colors cursor-pointer flex flex-col gap-0.5 ${
+                                            isCurrent ? 'bg-primary/15 border-l-2 border-primary' : ''
+                                        }`}
+                                    >
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                <span className="font-mono font-bold text-text-main text-xs truncate">
+                                                    {item.rollNo || item.rollNumber}
+                                                </span>
+                                                {isCurrent && (
+                                                    <span className="text-[9px] bg-primary text-sidebar-bg font-extrabold px-1.5 py-0.2 rounded shrink-0">
+                                                        SELECTED
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <span className="shrink-0 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                                                Avail: {Number(item.remainingMeters).toLocaleString('en-IN')}m
+                                            </span>
+                                        </div>
+
+                                        <div className="text-[10px] text-text-muted truncate">
+                                            {specParts.length > 0 ? specParts.join(' • ') : 'Standard Fabric Roll'}
+                                        </div>
+
+                                        {(item.grossWeight != null || item.usedMeters > 0 || item.grnNumber) && (
+                                            <div className="text-[9px] text-text-muted/75 flex items-center gap-2 flex-wrap">
+                                                {item.grossWeight != null && <span>GW: {item.grossWeight} kg</span>}
+                                                {item.width != null && <span>W: {item.width}"</span>}
+                                                {item.usedMeters > 0 && <span>Used: {item.usedMeters}m</span>}
+                                                {item.grnNumber && <span>GRN: {item.grnNumber}</span>}
+                                            </div>
+                                        )}
+                                    </li>
+                                );
+                            })
+                        )}
+                    </ul>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/**
  * Reusable Packing Slip & Roll Specifications Component.
  * Supports multiple rolls per GRN / Work Order with inline validation hints and live tally.
  */
@@ -26,6 +262,7 @@ export default function PackingSlipRollsSection({
     rolls = [],
     onChange,
     availableRolls = [],
+    allowRollSelection = false,
     title = 'Packing Slip & Roll Specifications',
     subtitle = 'Inward roll specifications from paper packing list',
     required = false
@@ -66,6 +303,32 @@ export default function PackingSlipRollsSection({
         });
         onChange(updated);
     };
+
+    const handleClearRoll = (idx) => {
+        const updated = rolls.map((roll, i) => {
+            if (i !== idx) return roll;
+            return {
+                ...roll,
+                _id: undefined,
+                rollId: '',
+                rollNo: '',
+                rollNumber: '',
+                materialName: '',
+                remainingMeters: '',
+                usedMeters: '',
+                fabricLength: '',
+                length: ''
+            };
+        });
+        onChange(updated);
+    };
+
+    const canSelectFromInventory = Boolean(
+        allowRollSelection ||
+        (availableRolls && availableRolls.length > 0) ||
+        title?.toLowerCase().includes('job order') ||
+        title?.toLowerCase().includes('work order')
+    );
 
     const handleRollChange = (index, field, value) => {
         const updated = rolls.map((roll, idx) => {
@@ -185,7 +448,7 @@ export default function PackingSlipRollsSection({
                                             <label className="block text-[10px] font-bold uppercase tracking-wide text-text-main">
                                                 Roll No. <span className="text-danger">*</span>
                                             </label>
-                                            {availableRolls.length > 0 && (
+                                            {canSelectFromInventory && (
                                                 <button
                                                     type="button"
                                                     onClick={() => {
@@ -199,31 +462,15 @@ export default function PackingSlipRollsSection({
                                             )}
                                         </div>
 
-                                        {availableRolls.length > 0 && !roll.isManualEntry ? (
-                                            <select
+                                        {canSelectFromInventory && !roll.isManualEntry ? (
+                                            <SearchableRollPicker
+                                                roll={roll}
+                                                idx={idx}
                                                 required={required}
-                                                value={roll.rollId || roll._id || ''}
-                                                onChange={(e) => {
-                                                    const val = e.target.value;
-                                                    if (!val) {
-                                                        handleRollChange(idx, 'rollId', '');
-                                                        handleRollChange(idx, 'rollNo', '');
-                                                        return;
-                                                    }
-                                                    const found = availableRolls.find((r) => String(r._id) === val);
-                                                    if (found) {
-                                                        handleSelectAvailableRoll(idx, found);
-                                                    }
-                                                }}
-                                                className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary truncate cursor-pointer"
-                                            >
-                                                <option value="">-- Select Available Roll --</option>
-                                                {availableRolls.map((r) => (
-                                                    <option key={r._id} value={r._id}>
-                                                        {r.rollNo} - {r.materialName} (Available: {r.remainingMeters}m / Used: {r.usedMeters}m)
-                                                    </option>
-                                                ))}
-                                            </select>
+                                                onSelectRoll={handleSelectAvailableRoll}
+                                                onClearRoll={handleClearRoll}
+                                                availableRolls={availableRolls}
+                                            />
                                         ) : (
                                             <input
                                                 type="text"
@@ -237,7 +484,7 @@ export default function PackingSlipRollsSection({
                                         )}
                                         {roll.materialName && (
                                             <p className="text-[9.5px] text-primary font-medium truncate mt-0.5">
-                                                {roll.materialName}
+                                                {roll.materialName} {roll.remainingMeters != null && `• Stock: ${roll.remainingMeters}m`}
                                             </p>
                                         )}
                                     </div>

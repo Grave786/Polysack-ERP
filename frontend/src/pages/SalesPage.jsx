@@ -68,19 +68,40 @@ export default function SalesPage() {
             )
         },
         {
-            header: 'ORDERED BAGS',
+            header: 'ORDERED QUANTITY',
             exportValue: (row) => {
-                return Array.isArray(row.items)
-                    ? row.items.reduce((acc, it) => acc + Number(it.quantity || 0), 0)
-                    : (row.totalQuantity || 0);
+                const items = Array.isArray(row.items) ? row.items : [];
+                const totals = items.reduce((acc, it) => {
+                    const q = Number(it.quantity || 0);
+                    if (q > 0) {
+                        const u = it.unit || 'Pcs';
+                        acc[u] = (acc[u] || 0) + q;
+                    }
+                    return acc;
+                }, {});
+                const entries = Object.entries(totals);
+                return entries.length > 0
+                    ? entries.map(([u, q]) => `${q % 1 === 0 ? q.toLocaleString('en-IN') : Number(q.toFixed(3)).toLocaleString('en-IN')} ${u}`).join(', ')
+                    : (row.totalQuantity ? `${row.totalQuantity}` : '-');
             },
             render: (row) => {
-                const totalBags = Array.isArray(row.items)
-                    ? row.items.reduce((acc, it) => acc + Number(it.quantity || 0), 0)
-                    : 0;
+                const items = Array.isArray(row.items) ? row.items : [];
+                const totals = items.reduce((acc, it) => {
+                    const q = Number(it.quantity || 0);
+                    if (q > 0) {
+                        const u = it.unit || 'Pcs';
+                        acc[u] = (acc[u] || 0) + q;
+                    }
+                    return acc;
+                }, {});
+                const entries = Object.entries(totals);
+                const text = entries.length > 0
+                    ? entries.map(([u, q]) => `${q % 1 === 0 ? q.toLocaleString('en-IN') : Number(q.toFixed(3)).toLocaleString('en-IN')} ${u}`).join(', ')
+                    : (row.totalQuantity ? `${row.totalQuantity}` : '-');
+
                 return (
                     <span className="font-mono font-bold text-text-main text-xs">
-                        {totalBags > 0 ? `${totalBags.toLocaleString()} Bags` : '-'}
+                        {text}
                     </span>
                 );
             }
@@ -108,7 +129,8 @@ export default function SalesPage() {
                 const st = row.status || 'CONFIRMED';
                 const isConfirmed = st === 'CONFIRMED';
                 const isDraft = st === 'DRAFT';
-                const isDispatched = st === 'DISPATCHED' || st === 'READY_FOR_DISPATCH';
+                const isPartiallyDispatched = st === 'PARTIALLY_DISPATCHED';
+                const isDispatched = st === 'DISPATCHED' || st === 'READY_FOR_DISPATCH' || st === 'FULLY_DISPATCHED';
                 const isCancelled = st === 'CANCELLED';
 
                 return (
@@ -117,13 +139,15 @@ export default function SalesPage() {
                             ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                             : isDraft
                             ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                            : isPartiallyDispatched
+                            ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
                             : isDispatched
                             ? 'bg-blue-100 text-blue-800 border border-blue-200'
                             : isCancelled
                             ? 'bg-rose-100 text-rose-800 border border-rose-200'
                             : 'bg-gray-100 text-gray-700 border border-gray-200'
                     }`}>
-                        {st}
+                        {st.replace(/_/g, ' ')}
                     </span>
                 );
             }
@@ -299,7 +323,7 @@ export default function SalesPage() {
             label: 'Sales Orders',
             resourcePath: '/sales-orders',
             columns: salesOrderColumns,
-            availableStatuses: ['DRAFT', 'CONFIRMED', 'READY_FOR_DISPATCH', 'DISPATCHED', 'CANCELLED']
+            availableStatuses: ['DRAFT', 'CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED', 'DISPATCHED', 'CANCELLED']
         },
         {
             key: 'invoices',

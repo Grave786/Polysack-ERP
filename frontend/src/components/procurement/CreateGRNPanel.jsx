@@ -4,10 +4,17 @@ import SlideOverPanel from '../shared/SlideOverPanel';
 import PackingSlipRollsSection, { createEmptyRoll } from '../shared/PackingSlipRollsSection';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../../store/authStore';
+import { isTenantAdmin, checkIsSuperAdmin } from '../../utils/permissionUtils';
+import { getTodayLocalDateString, formatToLocalDateString } from '../../utils/dateUtils';
 
 export default function CreateGRNPanel({ isOpen, onClose, po, editGrn = null, onSuccess }) {
+    const user = useAuthStore((state) => state.user);
+    const isAdmin = isTenantAdmin(user) || checkIsSuperAdmin(user);
+
     const [locations, setLocations] = useState([]);
     const [receivingLocation, setReceivingLocation] = useState('');
+    const [receivedDate, setReceivedDate] = useState(getTodayLocalDateString());
     const [notes, setNotes] = useState('');
     const [isLoadingLocs, setIsLoadingLocs] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -76,6 +83,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, editGrn = null, on
         if (isOpen && (poId || editGrn)) {
             setIsLoadingLocs(true);
             setNotes(editGrn?.notes || '');
+            setReceivedDate(editGrn?.receivedDate ? formatToLocalDateString(editGrn.receivedDate) : getTodayLocalDateString());
             if (editGrn?.rolls && editGrn.rolls.length > 0) {
                 setInwardRolls(editGrn.rolls.map(r => ({
                     rollNo: r.rollNumber || r.rollNo || '',
@@ -299,6 +307,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, editGrn = null, on
             const payload = {
                 purchaseOrder: targetPoId,
                 receivingLocation,
+                receivedDate: receivedDate || undefined,
                 notes: notes.trim() || undefined,
                 items: validItems,
                 rolls: validRolls
@@ -381,31 +390,48 @@ export default function CreateGRNPanel({ isOpen, onClose, po, editGrn = null, on
                     </div>
                 )}
 
-                {/* Receiving Location Selection */}
-                <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                        Receiving Location / Warehouse *
-                    </label>
-                    {isLoadingLocs ? (
-                        <div className="flex items-center gap-2 p-2.5 border border-border rounded-md text-xs text-text-muted">
-                            <RefreshCw size={14} className="animate-spin text-primary" />
-                            <span>Loading locations...</span>
-                        </div>
-                    ) : (
-                        <select
+                {/* Date & Receiving Location Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            Received Date *
+                        </label>
+                        <input
+                            type="date"
                             required
-                            value={receivingLocation}
-                            onChange={(e) => setReceivingLocation(e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main font-semibold focus:outline-none focus:border-primary cursor-pointer"
-                        >
-                            <option value="">-- Select Receiving Location --</option>
-                            {locations.map((loc) => (
-                                <option key={loc._id} value={loc._id}>
-                                    {loc.code ? `${loc.code} - ` : ''}{loc.name} ({loc.type || 'Warehouse'})
-                                </option>
-                            ))}
-                        </select>
-                    )}
+                            max={isAdmin ? undefined : getTodayLocalDateString()}
+                            value={receivedDate}
+                            onChange={(e) => setReceivedDate(e.target.value)}
+                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
+                        />
+                    </div>
+
+                    {/* Receiving Location Selection */}
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            Receiving Location / Warehouse *
+                        </label>
+                        {isLoadingLocs ? (
+                            <div className="flex items-center gap-2 p-2.5 border border-border rounded-md text-xs text-text-muted">
+                                <RefreshCw size={14} className="animate-spin text-primary" />
+                                <span>Loading locations...</span>
+                            </div>
+                        ) : (
+                            <select
+                                required
+                                value={receivingLocation}
+                                onChange={(e) => setReceivingLocation(e.target.value)}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main font-semibold focus:outline-none focus:border-primary cursor-pointer"
+                            >
+                                <option value="">-- Select Receiving Location --</option>
+                                {locations.map((loc) => (
+                                    <option key={loc._id} value={loc._id}>
+                                        {loc.code ? `${loc.code} - ` : ''}{loc.name} ({loc.type || 'Warehouse'})
+                                    </option>
+                                ))}
+                            </select>
+                        )}
+                    </div>
                 </div>
 
                 {/* Received Items List */}

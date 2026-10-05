@@ -15,6 +15,7 @@ import LogInteractionModal from '../components/crm/LogInteractionModal';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
+import { isTenantAdmin, checkIsSuperAdmin } from '../utils/permissionUtils';
 
 // ── Attribute type keys matching rawMaterialAttributes.constants.js ──────────
 const ATTR = {
@@ -144,6 +145,7 @@ export default function CustomerCrmPage() {
     const rawUser = useAuthStore((state) => state.user);
     const userRole = rawUser?.role?.name || rawUser?.roleName || (typeof rawUser?.role === 'string' ? rawUser.role : '');
     const user = useMemo(() => (rawUser ? { ...rawUser, role: userRole } : null), [rawUser, userRole]);
+    const isUserAdmin = isTenantAdmin(rawUser) || checkIsSuperAdmin(rawUser);
 
     const [activeTab, setActiveTab] = useState('enquiries');
     const [isInteractionDrawerOpen, setIsInteractionDrawerOpen] = useState(false);
@@ -1966,12 +1968,14 @@ export default function CustomerCrmPage() {
                                         <input
                                             type="date"
                                             required
-                                            min={TODAY}
+                                            min={isUserAdmin ? undefined : TODAY}
                                             value={enquiryForm.expectedDeliveryDate}
                                             onChange={(e) => setEnquiryForm((p) => ({ ...p, expectedDeliveryDate: e.target.value }))}
                                             className={inp}
                                         />
-                                        <p className="text-[10px] text-text-muted mt-1">Must be today or a future date</p>
+                                        <p className="text-[10px] text-text-muted mt-1">
+                                            {isUserAdmin ? 'Any delivery date allowed for Tenant Admin' : 'Must be today or a future date'}
+                                        </p>
                                     </div>
                                 )}
                             </div>

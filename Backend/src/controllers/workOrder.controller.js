@@ -900,7 +900,7 @@ const buildRollsTraceabilityData = async (tenantId) => {
     })
         .populate('purchaseOrder', 'poNumber orderDate status')
         .populate('supplier', 'name code')
-        .populate('items.rawMaterial', 'name code category uom')
+        .populate('items.rawMaterial', 'name code category uom color colors materialDescription materialQualityFabric laminationType fabricGrammage materialColour materialGrade')
         .sort({ receivedDate: -1, createdAt: -1 })
         .lean();
 
@@ -963,6 +963,11 @@ const buildRollsTraceabilityData = async (tenantId) => {
         const matName = rawMat?.name || 'Woven Fabric Roll';
         const matCode = rawMat?.code || '';
         const matUom = rawMat?.uom || 'Kg';
+        const color = rawMat?.materialColour || rawMat?.color || (Array.isArray(rawMat?.colors) ? rawMat.colors[0] : '') || '';
+        const materialQualityFabric = rawMat?.materialQualityFabric || '';
+        const laminationType = rawMat?.laminationType || '';
+        const fabricGrammage = rawMat?.fabricGrammage || '';
+        const materialGrade = rawMat?.materialGrade || '';
 
         for (const r of (grn.rolls || [])) {
             const rollIdStr = String(r._id);
@@ -998,6 +1003,8 @@ const buildRollsTraceabilityData = async (tenantId) => {
                 status = 'PARTIALLY_USED';
             }
 
+            const fabricAverage = r.fabricAverage != null ? r.fabricAverage : (grn.items?.[0]?.fabricAverage != null ? grn.items[0].fabricAverage : null);
+
             allRolls.push({
                 _id: r._id,
                 rollId: r._id,
@@ -1006,6 +1013,12 @@ const buildRollsTraceabilityData = async (tenantId) => {
                 materialName: matName,
                 materialCode: matCode,
                 uom: matUom,
+                color,
+                materialQualityFabric,
+                laminationType,
+                fabricGrammage,
+                materialGrade,
+                materialDescription: rawMat?.materialDescription || '',
                 grnId: grn._id,
                 grnNumber: grn.grnNumber,
                 receivedDate: grn.receivedDate,
@@ -1020,7 +1033,7 @@ const buildRollsTraceabilityData = async (tenantId) => {
                 usedWeightKg,
                 remainingWeightKg,
                 width: r.width != null ? r.width : null,
-                fabricAverage: r.fabricAverage != null ? r.fabricAverage : null,
+                fabricAverage,
                 totalQuantityKg: r.totalQuantityKg != null ? r.totalQuantityKg : null,
                 totalQuantityPcs: r.totalQuantityPcs != null ? r.totalQuantityPcs : null,
                 status,
@@ -1051,10 +1064,47 @@ const getAvailableRolls = async (req, res) => {
 
         const allRolls = await buildRollsTraceabilityData(tenantId);
         const includeAll = req.query.all === 'true';
-        const filteredRolls = includeAll ? allRolls : allRolls.filter((r) => r.remainingMeters > 0);
+        let filteredRolls = includeAll ? allRolls : allRolls.filter((r) => Number(r.remainingMeters) > 0);
+
+        const { search, limit, page } = req.query;
+
+        if (search && String(search).trim()) {
+            const s = String(search).trim().toLowerCase();
+            const terms = s.split(/\s+/).filter(Boolean);
+
+            filteredRolls = filteredRolls.filter((r) => {
+                const rollNo = String(r.rollNo || r.rollNumber || '').toLowerCase();
+                const matName = String(r.materialName || '').toLowerCase();
+                const matCode = String(r.materialCode || '').toLowerCase();
+                const color = String(r.color || '').toLowerCase();
+                const quality = String(r.materialQualityFabric || '').toLowerCase();
+                const lamination = String(r.laminationType || '').toLowerCase();
+                const grammage = String(r.fabricGrammage || '').toLowerCase();
+                const gsm = r.fabricAverage != null ? `${r.fabricAverage} gsm ${r.fabricAverage}`.toLowerCase() : '';
+                const width = r.width != null ? `${r.width} inch ${r.width}" ${r.width}`.toLowerCase() : '';
+                const grossWeight = r.grossWeight != null ? `${r.grossWeight} kg ${r.grossWeight}`.toLowerCase() : '';
+                const grnNum = String(r.grnNumber || '').toLowerCase();
+                const supp = String(r.supplierName || '').toLowerCase();
+
+                const combined = `${rollNo} ${matName} ${matCode} ${color} ${quality} ${lamination} ${grammage} ${gsm} ${width} ${grossWeight} ${grnNum} ${supp}`;
+
+                return terms.every(term => combined.includes(term));
+            });
+        }
+
+        const totalCount = filteredRolls.length;
+
+        // Apply pagination / limit (default limit to 20 if search is performed or limit is requested)
+        const limitNum = limit !== undefined ? parseInt(limit, 10) : (includeAll ? null : 20);
+        if (limitNum && !isNaN(limitNum) && limitNum > 0) {
+            const pg = parseInt(page, 10) || 1;
+            const skip = (pg - 1) * limitNum;
+            filteredRolls = filteredRolls.slice(skip, skip + limitNum);
+        }
 
         return res.status(200).json({
             success: true,
+            total: totalCount,
             count: filteredRolls.length,
             data: filteredRolls
         });

@@ -644,10 +644,10 @@ const updateStatus = async (req, res) => {
             });
         }
 
-        if (status === 'DISPATCHED' || status === 'DELIVERED') {
+        if (status === 'DISPATCHED' || status === 'FULLY_DISPATCHED' || status === 'PARTIALLY_DISPATCHED' || status === 'DELIVERED') {
             return res.status(400).json({
                 success: false,
-                message: `Status '${status}' cannot be set manually. Statuses 'DISPATCHED' and 'DELIVERED' are set automatically by the Dispatch module.`
+                message: `Status '${status}' cannot be set manually. Dispatch statuses are set automatically by the Dispatch module.`
             });
         }
 

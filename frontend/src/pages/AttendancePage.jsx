@@ -4,8 +4,14 @@ import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../store/authStore';
+import { isTenantAdmin, checkIsSuperAdmin } from '../utils/permissionUtils';
+import { getTodayLocalDateString } from '../utils/dateUtils';
 
 export default function AttendancePage() {
+    const user = useAuthStore((state) => state.user);
+    const isAdmin = isTenantAdmin(user) || checkIsSuperAdmin(user);
+
     const [activeTabKey, setActiveTabKey] = useState('shifts');
     const [isSeedingShifts, setIsSeedingShifts] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
@@ -833,6 +839,7 @@ export default function AttendancePage() {
                                     <input
                                         type="date"
                                         required
+                                        max={isAdmin ? undefined : getTodayLocalDateString()}
                                         value={punchForm.date}
                                         onChange={(e) => setPunchForm({ ...punchForm, date: e.target.value })}
                                         className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-amber-500 font-sans"

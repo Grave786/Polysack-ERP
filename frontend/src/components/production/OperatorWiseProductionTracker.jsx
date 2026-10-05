@@ -17,7 +17,7 @@ import {
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../store/authStore';
-import { isTenantAdmin } from '../../utils/permissionUtils';
+import { isTenantAdmin, checkIsSuperAdmin } from '../../utils/permissionUtils';
 
 /**
  * Format IST Date for display (e.g., "30 Sep 2026") without toISOString() timezone shift
@@ -114,7 +114,7 @@ export default function OperatorWiseProductionTracker({
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const user = useAuthStore((state) => state.user);
-    const isAdmin = isTenantAdmin(user);
+    const isAdmin = isTenantAdmin(user) || checkIsSuperAdmin(user);
 
     // Work order status checks
     const woStatus = String(workOrder?.status || summaryData?.workOrderStatus || '').toUpperCase();
@@ -860,7 +860,7 @@ export default function OperatorWiseProductionTracker({
                                 <input
                                     type="date"
                                     required
-                                    max={getIstTodayString()}
+                                    max={isAdmin ? undefined : getIstTodayString()}
                                     value={formData.date}
                                     onChange={(e) => setFormData((p) => ({ ...p, date: e.target.value }))}
                                     className="w-full text-xs font-semibold border border-border rounded-lg p-2 bg-app-bg text-text-main focus:outline-none focus:border-primary"

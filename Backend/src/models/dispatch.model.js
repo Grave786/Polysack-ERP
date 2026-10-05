@@ -11,6 +11,14 @@ const DispatchItemSchema = new mongoose.Schema({
         required: [true, 'Dispatched quantity is required'],
         min: [0.0001, 'Dispatched quantity must be greater than 0']
     },
+    dispatchedKg: {
+        type: Number,
+        default: null
+    },
+    dispatchedBales: {
+        type: Number,
+        default: null
+    },
     batchNumber: {
         type: String,
         trim: true
@@ -112,6 +120,15 @@ const DispatchSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: [true, 'Dispatched by user is required']
+    },
+    lastEditedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
+    lastEditedAt: {
+        type: Date,
+        default: null
     }
 }, { timestamps: true });
 

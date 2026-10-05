@@ -157,8 +157,22 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
     const addItemRow = handleAddItem;
     const removeItemRow = handleRemoveItem;
 
-    // Live Calculation
-    const totalQuantity = items.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
+    // Live Calculation: Group and sum quantities by unit separately
+    const quantityTotalsByUnit = items.reduce((acc, it) => {
+        const qty = Number(it.quantity) || 0;
+        if (qty > 0) {
+            const unit = it.unit || 'Pcs';
+            acc[unit] = (acc[unit] || 0) + qty;
+        }
+        return acc;
+    }, {});
+
+    const formattedTotalQuantity = Object.entries(quantityTotalsByUnit).length > 0
+        ? Object.entries(quantityTotalsByUnit)
+            .map(([unit, qty]) => `${qty % 1 === 0 ? qty.toLocaleString('en-IN') : Number(qty.toFixed(3)).toLocaleString('en-IN')} ${unit}`)
+            .join(', ')
+        : '0 Pcs';
+
     const subtotal = items.reduce((acc, it) => acc + (Number(it.subtotal) || 0), 0);
     const gstRate = 18; // Standard 18% GST for Woven Poly Bags
     const gstAmount = Math.round((subtotal * gstRate) / 100);
@@ -560,7 +574,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                         <div className="bg-app-bg/80 border border-border/80 rounded-lg p-3 space-y-1.5 font-sans">
                             <div className="flex justify-between items-center text-xs">
                                 <span className="text-text-muted font-medium">Total Quantity:</span>
-                                <span className="font-mono font-bold text-text-main">{totalQuantity.toLocaleString()} Bags</span>
+                                <span className="font-mono font-bold text-text-main">{formattedTotalQuantity}</span>
                             </div>
                             <div className="flex justify-between items-center text-xs">
                                 <span className="text-text-muted font-medium">Taxable Subtotal:</span>

@@ -132,6 +132,21 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
         return acc + (qty * rate);
     }, 0);
 
+    // Group and sum quantities by unit separately
+    const poTotalsByUnit = items.reduce((acc, item) => {
+        const qty = Number(item.orderedQuantity) || 0;
+        if (qty > 0) {
+            const unit = item.unit || 'Kg';
+            acc[unit] = (acc[unit] || 0) + qty;
+        }
+        return acc;
+    }, {});
+    const formattedPoQuantity = Object.entries(poTotalsByUnit).length > 0
+        ? Object.entries(poTotalsByUnit)
+            .map(([unit, q]) => `${q % 1 === 0 ? q.toLocaleString('en-IN') : Number(q.toFixed(3)).toLocaleString('en-IN')} ${unit}`)
+            .join(', ')
+        : '0 Kg';
+
     const submitOrder = async (targetStatus = 'PENDING_APPROVAL') => {
         if (!supplier) {
             toast.error('Please select a Supplier');
@@ -421,10 +436,16 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                     </div>
                 </div>
 
-                {/* Total PO Value Live Banner */}
-                <div className="bg-app-bg border border-border rounded-lg p-3 flex items-center justify-between font-mono font-bold">
-                    <span className="text-xs text-text-muted font-sans font-bold uppercase">Estimated Total PO Value:</span>
-                    <span className="text-sm text-primary">₹{computedTotalValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                {/* Total PO Value & Grouped Quantity Live Banner */}
+                <div className="bg-app-bg border border-border rounded-lg p-3 space-y-1.5 font-sans">
+                    <div className="flex justify-between items-center text-xs">
+                        <span className="text-text-muted font-bold uppercase text-[10px]">Total Quantity:</span>
+                        <span className="font-mono font-bold text-text-main">{formattedPoQuantity}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs pt-1 border-t border-border/70 font-mono font-bold">
+                        <span className="text-text-muted font-sans text-xs uppercase">Estimated Total PO Value:</span>
+                        <span className="text-sm text-primary">₹{computedTotalValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                    </div>
                 </div>
 
                 {/* Submit Actions */}

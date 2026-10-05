@@ -5,6 +5,8 @@ import WorkOrderShortageModal from './WorkOrderShortageModal';
 import InlineLookupSelect from '../shared/InlineLookupSelect';
 import { getTodayLocalDateString } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../../store/authStore';
+import { isTenantAdmin, checkIsSuperAdmin } from '../../utils/permissionUtils';
 import PackingSlipRollsSection, { createEmptyRoll } from '../shared/PackingSlipRollsSection';
 import {
     Layers,
@@ -58,6 +60,9 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
     const [employees, setEmployees] = useState([]);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
+    const user = useAuthStore((state) => state.user);
+    const isAdmin = isTenantAdmin(user) || checkIsSuperAdmin(user);
+
     // Job Order Details Form State
     const [orderDate, setOrderDate] = useState(getTodayLocalDateString());
     const [productCategory, setProductCategory] = useState('Print');
@@ -87,7 +92,6 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
     const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
     const [purchaseOrderFiles, setPurchaseOrderFiles] = useState([]);
     const [rolls, setRolls] = useState([createEmptyRoll(1)]);
-    const [availableRolls, setAvailableRolls] = useState([]);
     const [rawMaterials, setRawMaterials] = useState([]);
     const [inks, setInks] = useState([]);
 
@@ -277,13 +281,12 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
         const fetchDropdowns = async () => {
             try {
                 setIsLoadingDropdowns(true);
-                const [custRes, fgRes, mchRes, profileRes, attrRes, rollsRes, rmRes, empRes] = await Promise.all([
+                const [custRes, fgRes, mchRes, profileRes, attrRes, rmRes, empRes] = await Promise.all([
                     axiosInstance.get('/customers?isActive=true&limit=100'),
                     axiosInstance.get('/finished-goods?isActive=true&limit=100'),
                     axiosInstance.get('/machines?isActive=true&limit=100'),
                     axiosInstance.get('/admin/company-profile').catch(() => null),
                     axiosInstance.get('/raw-material-attributes').catch(() => null),
-                    axiosInstance.get('/work-orders/available-rolls').catch(() => null),
                     axiosInstance.get('/raw-materials?isActive=true&limit=100').catch(() => null),
                     axiosInstance.get('/employees?isActive=true&limit=200').catch(() => null)
                 ]);
@@ -337,11 +340,6 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
 
                 if (attrRes?.data?.success && attrRes.data?.data) {
                     setRmAttributes(attrRes.data.data);
-                }
-
-                if (rollsRes?.data?.success && Array.isArray(rollsRes.data?.data)) {
-                    // Filter to ensure only rolls with remaining stock > 0
-                    setAvailableRolls(rollsRes.data.data.filter((r) => Number(r.remainingMeters) > 0));
                 }
 
                 if (rmRes?.data?.success && Array.isArray(rmRes.data?.data)) {
@@ -414,11 +412,11 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
         }
     };
 
-    // Expected Delivery Date Validation (must be today or later)
+    // Expected Delivery Date Validation (must be today or later for non-admin, unrestricted for Tenant Admin)
     const handleDeliveryDateChange = (e) => {
         const val = e.target.value;
         const todayStr = getTodayLocalDateString();
-        if (val && val < todayStr) {
+        if (!isAdmin && val && val < todayStr) {
             setExpectedDeliveryDate(todayStr);
             toast.error("Expected delivery date cannot be in the past — reset to today's date.");
         } else {
@@ -1418,13 +1416,13 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                                 </label>
                                 <input
                                     type="date"
-                                    min={getTodayLocalDateString()}
+                                    min={isAdmin ? undefined : getTodayLocalDateString()}
                                     value={expectedDeliveryDate}
                                     onChange={handleDeliveryDateChange}
                                     className="w-full border border-emerald-300 dark:border-emerald-700 rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-emerald-600 font-mono"
                                 />
                                 <p className="text-[10px] text-emerald-700 dark:text-emerald-400">
-                                    Validated for today or future delivery dates.
+                                    {isAdmin ? 'Any date allowed for Tenant Admin (past or future).' : 'Validated for today or future delivery dates.'}
                                 </p>
                             </div>
                         )}
@@ -1469,7 +1467,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                             <PackingSlipRollsSection
                                 rolls={rolls}
                                 onChange={setRolls}
-                                availableRolls={availableRolls}
+                                allowRollSelection={true}
                                 title="Job Order Roll Specifications"
                                 subtitle="Select available inventory rolls with remaining meters stock or enter manual rolls."
                                 required={true}

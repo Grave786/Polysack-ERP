@@ -1880,13 +1880,13 @@ export default function DetailViewModal({
                     {isWorkOrder && record.balanceQuantity > 0 && (() => {
                         const u = record.unit || record.jobOrderDetails?.totalOrderQuantityUnit || 'Bags';
                         return (
-                            <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2.5">
-                                <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                            <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4 mb-4 flex items-start gap-3">
+                                <AlertTriangle size={18} className="text-yellow-600 mt-0.5 shrink-0" />
                                 <div>
-                                    <span className="font-extrabold block text-amber-800 dark:text-amber-200 uppercase tracking-wide text-[11px]">
+                                    <span className="text-yellow-800 font-bold text-sm uppercase block">
                                         Production Balance Pending: {Number(record.balanceQuantity).toLocaleString('en-IN')} {u}
                                     </span>
-                                    <p className="mt-0.5 text-amber-700 dark:text-amber-300">
+                                    <p className="text-yellow-700 text-sm mt-1">
                                         This Work Order finished with a shortfall of {Number(record.balanceQuantity).toLocaleString('en-IN')} {u} against the target of {Number(record.targetQuantity || 0).toLocaleString('en-IN')} {u}.
                                     </p>
                                 </div>

@@ -6,7 +6,19 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
     const customer = typeof salesOrder.customer === 'object' ? salesOrder.customer : null;
     const customerName = customer?.companyName || salesOrder.customerName || 'Registered Customer';
     const items = salesOrder.items || [];
-    const totalQty = items.reduce((acc, it) => acc + Number(it.quantity || 0), 0);
+    const qtyByUnit = items.reduce((acc, it) => {
+        const qty = Number(it.quantity || 0);
+        if (qty > 0) {
+            const unit = it.unit || 'Pcs';
+            acc[unit] = (acc[unit] || 0) + qty;
+        }
+        return acc;
+    }, {});
+    const formattedTotalQty = Object.entries(qtyByUnit).length > 0
+        ? Object.entries(qtyByUnit)
+            .map(([unit, qty]) => `${qty % 1 === 0 ? qty.toLocaleString('en-IN') : Number(qty.toFixed(3)).toLocaleString('en-IN')} ${unit}`)
+            .join(', ')
+        : '0 Pcs';
     const subtotal = salesOrder.totalValue || salesOrder.totalAmount || 0;
     const gstRate = 18;
     const gstAmount = Math.round((subtotal * gstRate) / 100);
@@ -122,7 +134,7 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                 {/* Financial Summary */}
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-app-bg border border-border rounded-xl p-3.5 gap-2">
                     <div className="text-xs text-text-muted">
-                        Total Quantity: <strong className="text-text-main font-bold font-mono">{totalQty.toLocaleString()} Bags</strong>
+                        Total Quantity: <strong className="text-text-main font-bold font-mono">{formattedTotalQty}</strong>
                     </div>
                     <div className="text-right space-y-0.5">
                         <div className="text-[11px] text-text-muted">

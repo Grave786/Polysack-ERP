@@ -35,6 +35,14 @@ router.get('/', authenticate, checkPermission('INVENTORY', 'READ'), getRawMateri
 router.get('/export', authenticate, checkPermission('INVENTORY', 'READ'), exportRawMaterials);
 
 /**
+ * @route   GET /api/raw-materials/available-rolls
+ * @desc    Get paginated/searchable available rolls
+ * @access  Private (INVENTORY:READ / PRODUCTION:READ)
+ */
+const { getAvailableRolls } = require('../controllers/workOrder.controller');
+router.get('/available-rolls', authenticate, getAvailableRolls);
+
+/**
  * @route   GET /api/raw-materials/:id
  * @desc    Get Raw Material by ID
  * @access  Private (INVENTORY:READ)

@@ -6,9 +6,10 @@ const {
     updateDeliveryStatus,
     getDispatches,
     getDeliveryRegister,
-    getDispatchById
+    getDispatchById,
+    updateDispatch
 } = require('../controllers/dispatch.controller');
-const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
+const { authenticate, checkPermission, checkTenantModule, requireTenantAdmin } = require('../middlewares/rbac.middleware');
 
 router.use(authenticate);
 router.use(checkTenantModule('DISPATCH'));
@@ -71,7 +72,12 @@ const rejectDispatchModification = (req, res) => {
     });
 };
 
-router.put('/:id', authenticate, rejectDispatchModification);
+/**
+ * @route   PUT /api/dispatches/:id
+ * @desc    Update a Dispatch note (Tenant Admin only)
+ * @access  Private (Tenant Admin only)
+ */
+router.put('/:id', authenticate, requireTenantAdmin, updateDispatch);
 router.delete('/:id', authenticate, rejectDispatchModification);
 
 module.exports = router;

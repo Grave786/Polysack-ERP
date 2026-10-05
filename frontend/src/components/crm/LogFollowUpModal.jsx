@@ -2,10 +2,15 @@ import { useState, useEffect } from 'react';
 import { PhoneCall, Calendar, MessageSquare, X, Send, Clock } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../../store/authStore';
+import { isTenantAdmin, checkIsSuperAdmin } from '../../utils/permissionUtils';
 
 const TODAY = new Date().toISOString().split('T')[0];
 
 export default function LogFollowUpModal({ isOpen, onClose, nslData, onSuccess }) {
+    const user = useAuthStore((state) => state.user);
+    const isAdmin = isTenantAdmin(user) || checkIsSuperAdmin(user);
+
     const [communicationType, setCommunicationType] = useState('Phone Call');
     const [followUpDate, setFollowUpDate] = useState(TODAY);
     const [notes, setNotes] = useState('');
@@ -180,7 +185,7 @@ export default function LogFollowUpModal({ isOpen, onClose, nslData, onSuccess }
                         <input
                             type="date"
                             value={nextFollowUpDate}
-                            min={followUpDate || TODAY}
+                            min={isAdmin ? undefined : (followUpDate || TODAY)}
                             onChange={(e) => setNextFollowUpDate(e.target.value)}
                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary"
                         />

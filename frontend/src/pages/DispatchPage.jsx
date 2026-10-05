@@ -1,18 +1,25 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Truck, Plus, RefreshCw, CheckCircle2, Eye, PackageCheck, AlertCircle, UploadCloud, ShieldCheck, Calendar, X, Download, FileText } from 'lucide-react';
+import { Truck, Plus, RefreshCw, CheckCircle2, Eye, PackageCheck, AlertCircle, UploadCloud, ShieldCheck, Calendar, X, Download, FileText, Pencil } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
 import ViewDispatchModal from '../components/dispatch/ViewDispatchModal';
 import UploadPodModal from '../components/dispatch/UploadPodModal';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../store/authStore';
+import { isTenantAdmin, checkIsSuperAdmin } from '../utils/permissionUtils';
+import { getTodayLocalDateString } from '../utils/dateUtils';
 
 export default function DispatchPage() {
+    const user = useAuthStore((state) => state.user);
+    const isTenantAdminUser = isTenantAdmin(user) || checkIsSuperAdmin(user);
+
     const [activeTab, setActiveTab] = useState('dispatches');
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [viewingDispatchData, setViewingDispatchData] = useState(null);
     const [uploadPodData, setUploadPodData] = useState(null);
+    const [editDispatch, setEditDispatch] = useState(null);
 
     // Date range filter state (IST-compliant YYYY-MM-DD)
     const [startDate, setStartDate] = useState('');
@@ -29,6 +36,7 @@ export default function DispatchPage() {
 
     // Drawer Form State
     const [formData, setFormData] = useState({
+        dispatchDate: getTodayLocalDateString(),
         dispatchLocation: '',
         transporter: 'V-Trans India Ltd',
         vehicleNumber: 'GJ-05-BX-1000',
@@ -38,6 +46,101 @@ export default function DispatchPage() {
     });
 
     const [dispatchItems, setDispatchItems] = useState([]);
+
+    // Open Drawer for New Dispatch
+    const handleOpenCreateDispatch = () => {
+        setEditDispatch(null);
+        setFormData({
+            dispatchDate: getTodayLocalDateString(),
+            dispatchLocation: locations[0]?._id || '',
+            transporter: 'V-Trans India Ltd',
+            vehicleNumber: 'GJ-05-BX-1000',
+            driverName: '',
+            driverPhone: '',
+            notes: ''
+        });
+        setSelectedSource(null);
+        setSelectedSourceKey('');
+        setDispatchItems([]);
+        setIsDrawerOpen(true);
+    };
+
+    // Open Drawer for Editing Existing Dispatch (Tenant Admin Only)
+    const handleOpenEditDispatch = (row) => {
+        const status = (row.deliveryStatus || row.status || '').toUpperCase();
+        if (status === 'DELIVERED' || status === 'RETURNED' || row.podConfirmedAt) {
+            toast.error('Cannot edit a dispatch note that has already been delivered or POD-confirmed.');
+            return;
+        }
+
+        setEditDispatch(row);
+
+        const isPos = row.sourceType === 'POS_INVOICE' || Boolean(row.invoice && !row.salesOrder);
+        const srcId = isPos ? (row.invoice?._id || row.invoice) : (row.salesOrder?._id || row.salesOrder);
+        const refNum = isPos ? (row.invoice?.invoiceNumber || 'POS Invoice') : (row.salesOrder?.soNumber || row.soNumber || '-');
+        const custName = isPos
+            ? (row.invoice?.customer?.companyName || row.invoice?.customer?.name || row.invoice?.walkInCustomer?.name || 'Customer')
+            : (row.salesOrder?.customer?.companyName || row.salesOrder?.customer?.name || row.customerName || 'Customer');
+
+        const totalThisDispatchBags = (row.items || []).reduce((acc, it) => acc + Number(it.dispatchedQuantity || 0), 0);
+
+        const srcObj = {
+            sourceType: isPos ? 'POS_INVOICE' : 'SALES_ORDER',
+            id: srcId,
+            salesOrderId: isPos ? null : srcId,
+            invoiceId: isPos ? srcId : null,
+            referenceNumber: refNum,
+            label: `${refNum} — ${custName} (${isPos ? 'POS Sale' : 'Sales Order'})`,
+            customerName: custName,
+            remainingQuantity: totalThisDispatchBags
+        };
+        setSelectedSource(srcObj);
+        setSelectedSourceKey(`${srcObj.sourceType}_${srcObj.id}`);
+
+        let dDate = getTodayLocalDateString();
+        if (row.dispatchDate) {
+            try {
+                dDate = new Date(row.dispatchDate).toISOString().split('T')[0];
+            } catch (e) {
+                dDate = getTodayLocalDateString();
+            }
+        }
+
+        setFormData({
+            dispatchDate: dDate,
+            dispatchLocation: row.dispatchLocation?._id || row.dispatchLocation || '',
+            transporter: row.transporter || 'Self Transport',
+            vehicleNumber: row.vehicleNumber || '',
+            driverName: row.driverName || '',
+            driverPhone: row.driverPhone || '',
+            notes: row.notes || ''
+        });
+
+        const prepItems = (row.items || []).map((it) => {
+            const fg = it.finishedGood || {};
+            const fgId = fg._id || it.finishedGood;
+            const fgName = fg.name || it.productName || 'Finished Goods Bag';
+            const numPcs = Number(it.dispatchedQuantity || 0);
+
+            return {
+                finishedGood: fgId,
+                finishedGoodName: fgName,
+                orderedQuantity: numPcs,
+                remainingQuantity: numPcs,
+                dispatchedQuantity: numPcs,
+                dispatchedKg: it.dispatchedKg != null ? String(it.dispatchedKg) : '',
+                dispatchedBales: it.dispatchedBales != null ? String(it.dispatchedBales) : '',
+                avgBagWeightKg: fg.bagWeightGms ? Number((fg.bagWeightGms / 1000).toFixed(4)) : null,
+                pcsPerBale: null,
+                isKgModified: it.dispatchedKg != null,
+                isBalesModified: it.dispatchedBales != null,
+                batchNumber: it.batchNumber || ''
+            };
+        });
+        setDispatchItems(prepItems);
+
+        setIsDrawerOpen(true);
+    };
 
     // Fetch Dispatchable Sources & Locations when Drawer Opens
     useEffect(() => {
@@ -49,10 +152,19 @@ export default function DispatchPage() {
                 axiosInstance.get('/locations?isActive=true&limit=50')
             ])
                 .then(([srcRes, locRes]) => {
+                    let list = [];
                     if (srcRes.data?.success && Array.isArray(srcRes.data.data)) {
-                        const list = srcRes.data.data;
+                        list = srcRes.data.data;
                         setDispatchableSources(list);
+                    }
 
+                    let locs = [];
+                    if (locRes.data?.success && Array.isArray(locRes.data.data)) {
+                        locs = locRes.data.data;
+                        setLocations(locs);
+                    }
+
+                    if (!editDispatch) {
                         if (list.length > 0) {
                             handleSelectSource(list[0].id, list);
                         } else {
@@ -60,13 +172,32 @@ export default function DispatchPage() {
                             setSelectedSourceKey('');
                             setDispatchItems([]);
                         }
-                    }
-
-                    if (locRes.data?.success && Array.isArray(locRes.data.data)) {
-                        const locs = locRes.data.data;
-                        setLocations(locs);
                         if (locs.length > 0) {
                             setFormData((prev) => ({ ...prev, dispatchLocation: locs[0]._id }));
+                        }
+                    } else {
+                        // When editing, if the linked source is found in list, enrich remainingQuantity!
+                        const linkedId = String(editDispatch.salesOrder?._id || editDispatch.salesOrder || editDispatch.invoice?._id || editDispatch.invoice || '');
+                        const matchedSrc = list.find((s) => String(s.id) === linkedId);
+                        if (matchedSrc) {
+                            setDispatchItems((prevItems) =>
+                                prevItems.map((pi) => {
+                                    const matchedItem = (matchedSrc.items || []).find(
+                                        (mi) => String(mi.finishedGood?._id || mi.finishedGood) === String(pi.finishedGood)
+                                    );
+                                    if (matchedItem) {
+                                        const extraRemaining = Number(matchedItem.remainingQuantity || 0);
+                                        const curDispatched = Number(pi.dispatchedQuantity || 0);
+                                        return {
+                                            ...pi,
+                                            remainingQuantity: curDispatched + extraRemaining,
+                                            avgBagWeightKg: matchedItem.avgBagWeightKg ?? pi.avgBagWeightKg,
+                                            pcsPerBale: matchedItem.pcsPerBale ?? pi.pcsPerBale
+                                        };
+                                    }
+                                    return pi;
+                                })
+                            );
                         }
                     }
                 })
@@ -93,19 +224,105 @@ export default function DispatchPage() {
                 const orderedQty = item.orderedQuantity || item.quantity || 0;
                 const alreadyDispatched = item.alreadyDispatched || 0;
                 const remainingQty = Math.max(0, orderedQty - alreadyDispatched);
+                const initialPcs = remainingQty > 0 ? remainingQty : orderedQty;
+
+                const avgBagWeightKg = item.avgBagWeightKg ?? null;
+                const pcsPerBale = item.pcsPerBale ?? null;
+
+                const initialKg = avgBagWeightKg && initialPcs > 0
+                    ? String(Number((initialPcs * avgBagWeightKg).toFixed(2)))
+                    : '';
+
+                const initialBales = pcsPerBale && pcsPerBale > 0 && initialPcs > 0
+                    ? String(Math.ceil(initialPcs / pcsPerBale))
+                    : '';
 
                 return {
                     finishedGood: fgId,
                     finishedGoodName: fgName,
                     orderedQuantity: orderedQty,
                     remainingQuantity: remainingQty,
-                    dispatchedQuantity: remainingQty > 0 ? remainingQty : orderedQty
+                    dispatchedQuantity: initialPcs,
+                    dispatchedKg: initialKg,
+                    dispatchedBales: initialBales,
+                    avgBagWeightKg,
+                    pcsPerBale,
+                    isKgModified: false,
+                    isBalesModified: false
                 };
             });
             setDispatchItems(prepItems);
         } else {
             setDispatchItems([]);
         }
+    };
+
+    const handlePcsChange = (idx, val) => {
+        setDispatchItems((prev) =>
+            prev.map((it, i) => {
+                if (i !== idx) return it;
+                const next = { ...it, dispatchedQuantity: val };
+                const numPcs = Number(val);
+
+                // Auto-suggest Kg only if user hasn't manually modified Kg and ratio is known
+                if (!it.isKgModified) {
+                    if (it.avgBagWeightKg && numPcs > 0) {
+                        next.dispatchedKg = String(Number((numPcs * it.avgBagWeightKg).toFixed(2)));
+                    } else if (!val) {
+                        next.dispatchedKg = '';
+                    }
+                }
+
+                // Auto-suggest Bales only if user hasn't manually modified Bales and ratio is known
+                if (!it.isBalesModified) {
+                    if (it.pcsPerBale && it.pcsPerBale > 0 && numPcs > 0) {
+                        next.dispatchedBales = String(Math.ceil(numPcs / it.pcsPerBale));
+                    } else if (!val) {
+                        next.dispatchedBales = '';
+                    }
+                }
+
+                return next;
+            })
+        );
+    };
+
+    const handleKgChange = (idx, val) => {
+        setDispatchItems((prev) =>
+            prev.map((it, i) => (i === idx ? { ...it, dispatchedKg: val, isKgModified: true } : it))
+        );
+    };
+
+    const handleBalesChange = (idx, val) => {
+        setDispatchItems((prev) =>
+            prev.map((it, i) => (i === idx ? { ...it, dispatchedBales: val, isBalesModified: true } : it))
+        );
+    };
+
+    const handleResetKgToAuto = (idx) => {
+        setDispatchItems((prev) =>
+            prev.map((it, i) => {
+                if (i !== idx) return it;
+                const numPcs = Number(it.dispatchedQuantity || 0);
+                const autoKg = it.avgBagWeightKg && numPcs > 0
+                    ? String(Number((numPcs * it.avgBagWeightKg).toFixed(2)))
+                    : '';
+                return { ...it, dispatchedKg: autoKg, isKgModified: false };
+            })
+        );
+    };
+
+    const handleResetBalesToAuto = (idx) => {
+        setDispatchItems((prev) =>
+            prev.map((it, i) => {
+                if (i !== idx) return it;
+                const numPcs = Number(it.dispatchedQuantity || 0);
+                const autoBales = it.pcsPerBale && it.pcsPerBale > 0 && numPcs > 0
+                    ? String(Math.ceil(numPcs / it.pcsPerBale))
+                    : '';
+                return { ...it, dispatchedBales: autoBales, isBalesModified: false };
+            })
+        );
     };
 
     // Submit Dispatch Plan
@@ -129,8 +346,8 @@ export default function DispatchPage() {
                 toast.error(`Please enter a valid quantity > 0 for '${it.finishedGoodName}'`);
                 return;
             }
-            if (numQty > it.remainingQuantity + 0.0001) {
-                toast.error(`Cannot dispatch ${numQty} bags for '${it.finishedGoodName}' — only ${it.remainingQuantity} bags remaining`);
+            if (!isTenantAdminUser && it.remainingQuantity && numQty > it.remainingQuantity + 0.0001) {
+                toast.error(`Cannot dispatch ${numQty} bags for '${it.finishedGoodName}' — only ${it.remainingQuantity} bags available`);
                 return;
             }
         }
@@ -142,6 +359,7 @@ export default function DispatchPage() {
                 sourceType: selectedSource.sourceType,
                 salesOrder: selectedSource.sourceType === 'SALES_ORDER' ? selectedSource.id : undefined,
                 invoice: selectedSource.sourceType === 'POS_INVOICE' ? selectedSource.id : undefined,
+                dispatchDate: formData.dispatchDate ? new Date(formData.dispatchDate) : undefined,
                 dispatchLocation: formData.dispatchLocation,
                 vehicleNumber: formData.vehicleNumber.trim().toUpperCase(),
                 transporter: formData.transporter.trim(),
@@ -150,21 +368,35 @@ export default function DispatchPage() {
                 notes: formData.notes.trim(),
                 items: dispatchItems.map((item) => ({
                     finishedGood: item.finishedGood,
-                    dispatchedQuantity: Number(item.dispatchedQuantity || 0)
+                    dispatchedQuantity: Number(item.dispatchedQuantity || 0),
+                    dispatchedKg: item.dispatchedKg ? Number(item.dispatchedKg) : undefined,
+                    dispatchedBales: item.dispatchedBales ? Number(item.dispatchedBales) : undefined,
+                    batchNumber: item.batchNumber || undefined
                 }))
             };
 
-            const res = await axiosInstance.post('/dispatches', payload);
-
-            if (res.data?.success) {
-                const dispNum = res.data.data?.dispatch?.dispatchNumber || 'DISP-NEW';
-                toast.success(`Dispatch '${dispNum}' planned successfully!`);
-                setIsDrawerOpen(false);
-                setRefreshKey((prev) => prev + 1);
+            if (editDispatch?._id) {
+                const res = await axiosInstance.put(`/dispatches/${editDispatch._id}`, payload);
+                if (res.data?.success) {
+                    const dispNum = editDispatch.dispatchNumber || 'DISPATCH';
+                    toast.success(res.data?.message || `Dispatch '${dispNum}' updated successfully!`);
+                    setIsDrawerOpen(false);
+                    setEditDispatch(null);
+                    setRefreshKey((prev) => prev + 1);
+                }
+            } else {
+                const res = await axiosInstance.post('/dispatches', payload);
+                if (res.data?.success) {
+                    const dispNum = res.data.data?.dispatch?.dispatchNumber || 'DISP-NEW';
+                    toast.success(`Dispatch '${dispNum}' planned successfully!`);
+                    setIsDrawerOpen(false);
+                    setEditDispatch(null);
+                    setRefreshKey((prev) => prev + 1);
+                }
             }
         } catch (err) {
-            console.error('Error planning dispatch:', err);
-            toast.error(err.response?.data?.message || 'Failed to plan vehicle dispatch');
+            console.error('Error submitting dispatch:', err);
+            toast.error(err.response?.data?.message || (editDispatch ? 'Failed to update vehicle dispatch' : 'Failed to plan vehicle dispatch'));
         } finally {
             setIsSubmitting(false);
         }
@@ -363,6 +595,17 @@ export default function DispatchPage() {
                             <span>View</span>
                         </button>
 
+                        {isTenantAdminUser && (
+                            <button
+                                type="button"
+                                onClick={() => handleOpenEditDispatch(row)}
+                                className="text-gray-500 hover:text-amber-600 mr-1.5 cursor-pointer"
+                                title="Edit Vehicle Dispatch & Gate Pass (Tenant Admin Only)"
+                            >
+                                <Pencil size={14} />
+                            </button>
+                        )}
+
                         {isInTransit && (
                             <button
                                 type="button"
@@ -390,7 +633,7 @@ export default function DispatchPage() {
                 );
             }
         }
-    ], []);
+    ], [isTenantAdminUser]);
 
     // ─── Delivery Register line-item columns ─────────────────────────────────
     const deliveryRegisterColumns = useMemo(() => [
@@ -886,7 +1129,7 @@ export default function DispatchPage() {
             ) : null}
             <button
                 type="button"
-                onClick={() => setIsDrawerOpen(true)}
+                onClick={handleOpenCreateDispatch}
                 className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-4 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
             >
                 <Truck size={16} />
@@ -907,16 +1150,23 @@ export default function DispatchPage() {
                 headerActions={headerActions}
                 filterSlot={dateFilterControls}
                 extraFilterParams={extraFilterParams}
-                onAddClick={() => setIsDrawerOpen(true)}
+                onAddClick={handleOpenCreateDispatch}
                 onEditClick={(row) => setViewingDispatchData(row)}
             />
 
-            {/* SlideOverPanel Drawer for "+ Plan Vehicle Dispatch" */}
+            {/* SlideOverPanel Drawer for "+ Plan Vehicle Dispatch" & Edit */}
             <SlideOverPanel
                 isOpen={isDrawerOpen}
-                onClose={() => setIsDrawerOpen(false)}
-                title="Plan Vehicle Dispatch & Gate Pass"
-                subtitle="Select Sales Order or POS Sale, assign transporter carrier, vehicle number & quantity to ship"
+                onClose={() => {
+                    setIsDrawerOpen(false);
+                    setEditDispatch(null);
+                }}
+                title={editDispatch ? `Edit Vehicle Dispatch & Gate Pass (${editDispatch.dispatchNumber})` : 'Plan Vehicle Dispatch & Gate Pass'}
+                subtitle={
+                    editDispatch
+                        ? `Update dispatch quantities, transporter, vehicle details, or date for ${editDispatch.dispatchNumber}`
+                        : 'Select Sales Order or POS Sale, assign transporter carrier, vehicle number & quantity to ship'
+                }
             >
                 <form onSubmit={handleSubmitDispatch} className="space-y-4 font-sans text-xs">
                     {isLoadingFormOptions ? (
@@ -930,23 +1180,32 @@ export default function DispatchPage() {
                                 <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1 flex items-center justify-between">
                                     <span>Select Order / Invoice Reference *</span>
                                     <span className="text-[10px] text-text-muted font-normal">
-                                        {filteredSources.length} of {dispatchableSources.length} available to dispatch
+                                        {editDispatch ? 'Linked Order / Invoice' : `${filteredSources.length} of ${dispatchableSources.length} available to dispatch`}
                                     </span>
                                 </label>
-                                <input 
-                                    type="text" 
-                                    placeholder="🔍 Search SO#, INV# or Customer Name..." 
-                                    value={orderSearch}
-                                    onChange={(e) => setOrderSearch(e.target.value)}
-                                    className="w-full mb-2 border border-border rounded-md p-2 text-xs bg-card-bg text-text-main focus:outline-none focus:border-primary"
-                                />
+                                {!editDispatch && (
+                                    <input 
+                                        type="text" 
+                                        placeholder="🔍 Search SO#, INV# or Customer Name..." 
+                                        value={orderSearch}
+                                        onChange={(e) => setOrderSearch(e.target.value)}
+                                        className="w-full mb-2 border border-border rounded-md p-2 text-xs bg-card-bg text-text-main focus:outline-none focus:border-primary"
+                                    />
+                                )}
                                 <select
                                     required
+                                    disabled={Boolean(editDispatch)}
                                     value={selectedSource?.id || ''}
                                     onChange={(e) => handleSelectSource(e.target.value)}
-                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
+                                    className={`w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary font-sans ${
+                                        editDispatch ? 'opacity-85 cursor-not-allowed bg-border/20' : 'cursor-pointer'
+                                    }`}
                                 >
-                                    {filteredSources.length === 0 ? (
+                                    {editDispatch ? (
+                                        <option value={selectedSource?.id || ''}>
+                                            {selectedSource?.label || 'Linked Order / Invoice'}
+                                        </option>
+                                    ) : filteredSources.length === 0 ? (
                                         <option value="">
                                             {dispatchableSources.length === 0
                                                 ? 'No pending Sales Orders or POS Invoices available'
@@ -1051,79 +1310,185 @@ export default function DispatchPage() {
                                 </div>
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                    Dispatch Location Dock *
-                                </label>
-                                <select
-                                    required
-                                    value={formData.dispatchLocation}
-                                    onChange={(e) => setFormData({ ...formData, dispatchLocation: e.target.value })}
-                                    className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
-                                >
-                                    {locations.map((loc) => (
-                                        <option key={loc._id} value={loc._id}>
-                                            {loc.code ? `${loc.code} - ` : ''}{loc.name}
-                                        </option>
-                                    ))}
-                                </select>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Dispatch Date *
+                                    </label>
+                                    <input
+                                        type="date"
+                                        required
+                                        max={isTenantAdminUser ? undefined : getTodayLocalDateString()}
+                                        value={formData.dispatchDate || getTodayLocalDateString()}
+                                        onChange={(e) => setFormData({ ...formData, dispatchDate: e.target.value })}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Dispatch Location Dock *
+                                    </label>
+                                    <select
+                                        required
+                                        value={formData.dispatchLocation}
+                                        onChange={(e) => setFormData({ ...formData, dispatchLocation: e.target.value })}
+                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
+                                    >
+                                        {locations.map((loc) => (
+                                            <option key={loc._id} value={loc._id}>
+                                                {loc.code ? `${loc.code} - ` : ''}{loc.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
                             </div>
 
                             {/* Dispatch Quantities & Items */}
-                            <div className="pt-2 border-t border-border space-y-2">
-                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
-                                    Total Bags & Bales to Load
-                                </label>
+                            <div className="pt-2 border-t border-border space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                        Quantity to Load & Baling
+                                    </label>
+                                    {!isTenantAdminUser && (
+                                        <span className="text-[10px] text-amber-500 font-medium">
+                                            (Read-only: editing restricted to Tenant Admin)
+                                        </span>
+                                    )}
+                                </div>
 
-                                {dispatchItems.map((item, idx) => {
-                                    const computedBales = Math.ceil(Number(item.dispatchedQuantity || 0) / 300);
-
-                                    return (
-                                        <div key={idx} className="bg-card-bg border border-border p-3 rounded-lg space-y-2">
-                                            <div className="font-semibold text-xs text-text-main">
+                                {dispatchItems.map((item, idx) => (
+                                    <div key={idx} className="bg-card-bg border border-border p-3 rounded-lg space-y-2.5 shadow-sm">
+                                        <div className="flex flex-wrap items-center justify-between gap-1.5 pb-1 border-b border-border/50">
+                                            <div className="font-bold text-xs text-text-main">
                                                 {item.finishedGoodName}
                                             </div>
-                                            <div className="grid grid-cols-2 gap-3 items-center">
-                                                <div>
-                                                    <div className="flex justify-between items-center text-[10px] text-text-muted mb-0.5">
-                                                        <span>Quantity to Load (Bags)</span>
-                                                        <span className="font-bold text-primary">
-                                                            Max: {item.remainingQuantity}
-                                                        </span>
-                                                    </div>
-                                                    <input
-                                                        type="number"
-                                                        required
-                                                        step="0.001"
-                                                        min={0.001}
-                                                        max={item.remainingQuantity || item.orderedQuantity || 999999}
-                                                        value={item.dispatchedQuantity}
-                                                        onChange={(e) => {
-                                                            const val = e.target.value;
-                                                            setDispatchItems((prev) =>
-                                                                prev.map((it, i) => (i === idx ? { ...it, dispatchedQuantity: val } : it))
-                                                            );
-                                                        }}
-                                                        className="w-full border border-border rounded p-2 bg-app-bg text-xs font-extrabold text-text-main focus:outline-none focus:border-primary font-mono"
-                                                    />
-                                                </div>
-
-                                                <div className="text-right">
-                                                    <span className="text-[10px] text-text-muted block">Calculated Bales</span>
-                                                    <span className="text-xs font-mono font-extrabold text-primary">
-                                                        {computedBales} Bales
+                                            <div className="flex items-center gap-1.5 text-[10px]">
+                                                {item.avgBagWeightKg ? (
+                                                    <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono font-medium">
+                                                        Avg: {(item.avgBagWeightKg * 1000).toFixed(0)}g / bag
                                                     </span>
-                                                </div>
+                                                ) : (
+                                                    <span className="px-1.5 py-0.5 rounded bg-border/40 text-text-muted font-mono font-medium">
+                                                        Kg: Manual
+                                                    </span>
+                                                )}
+                                                {item.pcsPerBale ? (
+                                                    <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono font-medium">
+                                                        Bale: ~{item.pcsPerBale} pcs/bale
+                                                    </span>
+                                                ) : (
+                                                    <span className="px-1.5 py-0.5 rounded bg-border/40 text-text-muted font-mono font-medium">
+                                                        Bales: Manual
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
-                                    );
-                                })}
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                                            {/* Column 1: Quantity (Pcs) */}
+                                            <div>
+                                                <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
+                                                    <span className="font-semibold text-text-main">Quantity (Pcs) *</span>
+                                                    <span className="font-bold text-primary">
+                                                        Max: {item.remainingQuantity}
+                                                    </span>
+                                                </div>
+                                                <input
+                                                    type="number"
+                                                    required
+                                                    disabled={!isTenantAdminUser}
+                                                    step="any"
+                                                    min="0"
+                                                    max={isTenantAdminUser ? undefined : (item.remainingQuantity || item.orderedQuantity)}
+                                                    value={item.dispatchedQuantity}
+                                                    onChange={(e) => handlePcsChange(idx, e.target.value)}
+                                                    placeholder="Enter Pcs"
+                                                    className={`w-full border border-border rounded p-2 text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary ${
+                                                        !isTenantAdminUser ? 'bg-border/20 cursor-not-allowed opacity-80' : 'bg-app-bg'
+                                                    }`}
+                                                />
+                                            </div>
+
+                                            {/* Column 2: Quantity (Kg) */}
+                                            <div>
+                                                <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
+                                                    <span className="font-semibold text-text-main">Quantity (Kg)</span>
+                                                    {item.avgBagWeightKg && item.isKgModified ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleResetKgToAuto(idx)}
+                                                            disabled={!isTenantAdminUser}
+                                                            className="text-[9px] text-primary hover:underline cursor-pointer"
+                                                            title="Reset to ratio-based auto suggestion"
+                                                        >
+                                                            Reset Auto
+                                                        </button>
+                                                    ) : item.avgBagWeightKg ? (
+                                                        <span className="text-[9px] text-primary/80 font-medium">Auto</span>
+                                                    ) : (
+                                                        <span className="text-[9px] text-text-muted">Manual</span>
+                                                    )}
+                                                </div>
+                                                <input
+                                                    type="number"
+                                                    disabled={!isTenantAdminUser}
+                                                    step="any"
+                                                    min="0"
+                                                    value={item.dispatchedKg}
+                                                    onChange={(e) => handleKgChange(idx, e.target.value)}
+                                                    placeholder={item.avgBagWeightKg ? 'Net weight Kg' : 'Enter Kg'}
+                                                    className={`w-full border border-border rounded p-2 text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary ${
+                                                        !isTenantAdminUser ? 'bg-border/20 cursor-not-allowed opacity-80' : 'bg-app-bg'
+                                                    }`}
+                                                />
+                                            </div>
+
+                                            {/* Column 3: Baling (Bales) */}
+                                            <div>
+                                                <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
+                                                    <span className="font-semibold text-text-main">Baling (Bales)</span>
+                                                    {item.pcsPerBale && item.isBalesModified ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleResetBalesToAuto(idx)}
+                                                            disabled={!isTenantAdminUser}
+                                                            className="text-[9px] text-primary hover:underline cursor-pointer"
+                                                            title="Reset to ratio-based auto suggestion"
+                                                        >
+                                                            Reset Auto
+                                                        </button>
+                                                    ) : item.pcsPerBale ? (
+                                                        <span className="text-[9px] text-primary/80 font-medium">Auto</span>
+                                                    ) : (
+                                                        <span className="text-[9px] text-text-muted">Manual</span>
+                                                    )}
+                                                </div>
+                                                <input
+                                                    type="number"
+                                                    disabled={!isTenantAdminUser}
+                                                    step="any"
+                                                    min="0"
+                                                    value={item.dispatchedBales}
+                                                    onChange={(e) => handleBalesChange(idx, e.target.value)}
+                                                    placeholder={item.pcsPerBale ? 'No. of bales' : 'Enter Bales'}
+                                                    className={`w-full border border-border rounded p-2 text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary ${
+                                                        !isTenantAdminUser ? 'bg-border/20 cursor-not-allowed opacity-80' : 'bg-app-bg'
+                                                    }`}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
 
                             <div className="pt-3 border-t border-border flex justify-end gap-3">
                                 <button
                                     type="button"
-                                    onClick={() => setIsDrawerOpen(false)}
+                                    onClick={() => {
+                                        setIsDrawerOpen(false);
+                                        setEditDispatch(null);
+                                    }}
                                     className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs transition-colors cursor-pointer"
                                 >
                                     Cancel
@@ -1134,7 +1499,7 @@ export default function DispatchPage() {
                                     className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                                 >
                                     <Truck size={16} />
-                                    <span>{isSubmitting ? 'Processing Dispatch...' : 'Confirm & Plan Dispatch'}</span>
+                                    <span>{isSubmitting ? (editDispatch ? 'Updating Dispatch...' : 'Processing Dispatch...') : (editDispatch ? 'Save & Update Dispatch' : 'Confirm & Plan Dispatch')}</span>
                                 </button>
                             </div>
                         </>

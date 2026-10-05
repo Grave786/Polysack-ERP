@@ -4,6 +4,7 @@ const SalesOrder = require('../models/salesOrder.model');
 const Location = require('../models/location.model');
 const FinishedGood = require('../models/finishedGood.model');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
+const { isTenantAdmin } = require('../middlewares/rbac.middleware');
 
 /**
  * Helper function to auto-generate unique Dispatch number per tenant & year
@@ -46,6 +47,8 @@ const getDispatchableSources = async (req, res) => {
         }
 
         const Invoice = require('../models/invoice.model');
+        const WorkOrder = require('../models/workOrder.model');
+        const ProductionLog = require('../models/productionLog.model');
 
         // 1. Fetch active Sales Orders in CONFIRMED, READY_FOR_DISPATCH, or PARTIALLY_DISPATCHED
         const salesOrders = await SalesOrder.find({
@@ -53,24 +56,193 @@ const getDispatchableSources = async (req, res) => {
             status: { $in: ['CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED'] }
         })
             .populate('customer', 'companyName code contactPerson phone city state address')
-            .populate('items.finishedGood', 'name code uom currentStock')
+            .populate('items.finishedGood', 'name code uom currentStock bagWeightGms tareWeightGram')
             .sort({ createdAt: -1 });
+
+
+        // 2. Fetch POS Invoices (where salesOrder is null/undefined)
+        const posInvoices = await Invoice.find({
+            tenant: tenantId,
+            salesOrder: null,
+            isActive: true
+        })
+            .populate('customer', 'companyName code contactPerson phone city state address')
+            .populate('items.finishedGood', 'name code uom currentStock bagWeightGms tareWeightGram')
+            .sort({ createdAt: -1 });
+
+        const posInvoiceIds = posInvoices.map((inv) => inv._id);
+        const existingPosDispatches = await Dispatch.find({
+            tenant: tenantId,
+            invoice: { $in: posInvoiceIds }
+        }).select('invoice items');
+
+        // Map invoiceId -> { [fgId]: totalDispatched }
+        const dispatchedByInvoiceMap = new Map();
+        for (const disp of existingPosDispatches) {
+            const invIdStr = String(disp.invoice);
+            if (!dispatchedByInvoiceMap.has(invIdStr)) {
+                dispatchedByInvoiceMap.set(invIdStr, {});
+            }
+            const itemMap = dispatchedByInvoiceMap.get(invIdStr);
+            for (const it of disp.items || []) {
+                const fgStr = String(it.finishedGood);
+                itemMap[fgStr] = (itemMap[fgStr] || 0) + Number(it.dispatchedQuantity || 0);
+            }
+        }
+
+        // 3. Collect finished goods and query WorkOrder / ProductionLog for Baling & Packing specs
+        const allFgIds = new Set();
+        for (const so of salesOrders) {
+            for (const it of so.items || []) {
+                const fId = it.finishedGood?._id || it.finishedGood;
+                if (fId) allFgIds.add(String(fId));
+            }
+        }
+        for (const inv of posInvoices) {
+            for (const it of inv.items || []) {
+                const fId = it.finishedGood?._id || it.finishedGood;
+                if (fId) allFgIds.add(String(fId));
+            }
+        }
+
+        const fgIdArray = Array.from(allFgIds);
+        let workOrders = [];
+        let balingLogs = [];
+
+        if (fgIdArray.length > 0) {
+            workOrders = await WorkOrder.find({
+                tenant: tenantId,
+                finishedGood: { $in: fgIdArray }
+            })
+                .select('_id customer finishedGood stages jobOrderDetails')
+                .sort({ createdAt: -1 })
+                .lean();
+
+            const woIds = workOrders.map((w) => w._id);
+            if (woIds.length > 0) {
+                balingLogs = await ProductionLog.find({
+                    tenant: tenantId,
+                    workOrder: { $in: woIds },
+                    $or: [
+                        { stage: 'BALING_PACKING' },
+                        { stageName: 'BALING_PACKING' },
+                        { stageSequence: 8 }
+                    ]
+                })
+                    .select('workOrder quantity netWeight')
+                    .lean();
+            }
+        }
+
+        const logsByWoId = new Map();
+        for (const log of balingLogs) {
+            const wIdStr = String(log.workOrder);
+            if (!logsByWoId.has(wIdStr)) logsByWoId.set(wIdStr, []);
+            logsByWoId.get(wIdStr).push(log);
+        }
+
+        const getBalingSpec = (fgId, customerId, fgDoc) => {
+            const fgStr = String(fgId);
+            const custStr = customerId ? String(customerId) : null;
+
+            const matchingWos = workOrders.filter((w) => String(w.finishedGood) === fgStr);
+            let targetWos = custStr
+                ? matchingWos.filter((w) => String(w.customer) === custStr)
+                : [];
+            if (targetWos.length === 0) {
+                targetWos = matchingWos;
+            }
+
+            let avgBagWeightKg = null;
+            let pcsPerBale = null;
+
+            // Step A: Baling & Packing ProductionLog entries
+            let totalNetWeight = 0;
+            let totalPcsForWeight = 0;
+            let totalBalePcs = 0;
+            let baleCount = 0;
+
+            for (const wo of targetWos) {
+                const woLogs = logsByWoId.get(String(wo._id)) || [];
+                for (const log of woLogs) {
+                    const qty = Number(log.quantity || 0);
+                    const nw = Number(log.netWeight || 0);
+                    if (qty > 0) {
+                        totalBalePcs += qty;
+                        baleCount++;
+                        if (nw > 0) {
+                            totalNetWeight += nw;
+                            totalPcsForWeight += qty;
+                        }
+                    }
+                }
+            }
+
+            if (totalNetWeight > 0 && totalPcsForWeight > 0) {
+                avgBagWeightKg = Number((totalNetWeight / totalPcsForWeight).toFixed(4));
+            }
+            if (baleCount > 0) {
+                pcsPerBale = Math.round(totalBalePcs / baleCount);
+            }
+
+            // Step B: WorkOrder stage specification fallback
+            if (!avgBagWeightKg || !pcsPerBale) {
+                for (const wo of targetWos) {
+                    const balingStage = (wo.stages || []).find(
+                        (s) => s.stageName === 'BALING_PACKING' || s.sequence === 8
+                    );
+                    if (balingStage) {
+                        if (!pcsPerBale && balingStage.balingQuantityPcs > 0) {
+                            pcsPerBale = balingStage.balingQuantityPcs;
+                        }
+                        if (
+                            !avgBagWeightKg &&
+                            balingStage.balingQuantityPcs > 0 &&
+                            balingStage.balingTotalWeightKg > 0
+                        ) {
+                            avgBagWeightKg = Number(
+                                (balingStage.balingTotalWeightKg / balingStage.balingQuantityPcs).toFixed(4)
+                            );
+                        }
+                    }
+                    if (!avgBagWeightKg && wo.jobOrderDetails?.bagWeightGms > 0) {
+                        avgBagWeightKg = Number((wo.jobOrderDetails.bagWeightGms / 1000).toFixed(4));
+                    }
+                    if (avgBagWeightKg && pcsPerBale) break;
+                }
+            }
+
+            // Step C: FinishedGood specification fallback
+            if (!avgBagWeightKg && fgDoc?.bagWeightGms > 0) {
+                avgBagWeightKg = Number((fgDoc.bagWeightGms / 1000).toFixed(4));
+            }
+
+            return {
+                avgBagWeightKg: avgBagWeightKg || null,
+                pcsPerBale: pcsPerBale || null
+            };
+        };
 
         const dispatchableSOList = [];
         for (const so of salesOrders) {
             const items = (so.items || []).map((it) => {
                 const fg = it.finishedGood || {};
+                const fgId = fg._id || it.finishedGood;
                 const orderedQty = Number(it.quantity || 0);
                 const alreadyDispatched = Number(it.dispatchedQuantity || 0);
                 const remainingQty = Math.max(0, orderedQty - alreadyDispatched);
+                const balingSpec = getBalingSpec(fgId, so.customer?._id || so.customer, fg);
+
                 return {
-                    finishedGood: fg._id || it.finishedGood,
+                    finishedGood: fgId,
                     name: fg.name || 'Finished Goods Bag',
                     code: fg.code || '',
                     uom: fg.uom?.name || 'BAGS',
                     orderedQuantity: orderedQty,
                     alreadyDispatched,
-                    remainingQuantity: remainingQty
+                    remainingQuantity: remainingQty,
+                    avgBagWeightKg: balingSpec.avgBagWeightKg,
+                    pcsPerBale: balingSpec.pcsPerBale
                 };
             });
 
@@ -97,36 +269,6 @@ const getDispatchableSources = async (req, res) => {
             }
         }
 
-        // 2. Fetch POS Invoices (where salesOrder is null/undefined)
-        const posInvoices = await Invoice.find({
-            tenant: tenantId,
-            salesOrder: null,
-            isActive: true
-        })
-            .populate('customer', 'companyName code contactPerson phone city state address')
-            .populate('items.finishedGood', 'name code uom currentStock')
-            .sort({ createdAt: -1 });
-
-        const posInvoiceIds = posInvoices.map((inv) => inv._id);
-        const existingPosDispatches = await Dispatch.find({
-            tenant: tenantId,
-            invoice: { $in: posInvoiceIds }
-        }).select('invoice items');
-
-        // Map invoiceId -> { [fgId]: totalDispatched }
-        const dispatchedByInvoiceMap = new Map();
-        for (const disp of existingPosDispatches) {
-            const invIdStr = String(disp.invoice);
-            if (!dispatchedByInvoiceMap.has(invIdStr)) {
-                dispatchedByInvoiceMap.set(invIdStr, {});
-            }
-            const itemMap = dispatchedByInvoiceMap.get(invIdStr);
-            for (const it of disp.items || []) {
-                const fgStr = String(it.finishedGood);
-                itemMap[fgStr] = (itemMap[fgStr] || 0) + Number(it.dispatchedQuantity || 0);
-            }
-        }
-
         const dispatchablePOSList = [];
         for (const inv of posInvoices) {
             const invIdStr = String(inv._id);
@@ -138,6 +280,8 @@ const getDispatchableSources = async (req, res) => {
                 const orderedQty = Number(it.quantity || 0);
                 const alreadyDispatched = itemDispatchedMap[String(fgId)] || 0;
                 const remainingQty = Math.max(0, orderedQty - alreadyDispatched);
+                const balingSpec = getBalingSpec(fgId, inv.customer?._id || inv.customer, fg);
+
                 return {
                     finishedGood: fgId,
                     name: fg.name || it.description || 'Finished Goods Bag',
@@ -145,7 +289,9 @@ const getDispatchableSources = async (req, res) => {
                     uom: fg.uom?.name || 'BAGS',
                     orderedQuantity: orderedQty,
                     alreadyDispatched,
-                    remainingQuantity: remainingQty
+                    remainingQuantity: remainingQty,
+                    avgBagWeightKg: balingSpec.avgBagWeightKg,
+                    pcsPerBale: balingSpec.pcsPerBale
                 };
             });
 
@@ -210,6 +356,8 @@ const createDispatch = async (req, res) => {
                 message: 'Tenant context is missing or invalid. Please log in again.'
             });
         }
+
+        const isUserAdmin = await isTenantAdmin(req.user);
 
         // Strip read-only and system fields
         delete req.body.tenant;
@@ -296,7 +444,7 @@ const createDispatch = async (req, res) => {
                 const alreadyDispatched = itemDispatchedMap[fgIdStr] || 0;
                 const remainingAllowed = invItem.quantity - alreadyDispatched;
 
-                if (numQty > remainingAllowed + 0.0001) {
+                if (!isUserAdmin && numQty > remainingAllowed + 0.0001) {
                     return res.status(400).json({
                         success: false,
                         message: `Cannot dispatch ${numQty} units of item. Invoiced: ${invItem.quantity}, Already dispatched: ${alreadyDispatched}, Remaining allowed: ${remainingAllowed}.`
@@ -306,6 +454,12 @@ const createDispatch = async (req, res) => {
                 cleanedItems.push({
                     finishedGood: dispatchItem.finishedGood,
                     dispatchedQuantity: numQty,
+                    dispatchedKg: dispatchItem.dispatchedKg !== undefined && dispatchItem.dispatchedKg !== null && dispatchItem.dispatchedKg !== '' && !isNaN(Number(dispatchItem.dispatchedKg))
+                        ? Number(dispatchItem.dispatchedKg)
+                        : undefined,
+                    dispatchedBales: dispatchItem.dispatchedBales !== undefined && dispatchItem.dispatchedBales !== null && dispatchItem.dispatchedBales !== '' && !isNaN(Number(dispatchItem.dispatchedBales))
+                        ? Number(dispatchItem.dispatchedBales)
+                        : undefined,
                     batchNumber: dispatchItem.batchNumber ? String(dispatchItem.batchNumber).trim() : undefined
                 });
             }
@@ -386,7 +540,7 @@ const createDispatch = async (req, res) => {
             }
             return res.status(400).json({
                 success: false,
-                message: `Cannot dispatch goods against Sales Order with status '${soDoc.status}'. Goods can only be dispatched for orders that are 'CONFIRMED', 'READY_FOR_DISPATCH', or 'DISPATCHED'.`
+                message: `Cannot dispatch goods against Sales Order with status '${soDoc.status}'. Goods can only be dispatched for orders that are 'CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED', or 'DISPATCHED'.`
             });
         }
 
@@ -423,7 +577,7 @@ const createDispatch = async (req, res) => {
             const currentDispatched = soItem.dispatchedQuantity || 0;
             const remainingAllowed = soItem.quantity - currentDispatched;
 
-            if (numQty > remainingAllowed + 0.0001) {
+            if (!isUserAdmin && numQty > remainingAllowed + 0.0001) {
                 if (useTransaction && session) {
                     if (session.inTransaction()) await session.abortTransaction();
                     session.endSession();
@@ -464,6 +618,12 @@ const createDispatch = async (req, res) => {
             cleanedItems.push({
                 finishedGood: dispatchItem.finishedGood,
                 dispatchedQuantity: numQty,
+                dispatchedKg: dispatchItem.dispatchedKg !== undefined && dispatchItem.dispatchedKg !== null && dispatchItem.dispatchedKg !== '' && !isNaN(Number(dispatchItem.dispatchedKg))
+                    ? Number(dispatchItem.dispatchedKg)
+                    : undefined,
+                dispatchedBales: dispatchItem.dispatchedBales !== undefined && dispatchItem.dispatchedBales !== null && dispatchItem.dispatchedBales !== '' && !isNaN(Number(dispatchItem.dispatchedBales))
+                    ? Number(dispatchItem.dispatchedBales)
+                    : undefined,
                 batchNumber: dispatchItem.batchNumber ? String(dispatchItem.batchNumber).trim() : undefined
             });
         }
@@ -569,6 +729,318 @@ const createDispatch = async (req, res) => {
         return res.status(400).json({
             success: false,
             message: error.message || 'Failed to process Dispatch.'
+        });
+    }
+};
+
+/**
+ * @desc    Update an existing Goods Dispatch Note (Tenant Admin only)
+ *          Re-adjusts linked Sales Order / Invoice quantities, status, and inventory stock
+ * @route   PUT /api/dispatches/:id
+ * @access  Private (Tenant Admin only)
+ */
+const updateDispatch = async (req, res) => {
+    let session = null;
+    let useTransaction = true;
+
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const isUserAdmin = await isTenantAdmin(req.user);
+
+        const dispatchId = req.params.id;
+        const existingDispatch = await Dispatch.findOne({ _id: dispatchId, tenant: tenantId });
+        if (!existingDispatch) {
+            return res.status(404).json({
+                success: false,
+                message: 'Dispatch note not found or does not belong to your organization.'
+            });
+        }
+
+        // 1. Status Check: Do not allow editing if already DELIVERED, RETURNED, or POD-confirmed
+        const currentDeliveryStatus = (existingDispatch.deliveryStatus || '').toUpperCase();
+        if (currentDeliveryStatus === 'DELIVERED' || currentDeliveryStatus === 'RETURNED' || existingDispatch.podConfirmedAt) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot edit a dispatch that has already been marked as Delivered or POD-confirmed.'
+            });
+        }
+
+        // 2. Validate input fields
+        const {
+            dispatchLocation,
+            transporter,
+            vehicleNumber,
+            driverName,
+            driverPhone,
+            dispatchDate,
+            notes,
+            items
+        } = req.body;
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'At least one dispatch item is required.'
+            });
+        }
+
+        const targetLocation = dispatchLocation || existingDispatch.dispatchLocation;
+        const locationDoc = await Location.findOne({ _id: targetLocation, tenant: tenantId });
+        if (!locationDoc) {
+            return res.status(400).json({
+                success: false,
+                message: 'Dispatch location does not exist or does not belong to your organization.'
+            });
+        }
+
+        // Clean & validate items
+        const cleanedItems = [];
+        for (const it of items) {
+            const fgId = it.finishedGood?._id || it.finishedGood;
+            const numQty = Number(it.dispatchedQuantity);
+            if (!fgId || isNaN(numQty) || numQty <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Each dispatch item must have a valid finishedGood and a positive dispatchedQuantity > 0.'
+                });
+            }
+
+            cleanedItems.push({
+                finishedGood: fgId,
+                dispatchedQuantity: numQty,
+                dispatchedKg: it.dispatchedKg !== undefined && it.dispatchedKg !== null && it.dispatchedKg !== '' && !isNaN(Number(it.dispatchedKg))
+                    ? Number(it.dispatchedKg)
+                    : undefined,
+                dispatchedBales: it.dispatchedBales !== undefined && it.dispatchedBales !== null && it.dispatchedBales !== '' && !isNaN(Number(it.dispatchedBales))
+                    ? Number(it.dispatchedBales)
+                    : undefined,
+                batchNumber: it.batchNumber ? String(it.batchNumber).trim() : undefined
+            });
+        }
+
+        // Start session / transaction
+        try {
+            session = await mongoose.startSession();
+            session.startTransaction();
+        } catch (sessionErr) {
+            useTransaction = false;
+        }
+        const sessionOption = useTransaction ? { session } : {};
+
+        // 3. Map previous dispatched quantities from existingDispatch
+        const oldThisDispatchQtyMap = new Map();
+        for (const it of existingDispatch.items || []) {
+            const fgStr = String(it.finishedGood?._id || it.finishedGood);
+            oldThisDispatchQtyMap.set(fgStr, Number(it.dispatchedQuantity || 0));
+        }
+
+        // 4. Branch by Source Type (Sales Order vs POS Invoice)
+        if (existingDispatch.salesOrder) {
+            const soQuery = SalesOrder.findOne({ _id: existingDispatch.salesOrder, tenant: tenantId });
+            if (useTransaction && session) soQuery.session(session);
+            const soDoc = await soQuery;
+
+            if (!soDoc) {
+                if (useTransaction && session) {
+                    if (session.inTransaction()) await session.abortTransaction();
+                    session.endSession();
+                }
+                return res.status(404).json({
+                    success: false,
+                    message: 'Linked Sales Order not found or does not belong to your organization.'
+                });
+            }
+
+            // Find all other dispatches for this Sales Order (excluding this one)
+            const otherDispatches = await Dispatch.find({
+                _id: { $ne: existingDispatch._id },
+                salesOrder: soDoc._id,
+                tenant: tenantId
+            });
+
+            // Map dispatched quantity from other dispatches
+            const otherDispatchesQtyMap = new Map();
+            for (const od of otherDispatches) {
+                for (const oi of od.items || []) {
+                    const fgStr = String(oi.finishedGood?._id || oi.finishedGood);
+                    otherDispatchesQtyMap.set(fgStr, (otherDispatchesQtyMap.get(fgStr) || 0) + Number(oi.dispatchedQuantity || 0));
+                }
+            }
+
+            // Validate against SO ordered quantities & stock deltas
+            for (const item of cleanedItems) {
+                const fgStr = String(item.finishedGood);
+                const soItem = soDoc.items.find((i) => String(i.finishedGood?._id || i.finishedGood) === fgStr);
+
+                if (!soItem) {
+                    if (useTransaction && session) {
+                        if (session.inTransaction()) await session.abortTransaction();
+                        session.endSession();
+                    }
+                    return res.status(400).json({
+                        success: false,
+                        message: `Finished Good '${fgStr}' is not part of Sales Order ${soDoc.soNumber}.`
+                    });
+                }
+
+                const otherDispatched = otherDispatchesQtyMap.get(fgStr) || 0;
+                const maxAllowedForThisDispatch = Number(soItem.quantity || 0) - otherDispatched;
+
+                if (!isUserAdmin && item.dispatchedQuantity > maxAllowedForThisDispatch + 0.0001) {
+                    if (useTransaction && session) {
+                        if (session.inTransaction()) await session.abortTransaction();
+                        session.endSession();
+                    }
+                    return res.status(400).json({
+                        success: false,
+                        message: `Cannot dispatch ${item.dispatchedQuantity} units of item '${soItem.name || fgStr}'. Ordered: ${soItem.quantity}, Dispatched in other dispatches: ${otherDispatched}, Maximum allowed for this dispatch: ${maxAllowedForThisDispatch}.`
+                    });
+                }
+
+                const oldQty = oldThisDispatchQtyMap.get(fgStr) || 0;
+                const delta = item.dispatchedQuantity - oldQty;
+
+                if (delta > 0) {
+                    // Check stock
+                    const fgQuery = FinishedGood.findOne({ _id: item.finishedGood, tenant: tenantId });
+                    if (useTransaction && session) fgQuery.session(session);
+                    const fgDoc = await fgQuery;
+
+                    if (!fgDoc || fgDoc.currentStock < delta) {
+                        if (useTransaction && session) {
+                            if (session.inTransaction()) await session.abortTransaction();
+                            session.endSession();
+                        }
+                        return res.status(400).json({
+                            success: false,
+                            message: `Insufficient sellable current stock for '${fgDoc?.name || fgStr}'. Current stock: ${fgDoc?.currentStock || 0}, additional required: ${delta}.`
+                        });
+                    }
+
+                    await executeStockTransactionCore({
+                        tenantId,
+                        referenceNumber: existingDispatch.dispatchNumber,
+                        itemType: 'FINISHED_GOOD',
+                        item: item.finishedGood,
+                        transactionType: 'STOCK_OUT',
+                        quantity: delta,
+                        fromLocation: targetLocation,
+                        batchNumber: item.batchNumber,
+                        notes: notes || `Quantity increased (+${delta}) via Dispatch edit ${existingDispatch.dispatchNumber} for SO ${soDoc.soNumber}`,
+                        performedBy: req.user._id || req.user.id
+                    }, sessionOption);
+                } else if (delta < 0) {
+                    const returnQty = Math.abs(delta);
+                    await executeStockTransactionCore({
+                        tenantId,
+                        referenceNumber: existingDispatch.dispatchNumber,
+                        itemType: 'FINISHED_GOOD',
+                        item: item.finishedGood,
+                        transactionType: 'STOCK_IN',
+                        quantity: returnQty,
+                        toLocation: targetLocation,
+                        batchNumber: item.batchNumber,
+                        notes: notes || `Quantity reduced (-${returnQty}) via Dispatch edit ${existingDispatch.dispatchNumber} for SO ${soDoc.soNumber}`,
+                        performedBy: req.user._id || req.user.id
+                    }, sessionOption);
+                }
+            }
+
+            // Handle any items that were removed in the edit
+            for (const [oldFgStr, oldQty] of oldThisDispatchQtyMap.entries()) {
+                const stillPresent = cleanedItems.some((i) => String(i.finishedGood) === oldFgStr);
+                if (!stillPresent && oldQty > 0) {
+                    await executeStockTransactionCore({
+                        tenantId,
+                        referenceNumber: existingDispatch.dispatchNumber,
+                        itemType: 'FINISHED_GOOD',
+                        item: oldFgStr,
+                        transactionType: 'STOCK_IN',
+                        quantity: oldQty,
+                        toLocation: targetLocation,
+                        notes: `Item removed: returned ${oldQty} units to stock via Dispatch edit ${existingDispatch.dispatchNumber}`,
+                        performedBy: req.user._id || req.user.id
+                    }, sessionOption);
+                }
+            }
+
+            // Update Sales Order line item dispatched quantities without double counting
+            for (const soItem of soDoc.items) {
+                const fgStr = String(soItem.finishedGood?._id || soItem.finishedGood);
+                const otherDispatched = otherDispatchesQtyMap.get(fgStr) || 0;
+                const thisDispatched = cleanedItems
+                    .filter((ci) => String(ci.finishedGood) === fgStr)
+                    .reduce((sum, ci) => sum + ci.dispatchedQuantity, 0);
+
+                soItem.dispatchedQuantity = otherDispatched + thisDispatched;
+            }
+
+            // Recompute Sales Order Status
+            const allFullyDispatched = soDoc.items.every((i) => (i.dispatchedQuantity || 0) >= (i.quantity || 0) - 0.0001);
+            const anyDispatched = soDoc.items.some((i) => (i.dispatchedQuantity || 0) > 0);
+
+            if (allFullyDispatched) {
+                soDoc.status = 'DISPATCHED';
+            } else if (anyDispatched) {
+                soDoc.status = 'PARTIALLY_DISPATCHED';
+            } else {
+                soDoc.status = 'READY_FOR_DISPATCH';
+            }
+
+            await soDoc.save(sessionOption);
+        }
+
+        // 5. Update Dispatch document
+        existingDispatch.dispatchLocation = targetLocation;
+        if (transporter !== undefined) existingDispatch.transporter = String(transporter).trim() || 'Self Transport';
+        if (vehicleNumber !== undefined) existingDispatch.vehicleNumber = String(vehicleNumber).trim().toUpperCase();
+        if (driverName !== undefined) existingDispatch.driverName = String(driverName).trim();
+        if (driverPhone !== undefined) existingDispatch.driverPhone = String(driverPhone).trim();
+        if (dispatchDate) existingDispatch.dispatchDate = new Date(dispatchDate);
+        if (notes !== undefined) existingDispatch.notes = String(notes).trim();
+        existingDispatch.items = cleanedItems;
+        existingDispatch.lastEditedBy = req.user._id || req.user.id;
+        existingDispatch.lastEditedAt = new Date();
+
+        await existingDispatch.save(sessionOption);
+
+        if (useTransaction && session) {
+            await session.commitTransaction();
+            session.endSession();
+        }
+
+        await existingDispatch.populate([
+            { path: 'salesOrder', select: 'soNumber status totalValue' },
+            { path: 'invoice', select: 'invoiceNumber customer walkInCustomer' },
+            { path: 'dispatchLocation', select: 'name code type' },
+            { path: 'items.finishedGood', select: 'name code uom currentStock' },
+            { path: 'dispatchedBy', select: 'name email' }
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: `Dispatch '${existingDispatch.dispatchNumber}' updated successfully.`,
+            data: existingDispatch
+        });
+    } catch (error) {
+        if (useTransaction && session) {
+            if (session.inTransaction()) {
+                await session.abortTransaction();
+            }
+            session.endSession();
+        }
+        console.error('Error in updateDispatch:', error);
+
+        return res.status(400).json({
+            success: false,
+            message: error.message || 'Failed to update Dispatch.'
         });
     }
 };
@@ -1189,6 +1661,7 @@ const getDeliveryRegister = async (req, res) => {
 module.exports = {
     getDispatchableSources,
     createDispatch,
+    updateDispatch,
     updateDeliveryStatus,
     getDispatches,
     getDeliveryRegister,
