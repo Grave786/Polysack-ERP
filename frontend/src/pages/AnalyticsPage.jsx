@@ -1,4 +1,5 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Download, Printer, BarChart2, Activity, Package, Receipt, Users, FileSpreadsheet } from 'lucide-react';
 import FinancialSummaryChart from '../components/analytics/FinancialSummaryChart';
 import ProductionYieldTab from '../components/analytics/ProductionYieldTab';
@@ -9,8 +10,25 @@ import MonthlyBusinessReportTab from '../components/analytics/MonthlyBusinessRep
 import toast from 'react-hot-toast';
 
 export default function AnalyticsPage() {
-    const [activeTab, setActiveTab] = useState('monthly-report');
+    const [searchParams, setSearchParams] = useSearchParams();
+    const tabFromUrl = searchParams.get('tab');
+    const [activeTab, setActiveTab] = useState(tabFromUrl || 'monthly-report');
     const tabRef = useRef(null);
+
+    useEffect(() => {
+        if (tabFromUrl && tabFromUrl !== activeTab) {
+            setActiveTab(tabFromUrl);
+        }
+    }, [tabFromUrl, activeTab]);
+
+    const handleTabChange = (tabId) => {
+        setActiveTab(tabId);
+        setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            next.set('tab', tabId);
+            return next;
+        }, { replace: true });
+    };
 
     const handleExportAuditReport = () => {
         if (tabRef.current?.exportCsv) {
@@ -84,7 +102,7 @@ export default function AnalyticsPage() {
                         <button
                             key={tab.id}
                             type="button"
-                            onClick={() => setActiveTab(tab.id)}
+                            onClick={() => handleTabChange(tab.id)}
                             className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs transition-all cursor-pointer select-none shrink-0 ${
                                 isActive
                                     ? 'bg-amber-500 text-slate-950 font-extrabold shadow-sm'

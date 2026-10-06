@@ -502,7 +502,10 @@ export default function DashboardPage() {
 
             {/* 2. TOP STAT CARDS ROW */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-card-bg border border-border p-4.5 rounded-xl shadow-2xs space-y-2">
+                <div
+                    onClick={() => navigate('/sales')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
+                >
                     <div className="flex items-center justify-between text-text-muted">
                         <span className="text-[11px] font-bold uppercase tracking-wider">TOTAL SALES ORDERS</span>
                         <Truck size={18} className="text-amber-500" />
@@ -518,7 +521,10 @@ export default function DashboardPage() {
                     </div>
                 </div>
 
-                <div className="bg-card-bg border border-border p-4.5 rounded-xl shadow-2xs space-y-2">
+                <div
+                    onClick={() => navigate('/production')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
+                >
                     <div className="flex items-center justify-between text-text-muted">
                         <span className="text-[11px] font-bold uppercase tracking-wider">TODAY'S PRODUCTION</span>
                         <Factory size={18} className="text-emerald-500" />
@@ -534,7 +540,10 @@ export default function DashboardPage() {
                     </div>
                 </div>
 
-                <div className="bg-card-bg border border-border p-4.5 rounded-xl shadow-2xs space-y-2">
+                <div
+                    onClick={() => navigate('/analytics?tab=pnl')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
+                >
                     <div className="flex items-center justify-between text-text-muted">
                         <span className="text-[11px] font-bold uppercase tracking-wider">MONTHLY REVENUE</span>
                         <DollarSign size={18} className="text-primary" />
@@ -550,7 +559,10 @@ export default function DashboardPage() {
                     </div>
                 </div>
 
-                <div className="bg-card-bg border border-border p-4.5 rounded-xl shadow-2xs space-y-2">
+                <div
+                    onClick={() => navigate('/analytics?tab=valuation')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
+                >
                     <div className="flex items-center justify-between text-text-muted">
                         <span className="text-[11px] font-bold uppercase tracking-wider">INVENTORY VALUATION</span>
                         <Package size={18} className="text-blue-500" />
@@ -569,7 +581,10 @@ export default function DashboardPage() {
 
             {/* 3. SECOND STAT ROW */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                <div className="bg-card-bg border border-border p-3.5 rounded-xl shadow-2xs space-y-1">
+                <div
+                    onClick={() => navigate('/dispatch')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                >
                     <span className="text-[10px] font-bold uppercase text-text-muted block">PENDING DISPATCH</span>
                     <span className="text-lg font-black text-text-main font-mono block">
                         {pendingDispatchOrdersCount} Orders
@@ -577,7 +592,10 @@ export default function DashboardPage() {
                     <span className="text-[10px] text-text-muted block">Ready for gate pass</span>
                 </div>
 
-                <div className="bg-card-bg border border-border p-3.5 rounded-xl shadow-2xs space-y-1">
+                <div
+                    onClick={() => navigate('/production')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                >
                     <span className="text-[10px] font-bold uppercase text-text-muted block">MACHINE UTILIZATION</span>
                     <span className="text-lg font-black text-emerald-700 font-mono block">
                         {machineUtilizationPct}%
@@ -587,7 +605,10 @@ export default function DashboardPage() {
                     </span>
                 </div>
 
-                <div className="bg-card-bg border border-border p-3.5 rounded-xl shadow-2xs space-y-1">
+                <div
+                    onClick={() => navigate('/analytics?tab=yield')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                >
                     <span className="text-[10px] font-bold uppercase text-text-muted block">PROD. EFFICIENCY</span>
                     <span className="text-lg font-black text-text-main font-mono block">
                         {avgProductionEfficiencyPct}%
@@ -606,7 +627,10 @@ export default function DashboardPage() {
                     <span className="text-[10px] text-text-muted block">HR Module Coming Soon</span>
                 </div>
 
-                <div className="bg-card-bg border border-border p-3.5 rounded-xl shadow-2xs space-y-1">
+                <div
+                    onClick={() => navigate('/sales?tab=invoices')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                >
                     <span className="text-[10px] font-bold uppercase text-text-muted block">RECEIVABLES</span>
                     <span className="text-lg font-black text-text-main font-mono block">
                         ₹{(totalReceivablesLakhs / 100000).toFixed(2)}L
