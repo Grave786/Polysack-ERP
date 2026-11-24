@@ -6,7 +6,7 @@ import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
 import { isTenantAdmin, checkIsSuperAdmin } from '../utils/permissionUtils';
-import { getTodayLocalDateString } from '../utils/dateUtils';
+import { getTodayLocalDateString, formatDate } from '../utils/dateUtils';
 
 export default function AttendancePage() {
     const user = useAuthStore((state) => state.user);
@@ -430,12 +430,12 @@ export default function AttendancePage() {
         },
         {
             header: 'DATE',
-            exportValue: (row) => row.date || row.createdAt || '',
+            exportValue: (row) => formatDate(row.date || row.createdAt),
             render: (row) => {
                 const dateVal = row.date || row.createdAt;
                 return (
                     <span className="font-mono text-xs text-text-main font-medium">
-                        {dateVal ? new Date(dateVal).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '2026-07-30'}
+                        {formatDate(dateVal)}
                     </span>
                 );
             },
@@ -600,13 +600,13 @@ export default function AttendancePage() {
         {
             header: 'EFFECTIVE DATES',
             exportValue: (row) => {
-                const startStr = row.startDate ? new Date(row.startDate).toLocaleDateString('en-IN') : '';
-                const endStr = row.endDate ? new Date(row.endDate).toLocaleDateString('en-IN') : '';
-                return (startStr || endStr) ? `${startStr} - ${endStr}` : '';
+                const startStr = formatDate(row.startDate);
+                const endStr = formatDate(row.endDate);
+                return (row.startDate || row.endDate) ? `${startStr} - ${endStr}` : '';
             },
             render: (row) => {
-                const startStr = row.startDate ? new Date(row.startDate).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }) : 'Aug 01';
-                const endStr = row.endDate ? new Date(row.endDate).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : 'Aug 31, 2026';
+                const startStr = formatDate(row.startDate);
+                const endStr = formatDate(row.endDate);
 
                 return (
                     <span className="font-mono text-xs text-text-main font-medium">

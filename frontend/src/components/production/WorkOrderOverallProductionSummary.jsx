@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Layers, Users, Package, AlertCircle, RefreshCw, CheckCircle2, Award, Calendar, Clock } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
+import { formatDate } from '../../utils/dateUtils';
 
 const STAGE_NAME_MAP = {
     TAPE_EXTRUSION: 'Tape Extrusion',
@@ -327,19 +328,7 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                             <tbody className="divide-y divide-border text-text-main">
                                 {timeline.map((entry, idx) => {
                                     let dateDisplay = entry.date;
-                                    try {
-                                        const [y, m, d] = entry.date.split('-');
-                                        if (y && m && d) {
-                                            const dObj = new Date(Number(y), Number(m) - 1, Number(d));
-                                            dateDisplay = dObj.toLocaleDateString('en-IN', {
-                                                day: '2-digit',
-                                                month: 'short',
-                                                year: 'numeric'
-                                            });
-                                        }
-                                    } catch {
-                                        dateDisplay = entry.date;
-                                    }
+                                    const dateDisplay = formatDate(entry.date);
 
                                     return (
                                         <tr key={idx} className="hover:bg-app-bg/50 transition-colors">
@@ -349,7 +338,7 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                                                     <span>{dateDisplay}</span>
                                                 </div>
                                                 <div className="text-[10px] text-text-muted font-mono mt-0.5 ml-4">
-                                                    {entry.date}
+                                                    {formatDate(entry.date)}
                                                 </div>
                                             </td>
                                             <td className="p-3.5 align-top">

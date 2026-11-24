@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Truck, CheckCircle2, XCircle, MapPin, Package, Calendar, User, Phone, FileCheck, AlertTriangle, ShieldCheck, UploadCloud, Eye, ZoomIn, X } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { formatDate } from '../../utils/dateUtils';
 
 export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUploadPod, onSuccess }) {
     if (!isOpen || !dispatch) return null;
@@ -140,7 +141,7 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
                             </div>
                             <div className="font-bold text-text-main">{customerName}</div>
                             <div className="text-[11px] text-text-muted">
-                                Dispatched: {dispatch.dispatchDate ? new Date(dispatch.dispatchDate).toLocaleDateString() : '-'}
+                                Dispatched: {formatDate(dispatch.dispatchDate)}
                             </div>
                         </div>
                     </div>

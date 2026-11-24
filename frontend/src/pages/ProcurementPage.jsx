@@ -10,6 +10,7 @@ import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
 import { isTenantAdmin } from '../utils/permissionUtils';
+import { formatDate, formatDateTime } from '../utils/dateUtils';
 
 export default function ProcurementPage() {
     const user = useAuthStore((state) => state.user);
@@ -53,8 +54,8 @@ export default function ProcurementPage() {
 
                 poList.forEach((po) => {
                     const suppName = typeof po.supplier === 'object' ? (po.supplier?.companyName || po.supplier?.name) : (po.supplier || '');
-                    const dateStr = po.poDate ? new Date(po.poDate).toLocaleDateString() : '';
-                    const expStr = po.expectedDelivery ? new Date(po.expectedDelivery).toLocaleDateString() : '';
+                    const dateStr = formatDate(po.poDate);
+                    const expStr = formatDate(po.expectedDelivery);
 
                     const row = [
                         `"${(po.poNumber || '').replace(/"/g, '""')}"`,
@@ -114,19 +115,19 @@ export default function ProcurementPage() {
         },
         {
             header: 'PO DATE',
-            exportValue: (row) => row.poDate || row.createdAt || '',
+            exportValue: (row) => formatDate(row.poDate || row.createdAt),
             render: (row) => (
                 <span className="font-mono text-xs text-text-muted">
-                    {row.poDate ? new Date(row.poDate).toLocaleDateString() : (row.createdAt ? new Date(row.createdAt).toLocaleDateString() : '-')}
+                    {formatDate(row.poDate || row.createdAt)}
                 </span>
             )
         },
         {
             header: 'EXPECTED DELIVERY',
-            exportValue: (row) => row.expectedDelivery || '',
+            exportValue: (row) => formatDate(row.expectedDelivery),
             render: (row) => (
                 <span className="font-mono text-xs text-text-main font-semibold">
-                    {row.expectedDelivery ? new Date(row.expectedDelivery).toLocaleDateString() : '-'}
+                    {formatDate(row.expectedDelivery)}
                 </span>
             )
         },
@@ -393,10 +394,10 @@ export default function ProcurementPage() {
         },
         {
             header: 'RECEIVED DATE',
-            exportValue: (row) => row.receivedDate || '',
+            exportValue: (row) => formatDate(row.receivedDate),
             render: (row) => (
                 <span className="font-mono text-xs text-text-muted">
-                    {row.receivedDate ? new Date(row.receivedDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-'}
+                    {formatDate(row.receivedDate)}
                 </span>
             ),
             sortable: true
@@ -467,11 +468,11 @@ export default function ProcurementPage() {
         },
         {
             header: 'AUDIT',
-            exportValue: (row) => row.lastEditedAt ? `Last edited by ${row.lastEditedBy?.name || 'Admin'} on ${new Date(row.lastEditedAt).toLocaleDateString('en-GB').replace(/\//g, '-')}` : '',
+            exportValue: (row) => row.lastEditedAt ? `Last edited by ${row.lastEditedBy?.name || 'Admin'} on ${formatDateTime(row.lastEditedAt)}` : '',
             render: (row) => {
                 if (!row.lastEditedAt) return <span className="text-text-muted text-[11px]">-</span>;
                 const editorName = typeof row.lastEditedBy === 'object' ? (row.lastEditedBy?.name || 'Admin') : 'Admin';
-                const dateStr = new Date(row.lastEditedAt).toLocaleDateString('en-GB').replace(/\//g, '-');
+                const dateStr = formatDateTime(row.lastEditedAt);
                 return (
                     <span
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-900 border border-amber-300"
@@ -527,10 +528,10 @@ export default function ProcurementPage() {
         },
         {
             header: 'PO DATE',
-            exportValue: (row) => row.poDate ? new Date(row.poDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '',
+            exportValue: (row) => formatDate(row.poDate),
             render: (row) => (
                 <span className="font-mono text-xs text-text-main whitespace-nowrap">
-                    {row.poDate ? new Date(row.poDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-'}
+                    {formatDate(row.poDate)}
                 </span>
             ),
             sortable: true
@@ -635,14 +636,14 @@ export default function ProcurementPage() {
         {
             header: 'EXPECTED / RECD DATE',
             exportValue: (row) => {
-                const exp = row.expectedDelivery ? new Date(row.expectedDelivery).toLocaleDateString('en-GB').replace(/\//g, '-') : '-';
-                const act = row.actualReceivedDate ? new Date(row.actualReceivedDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-';
+                const exp = formatDate(row.expectedDelivery);
+                const act = formatDate(row.actualReceivedDate);
                 return `Exp: ${exp} | Recd: ${act}`;
             },
             render: (row) => (
                 <div className="text-[11px] font-mono space-y-0.5 whitespace-nowrap">
-                    <div className="text-text-main">Exp: {row.expectedDelivery ? new Date(row.expectedDelivery).toLocaleDateString('en-GB').replace(/\//g, '-') : '-'}</div>
-                    <div className="text-emerald-700 dark:text-emerald-400">Recd: {row.actualReceivedDate ? new Date(row.actualReceivedDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-'}</div>
+                    <div className="text-text-main">Exp: {formatDate(row.expectedDelivery)}</div>
+                    <div className="text-emerald-700 dark:text-emerald-400">Recd: {formatDate(row.actualReceivedDate)}</div>
                 </div>
             )
         },
@@ -772,7 +773,7 @@ export default function ProcurementPage() {
                 list.forEach((r) => {
                     const row = [
                         `"${(r.poNumber || '').replace(/"/g, '""')}"`,
-                        `"${r.poDate ? new Date(r.poDate).toLocaleDateString('en-GB').replace(/\//g, '-') : ''}"`,
+                        `"${r.poDate ? formatDate(r.poDate) : ''}"`,
                         `"${(r.supplierName || '').replace(/"/g, '""')}"`,
                         `"${(r.supplierGstin || '').replace(/"/g, '""')}"`,
                         `"${(r.supplierCity || '').replace(/"/g, '""')}"`,
@@ -789,8 +790,8 @@ export default function ProcurementPage() {
                         `"${r.gstRate || 18}"`,
                         `"${Number(r.gstAmount || 0).toFixed(2)}"`,
                         `"${Number(r.totalValueWithTax || 0).toFixed(2)}"`,
-                        `"${r.expectedDelivery ? new Date(r.expectedDelivery).toLocaleDateString('en-GB').replace(/\//g, '-') : ''}"`,
-                        `"${r.actualReceivedDate ? new Date(r.actualReceivedDate).toLocaleDateString('en-GB').replace(/\//g, '-') : ''}"`,
+                        `"${r.expectedDelivery ? formatDate(r.expectedDelivery) : ''}"`,
+                        `"${r.actualReceivedDate ? formatDate(r.actualReceivedDate) : ''}"`,
                         `"${(r.linkedGrns || '').replace(/"/g, '""')}"`,
                         `"${(r.paymentTerms || '').replace(/"/g, '""')}"`,
                         `"${(r.status || '').replace(/"/g, '""')}"`,
@@ -842,7 +843,7 @@ export default function ProcurementPage() {
                 const headers = ['PO #', 'Date', 'Supplier', 'Material Spec', 'Ordered', 'Recd', 'Rate (₹)', 'Taxable (₹)', 'GST (₹)', 'Total (₹)', 'Status'];
                 const rows = list.map((r) => [
                     r.poNumber || '-',
-                    r.poDate ? new Date(r.poDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-',
+                    formatDate(r.poDate),
                     r.supplierName || '-',
                     `${r.materialName || '-'}${r.materialGrade !== '-' ? ' (' + r.materialGrade + ')' : ''}`,
                     `${Number(r.orderedQuantity || 0).toLocaleString('en-IN')} ${r.unit || 'Kg'}`,
@@ -856,8 +857,8 @@ export default function ProcurementPage() {
 
                 generatePdfReport({
                     title: 'Detailed Purchase Register',
-                    subtitle: `Item-Wise Procurement & Vendor Tax Register • Period: ${startDate ? new Date(startDate).toLocaleDateString('en-GB').replace(/\//g, '-') : 'All'} to ${endDate ? new Date(endDate).toLocaleDateString('en-GB').replace(/\//g, '-') : 'Today'}`,
-                    generatedDate: new Date().toLocaleDateString('en-GB').replace(/\//g, '-'),
+                    subtitle: `Item-Wise Procurement & Vendor Tax Register • Period: ${startDate ? formatDate(startDate) : 'All'} to ${endDate ? formatDate(endDate) : 'Today'}`,
+                    generatedDate: formatDate(new Date()),
                     filename: `Purchase_Register_${Date.now()}.pdf`,
                     summaryCards,
                     sections: [

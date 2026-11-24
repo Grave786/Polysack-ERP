@@ -1,4 +1,5 @@
 import { useAuthStore } from '../store/authStore';
+import { formatDate, formatDateTime } from './dateUtils';
 
 /**
  * Shared PDF Generation Utility for Analytics & Executive Reports
@@ -280,7 +281,7 @@ export const generatePdfReport = ({
                         <div class="report-title">${escapeHtml(title)}</div>
                         <div class="report-meta">
                             ${subtitle ? `<span>${escapeHtml(subtitle)} &nbsp;|&nbsp; </span>` : ''}
-                            <span>Generated: ${escapeHtml(generatedDate || new Date().toLocaleDateString('en-IN'))}</span>
+                            <span>Generated: ${escapeHtml(generatedDate || formatDate(new Date()))}</span>
                         </div>
                     </div>
                 </div>
@@ -290,7 +291,7 @@ export const generatePdfReport = ({
 
                 <div class="report-footer">
                     <span>${escapeHtml(effectiveCompanyName)} • Confidential Management Report</span>
-                    <span>System Timestamp: ${new Date().toLocaleString('en-IN')}</span>
+                    <span>System Timestamp: ${formatDateTime(new Date())}</span>
                 </div>
             </body>
             </html>

@@ -3,6 +3,7 @@ import { Users, Package, Award, Calendar, Download, Printer, RefreshCw, AlertCir
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { generatePdfReport } from '../../utils/pdfExportUtils';
+import { formatDate } from '../../utils/dateUtils';
 
 const escapeCsvCell = (val) => {
     if (val === undefined || val === null) return '""';
@@ -17,7 +18,7 @@ const formatCsvDate = (dateVal) => {
     const day = String(d.getDate()).padStart(2, '0');
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const year = d.getFullYear();
-    return `${day}-${month}-${year}`;
+    return `${day}/${month}/${year}`;
 };
 
 const getTodayDdMmYyyy = () => {
@@ -25,7 +26,7 @@ const getTodayDdMmYyyy = () => {
     const dd = String(today.getDate()).padStart(2, '0');
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const yyyy = today.getFullYear();
-    return `${dd}-${mm}-${yyyy}`;
+    return `${dd}/${mm}/${yyyy}`;
 };
 
 const OperatorProductivityTab = forwardRef(function OperatorProductivityTab(props, ref) {
@@ -83,7 +84,7 @@ const OperatorProductivityTab = forwardRef(function OperatorProductivityTab(prop
     // Export CSV with real rows
     const exportCsv = () => {
         const todayStr = getTodayDdMmYyyy();
-        const filename = `executive-audit-report-operator-productivity-${todayStr}.csv`;
+        const filename = `executive-audit-report-operator-productivity-${todayStr.replace(/\//g, '-')}.csv`;
 
         const csvLines = [
             [escapeCsvCell('EXECUTIVE AUDIT REPORT - OPERATOR PRODUCTIVITY')],
@@ -142,7 +143,7 @@ const OperatorProductivityTab = forwardRef(function OperatorProductivityTab(prop
     const exportPdf = () => {
         const todayStr = getTodayDdMmYyyy();
         const dateRangeStr = `From: ${startDate ? formatCsvDate(startDate) : 'All Beginning'} To: ${endDate ? formatCsvDate(endDate) : 'Today'}`;
-        const filename = `executive-audit-report-operator-productivity-${todayStr}.pdf`;
+        const filename = `executive-audit-report-operator-productivity-${todayStr.replace(/\//g, '-')}.pdf`;
 
         generatePdfReport({
             title: 'Operator Productivity Audit Report',
@@ -462,7 +463,7 @@ const OperatorProductivityTab = forwardRef(function OperatorProductivityTab(prop
                                     <div key={wo.workOrderId || i} className="p-2.5 flex items-center justify-between text-xs hover:bg-app-bg/80">
                                         <div>
                                             <span className="font-bold text-text-main font-mono">{wo.workOrderNumber}</span>
-                                            <span className="block text-[10px] text-text-muted">Last entry: {wo.lastDate}</span>
+                                            <span className="block text-[10px] text-text-muted">Last entry: {formatDate(wo.lastDate)}</span>
                                         </div>
                                         <span className="font-mono font-extrabold text-emerald-700">
                                             {Number(wo.totalQuantity || 0).toLocaleString('en-IN')} Bags
@@ -481,7 +482,7 @@ const OperatorProductivityTab = forwardRef(function OperatorProductivityTab(prop
                                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
                                     {selectedOperatorModal.dailyBreakdown.map((d, i) => (
                                         <div key={i} className="p-2 bg-app-bg border border-border rounded-lg">
-                                            <span className="text-[10px] text-text-muted font-mono block">{d.date}</span>
+                                            <span className="text-[10px] text-text-muted font-mono block">{formatDate(d.date)}</span>
                                             <span className="font-mono font-bold text-primary">{Number(d.quantity).toLocaleString('en-IN')} Bags</span>
                                         </div>
                                     ))}

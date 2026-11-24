@@ -6,6 +6,7 @@ import FinishedGoodSpecCard from '../components/inventory/FinishedGoodSpecCard';
 import RawMaterialSpecCard from '../components/inventory/RawMaterialSpecCard';
 import InventoryValuationSummary from '../components/inventory/InventoryValuationSummary';
 import StockAdjustmentPanel from '../components/inventory/StockAdjustmentPanel';
+import { formatDate, formatDateTime } from '../utils/dateUtils';
 
 export default function InventoryPage() {
     const [searchParams] = useSearchParams();
@@ -186,10 +187,10 @@ export default function InventoryPage() {
         },
         {
             header: 'TIMESTAMP',
-            exportValue: (row) => row.createdAt || '',
+            exportValue: (row) => formatDateTime(row.createdAt),
             render: (row) => (
                 <span className="font-mono text-xs text-text-muted">
-                    {row.createdAt ? new Date(row.createdAt).toLocaleString() : '-'}
+                    {formatDateTime(row.createdAt)}
                 </span>
             )
         },
@@ -246,7 +247,7 @@ export default function InventoryPage() {
                         )}
                     </div>
                     <div className="text-[10px] text-text-muted truncate max-w-[160px]">
-                        {row.supplierName || 'Inward Roll'} {row.receivedDate ? `• ${new Date(row.receivedDate).toLocaleDateString('en-GB')}` : ''}
+                        {row.supplierName || 'Inward Roll'} {row.receivedDate ? `• ${formatDate(row.receivedDate)}` : ''}
                     </div>
                 </div>
             )

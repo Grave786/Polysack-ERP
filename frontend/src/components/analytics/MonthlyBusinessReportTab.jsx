@@ -31,7 +31,7 @@ const formatCsvDate = (dateVal) => {
     const day = String(d.getDate()).padStart(2, '0');
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const year = d.getFullYear();
-    return `${day}-${month}-${year}`;
+    return `${day}/${month}/${year}`;
 };
 
 const formatDateDisplay = (dateVal) => {
@@ -50,7 +50,7 @@ const getTodayDdMmYyyy = () => {
     const dd = String(today.getDate()).padStart(2, '0');
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const yyyy = today.getFullYear();
-    return `${dd}-${mm}-${yyyy}`;
+    return `${dd}/${mm}/${yyyy}`;
 };
 
 const formatCardCurrency = (val) => {

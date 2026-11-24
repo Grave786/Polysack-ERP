@@ -1,5 +1,6 @@
 import { Printer, X, CheckCircle, FileText } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
+import { formatDateTime } from '../../utils/dateUtils';
 
 export default function PrintInvoiceModal({ isOpen, onClose, invoice }) {
     const user = useAuthStore((state) => state.user);
@@ -9,7 +10,7 @@ export default function PrintInvoiceModal({ isOpen, onClose, invoice }) {
     if (!isOpen || !invoice) return null;
 
     const invoiceNumber = invoice.invoiceNumber || 'INV-000';
-    const invoiceDate = invoice.createdAt ? new Date(invoice.createdAt).toLocaleString() : new Date().toLocaleString();
+    const invoiceDate = formatDateTime(invoice.createdAt || new Date());
     const paymentMode = invoice.paymentMode || 'CASH';
 
     // Customer details

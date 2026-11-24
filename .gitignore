@@ -87,6 +87,7 @@ test-results/
 # =========================
 backend/uploads/
 backend/temp/
+backend/src/scripts
 
 # =========================
 # Frontend

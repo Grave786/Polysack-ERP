@@ -1,4 +1,5 @@
 import { X, ShieldCheck, ShieldAlert, Award, FileText, CheckCircle2, XCircle, AlertCircle, Calendar, User, Package, Layers } from 'lucide-react';
+import { formatDateTime } from '../../utils/dateUtils';
 
 export default function ViewQCInspectionModal({ isOpen, inspection, onClose }) {
     if (!isOpen || !inspection) return null;
@@ -95,7 +96,7 @@ export default function ViewQCInspectionModal({ isOpen, inspection, onClose }) {
                                 : (woObj?.workOrderNumber || inspection.workOrderNumber || '-')}
                         </div>
                         <div className="text-[11px] text-text-muted">
-                            Inspection Date: {inspection.createdAt ? new Date(inspection.createdAt).toLocaleString() : '-'}
+                            Inspection Date: {formatDateTime(inspection.createdAt)}
                         </div>
                         {inspector && (
                             <div className="text-[11px] text-text-muted">

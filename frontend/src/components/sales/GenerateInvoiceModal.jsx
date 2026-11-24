@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { FileText, CheckCircle2, Receipt, AlertCircle, ShoppingCart } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { formatDate } from '../../utils/dateUtils';
 
 export default function GenerateInvoiceModal({ isOpen, onClose, onSuccess }) {
     const [salesOrders, setSalesOrders] = useState([]);
@@ -129,7 +130,7 @@ export default function GenerateInvoiceModal({ isOpen, onClose, onSuccess }) {
                             <div className="flex justify-between items-center">
                                 <span className="text-text-muted">Order Date:</span>
                                 <span className="font-mono font-semibold text-text-main">
-                                    {selectedSO.orderDate ? new Date(selectedSO.orderDate).toLocaleDateString() : '-'}
+                                    {formatDate(selectedSO.orderDate)}
                                 </span>
                             </div>
                             <div className="flex justify-between items-center">

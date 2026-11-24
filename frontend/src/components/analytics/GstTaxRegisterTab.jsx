@@ -15,7 +15,7 @@ const getTodayDdMmYyyy = () => {
     const dd = String(today.getDate()).padStart(2, '0');
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const yyyy = today.getFullYear();
-    return `${dd}-${mm}-${yyyy}`;
+    return `${dd}/${mm}/${yyyy}`;
 };
 
 const GstTaxRegisterTab = forwardRef(function GstTaxRegisterTab(props, ref) {
@@ -137,7 +137,7 @@ const GstTaxRegisterTab = forwardRef(function GstTaxRegisterTab(props, ref) {
 
     const exportCsv = () => {
         const todayStr = getTodayDdMmYyyy();
-        const filename = `executive-audit-report-gst-tax-register-${todayStr}.csv`;
+        const filename = `executive-audit-report-gst-tax-register-${todayStr.replace(/\//g, '-')}.csv`;
 
         const csvLines = [
             [escapeCsvCell('EXECUTIVE AUDIT REPORT - SALES & GST TAX REGISTER')],
@@ -201,7 +201,7 @@ const GstTaxRegisterTab = forwardRef(function GstTaxRegisterTab(props, ref) {
 
     const exportPdf = () => {
         const todayStr = getTodayDdMmYyyy();
-        const filename = `executive-audit-report-gst-tax-register-${todayStr}.pdf`;
+        const filename = `executive-audit-report-gst-tax-register-${todayStr.replace(/\//g, '-')}.pdf`;
 
         generatePdfReport({
             title: 'Sales & GST Tax Register Audit Report',

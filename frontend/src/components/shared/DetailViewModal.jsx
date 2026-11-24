@@ -3,6 +3,7 @@ import { X, Eye, Calendar, Layers, ShieldCheck, Tag, Edit3, Building, MapPin, Ha
 import OperatorWiseProductionTracker from '../production/OperatorWiseProductionTracker';
 import axiosInstance from '../../api/axiosInstance';
 import { useAuthStore } from '../../store/authStore';
+import { formatDate, formatDateTime } from '../../utils/dateUtils';
 
 /**
  * Helper to safely extract value or nested property
@@ -80,17 +81,18 @@ const formatValue = (val, type, fallback = '-') => {
     }
 
     if (type === 'date') {
-        try {
-            return new Date(val).toLocaleDateString('en-IN', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-        } catch {
-            return String(val);
+        if (typeof val === 'string' && /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(val.trim())) {
+            return formatDate(val);
         }
+        return formatDateTime(val);
+    }
+
+    if (type === 'dateOnly') {
+        return formatDate(val);
+    }
+
+    if (type === 'datetime') {
+        return formatDateTime(val);
     }
 
     if (typeof val === 'object') {
@@ -458,13 +460,7 @@ function PoReceiptHistoryViewer({ record }) {
                         <tbody className="divide-y divide-border font-sans">
                             {historyRows.map((row) => {
                                 const receiptDateStr = row.receivedDate || row.createdAt;
-                                const formattedDate = receiptDateStr
-                                    ? new Date(receiptDateStr).toLocaleDateString('en-IN', {
-                                          year: 'numeric',
-                                          month: 'short',
-                                          day: 'numeric'
-                                      })
-                                    : '-';
+                                const formattedDate = receiptDateStr ? formatDate(receiptDateStr) : '-';
 
                                 const locationDisplay = typeof row.receivingLocation === 'object'
                                     ? (row.receivingLocation?.name || row.receivingLocation?.code || '-')
@@ -1353,7 +1349,7 @@ const MASTER_SCHEMAS = {
                 { label: 'Customer', key: (r) => typeof r.customer === 'object' ? (r.customer?.companyName || r.customer?.name) : (r.customer || '-') },
                 { label: 'Complaint Type', key: (r) => (r.complaintType || 'Quality Defect').replace(/_/g, ' ') },
                 { label: 'Status', key: 'status', type: 'status' },
-                { label: 'Date', key: (r) => r.date ? new Date(r.date).toLocaleDateString('en-GB') : '-' },
+                { label: 'Date', key: (r) => r.date ? formatDate(r.date) : '-' },
                 { label: 'Assigned Executive', key: (r) => typeof r.assignedExecutive === 'object' ? (r.assignedExecutive?.name || r.assignedExecutive?.email) : (r.assignedExecutive || '-') }
             ]
         },
@@ -1381,7 +1377,7 @@ const MASTER_SCHEMAS = {
                 { label: 'Customer', key: (r) => typeof r.customer === 'object' ? (r.customer?.companyName || r.customer?.name) : (r.customer || '-') },
                 { label: 'Complaint Type', key: (r) => (r.complaintType || 'Quality Defect').replace(/_/g, ' ') },
                 { label: 'Status', key: 'status', type: 'status' },
-                { label: 'Date', key: (r) => r.date ? new Date(r.date).toLocaleDateString('en-GB') : '-' },
+                { label: 'Date', key: (r) => r.date ? formatDate(r.date) : '-' },
                 { label: 'Assigned Executive', key: (r) => typeof r.assignedExecutive === 'object' ? (r.assignedExecutive?.name || r.assignedExecutive?.email) : (r.assignedExecutive || '-') }
             ]
         },
@@ -1774,11 +1770,7 @@ export default function DetailViewModal({
                             else if (typeof value === 'object') {
                                 displayVal = value.name || value.companyName || value.code || '-';
                             } else if (key.toLowerCase().includes('date') && !isNaN(Date.parse(value))) {
-                                try {
-                                    displayVal = new Date(value).toLocaleDateString('en-GB').replace(/\//g, '-');
-                                } catch {
-                                    displayVal = String(value);
-                                }
+                                displayVal = formatDate(value);
                             }
                             return (
                                 <div

@@ -1,4 +1,5 @@
 import { ShoppingCart, Calendar, User, MapPin, Package, CheckCircle2, FileText } from 'lucide-react';
+import { formatDate } from '../../utils/dateUtils';
 
 export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGenerateInvoice, onEdit }) {
     if (!isOpen || !salesOrder) return null;
@@ -61,10 +62,10 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
 
                     <div className="space-y-1.5 sm:text-right">
                         <div className="text-[11px] text-text-muted">
-                            Order Date: <span className="font-mono font-bold text-text-main">{salesOrder.orderDate ? new Date(salesOrder.orderDate).toLocaleDateString() : '-'}</span>
+                            Order Date: <span className="font-mono font-bold text-text-main">{formatDate(salesOrder.orderDate)}</span>
                         </div>
                         <div className="text-[11px] text-text-muted">
-                            Delivery Due: <span className="font-mono font-bold text-primary">{salesOrder.deliveryDue ? new Date(salesOrder.deliveryDue).toLocaleDateString() : '-'}</span>
+                            Delivery Due: <span className="font-mono font-bold text-primary">{formatDate(salesOrder.deliveryDue)}</span>
                         </div>
                         {salesOrder.dispatchLocation && (
                             <div className="text-[11px] text-text-muted">

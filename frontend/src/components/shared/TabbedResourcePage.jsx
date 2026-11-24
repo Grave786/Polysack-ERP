@@ -151,7 +151,7 @@ export const composeFinishedBagTitle = (data = {}, categoriesList = [], bagShape
     // Capacity
     const cap = (data.bagCapacity !== undefined && data.bagCapacity !== '' && data.bagCapacity !== null)
         ? Number(data.bagCapacity)
-        : null;
+        : (data.capacity !== undefined && data.capacity !== '' && data.capacity !== null ? Number(data.capacity) : null);
     const capacityStr = (cap !== null && !isNaN(cap) && cap > 0) ? `${cap}Kg` : '';
 
     // Build main title: [Shape] [Category/Type] [baseLabel] [Capacity]
@@ -171,17 +171,17 @@ export const composeFinishedBagTitle = (data = {}, categoriesList = [], bagShape
     const dimUnit = data.dimensions?.unit || data.dimensionUnit || 'cm';
     const w = (data.dimensions?.width !== undefined && data.dimensions?.width !== '' && data.dimensions?.width !== null)
         ? Number(data.dimensions.width)
-        : null;
+        : (data.width !== undefined && data.width !== '' && data.width !== null ? Number(data.width) : null);
     const l = (data.dimensions?.length !== undefined && data.dimensions?.length !== '' && data.dimensions?.length !== null)
         ? Number(data.dimensions.length)
-        : null;
+        : (data.length !== undefined && data.length !== '' && data.length !== null ? Number(data.length) : null);
     const dimStr = (w !== null && l !== null && !isNaN(w) && !isNaN(l) && (w > 0 || l > 0))
         ? `${w}x${l}${dimUnit}`
         : '';
 
     const gsm = (data.fabricGSM !== undefined && data.fabricGSM !== '' && data.fabricGSM !== null)
         ? Number(data.fabricGSM)
-        : null;
+        : (data.gsm !== undefined && data.gsm !== '' && data.gsm !== null ? Number(data.gsm) : null);
     const gsmStr = (gsm !== null && !isNaN(gsm) && gsm > 0) ? `${gsm} GSM` : '';
 
     let colorStr = '';
@@ -1555,7 +1555,7 @@ export default function TabbedResourcePage({
                 return !isNonDataHeader(c.header);
             });
 
-            // 4. Formatting helpers: IST Date (dd-mm-yyyy)
+            // 4. Formatting helpers: IST Date (dd/mm/yyyy)
             const formatDateIST = (val) => {
                 if (!val) return '';
                 const d = (val instanceof Date) ? val : new Date(val);
@@ -1570,12 +1570,12 @@ export default function TabbedResourcePage({
                     const day = parts.find((p) => p.type === 'day')?.value || String(d.getDate()).padStart(2, '0');
                     const month = parts.find((p) => p.type === 'month')?.value || String(d.getMonth() + 1).padStart(2, '0');
                     const year = parts.find((p) => p.type === 'year')?.value || String(d.getFullYear());
-                    return `${day}-${month}-${year}`;
+                    return `${day}/${month}/${year}`;
                 } catch {
                     const day = String(d.getDate()).padStart(2, '0');
                     const month = String(d.getMonth() + 1).padStart(2, '0');
                     const year = d.getFullYear();
-                    return `${day}-${month}-${year}`;
+                    return `${day}/${month}/${year}`;
                 }
             };
 
@@ -1826,17 +1826,50 @@ export default function TabbedResourcePage({
 
             payload.bagShape = formData.bagShape || '';
 
-            if (formData.fabricGSM) payload.fabricGSM = Number(formData.fabricGSM);
-            if (formData.bagCapacity) payload.bagCapacity = Number(formData.bagCapacity);
+            const gsmVal = formData.fabricGSM !== undefined && formData.fabricGSM !== '' 
+                ? formData.fabricGSM 
+                : (formData.gsm !== undefined && formData.gsm !== '' ? formData.gsm : null);
+            if (gsmVal !== null) {
+                payload.fabricGSM = Number(gsmVal);
+                payload.gsm = Number(gsmVal);
+            } else {
+                payload.fabricGSM = null;
+                payload.gsm = null;
+            }
+
+            const capVal = formData.bagCapacity !== undefined && formData.bagCapacity !== '' 
+                ? formData.bagCapacity 
+                : (formData.capacity !== undefined && formData.capacity !== '' ? formData.capacity : null);
+            if (capVal !== null) {
+                payload.bagCapacity = Number(capVal);
+                payload.capacity = Number(capVal);
+            }
+
+            const weightVal = formData.bagWeightGms !== undefined && formData.bagWeightGms !== '' 
+                ? formData.bagWeightGms 
+                : (formData.tareWeightGram !== undefined && formData.tareWeightGram !== '' 
+                    ? formData.tareWeightGram 
+                    : (formData.bagWeight !== undefined && formData.bagWeight !== '' ? formData.bagWeight : null));
+            if (weightVal !== null) {
+                payload.bagWeightGms = Number(weightVal);
+                payload.tareWeightGram = Number(weightVal);
+                payload.bagWeight = Number(weightVal);
+            }
+
             if (formData.pricePerBag) payload.pricePerBag = Number(formData.pricePerBag);
             const selectedDimUnit = formData.dimensions?.unit || formData.dimensionUnit || 'cm';
-            if (formData.dimensions) {
-                payload.dimensions = {
-                    width: Number(formData.dimensions.width || 0),
-                    length: Number(formData.dimensions.length || 0),
-                    unit: selectedDimUnit
-                };
-            }
+            const wVal = formData.dimensions?.width !== undefined && formData.dimensions?.width !== '' 
+                ? formData.dimensions.width 
+                : (formData.width !== undefined && formData.width !== '' ? formData.width : 0);
+            const lVal = formData.dimensions?.length !== undefined && formData.dimensions?.length !== '' 
+                ? formData.dimensions.length 
+                : (formData.length !== undefined && formData.length !== '' ? formData.length : 0);
+
+            payload.dimensions = {
+                width: Number(wVal || 0),
+                length: Number(lVal || 0),
+                unit: selectedDimUnit
+            };
             payload.dimensionUnit = selectedDimUnit;
 
             // Auto-compose descriptive Finished Bag title from classification fields
@@ -1965,6 +1998,13 @@ export default function TabbedResourcePage({
             gracePeriodMinutes: 15,
             isActive: true,
             colors: [],
+            fabricGSM: '',
+            gsm: '',
+            bagCapacity: '',
+            capacity: '',
+            bagWeightGms: '',
+            tareWeightGram: '',
+            bagWeight: '',
             dimensionUnit: 'cm',
             dimensions: { width: '', length: '', unit: 'cm' },
             status: activeTabKey === 'customers' ? 'ACTIVE_CUSTOMER' : (activeTabKey === 'machines' ? 'AVAILABLE' : 'Active')
@@ -2051,6 +2091,16 @@ export default function TabbedResourcePage({
         }
 
         const editDimUnit = row.dimensionUnit || row.dimensions?.unit || 'cm';
+        const gsmValue = row.fabricGSM !== undefined && row.fabricGSM !== null ? row.fabricGSM : (row.gsm !== undefined && row.gsm !== null ? row.gsm : '');
+        const widthValue = row.dimensions?.width !== undefined && row.dimensions?.width !== null ? row.dimensions.width : (row.width !== undefined && row.width !== null ? row.width : '');
+        const lengthValue = row.dimensions?.length !== undefined && row.dimensions?.length !== null ? row.dimensions.length : (row.length !== undefined && row.length !== null ? row.length : '');
+        const capValue = row.bagCapacity !== undefined && row.bagCapacity !== null ? row.bagCapacity : (row.capacity !== undefined && row.capacity !== null ? row.capacity : '');
+        const weightValue = row.bagWeightGms !== undefined && row.bagWeightGms !== null
+            ? row.bagWeightGms
+            : (row.tareWeightGram !== undefined && row.tareWeightGram !== null
+                ? row.tareWeightGram
+                : (row.bagWeight !== undefined && row.bagWeight !== null ? row.bagWeight : ''));
+
         setFormData({
             ...row,
             // IMPORTANT: never fall back to row.name here — row.name is the full auto-composed
@@ -2063,8 +2113,19 @@ export default function TabbedResourcePage({
             dimensionUnit: editDimUnit,
             dimensions: {
                 ...(row.dimensions || {}),
+                width: widthValue,
+                length: lengthValue,
                 unit: editDimUnit
             },
+            width: widthValue,
+            length: lengthValue,
+            fabricGSM: gsmValue,
+            gsm: gsmValue,
+            bagCapacity: capValue,
+            capacity: capValue,
+            bagWeightGms: weightValue,
+            tareWeightGram: weightValue,
+            bagWeight: weightValue,
             currentOperators: (Array.isArray(row.currentOperators) && row.currentOperators.length > 0)
                 ? row.currentOperators.map((o) => (typeof o === 'object' ? o._id : o))
                 : (row.currentOperator ? [typeof row.currentOperator === 'object' ? row.currentOperator._id : row.currentOperator] : []),
@@ -3628,6 +3689,24 @@ export default function TabbedResourcePage({
                         </div>
                     </div>
 
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            GSM
+                        </label>
+                        <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="e.g. 45"
+                            value={formData.fabricGSM !== undefined && formData.fabricGSM !== null ? formData.fabricGSM : (formData.gsm !== undefined && formData.gsm !== null ? formData.gsm : '')}
+                            onChange={(e) => {
+                                handleInputChange('fabricGSM', e.target.value);
+                                handleInputChange('gsm', e.target.value);
+                            }}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
+                        />
+                    </div>
+
                     <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
@@ -3673,8 +3752,11 @@ export default function TabbedResourcePage({
                                     type="number"
                                     step="any"
                                     placeholder={(formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'inch' ? '18' : '45'}
-                                    value={formData.dimensions?.width !== undefined && formData.dimensions?.width !== null ? formData.dimensions.width : ''}
-                                    onChange={(e) => handleNestedChange('dimensions', 'width', e.target.value)}
+                                    value={formData.dimensions?.width !== undefined && formData.dimensions?.width !== null ? formData.dimensions.width : (formData.width !== undefined && formData.width !== null ? formData.width : '')}
+                                    onChange={(e) => {
+                                        handleNestedChange('dimensions', 'width', e.target.value);
+                                        handleInputChange('width', e.target.value);
+                                    }}
                                     className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
                                 />
                             </div>
@@ -3687,8 +3769,11 @@ export default function TabbedResourcePage({
                                     type="number"
                                     step="any"
                                     placeholder={(formData.dimensions?.unit || formData.dimensionUnit || 'cm') === 'inch' ? '30' : '75'}
-                                    value={formData.dimensions?.length !== undefined && formData.dimensions?.length !== null ? formData.dimensions.length : ''}
-                                    onChange={(e) => handleNestedChange('dimensions', 'length', e.target.value)}
+                                    value={formData.dimensions?.length !== undefined && formData.dimensions?.length !== null ? formData.dimensions.length : (formData.length !== undefined && formData.length !== null ? formData.length : '')}
+                                    onChange={(e) => {
+                                        handleNestedChange('dimensions', 'length', e.target.value);
+                                        handleInputChange('length', e.target.value);
+                                    }}
                                     className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
                                 />
                             </div>
@@ -3705,8 +3790,11 @@ export default function TabbedResourcePage({
                                 step="0.001"
                                 min="0"
                                 placeholder="50"
-                                value={formData.bagCapacity || formData.capacity || ''}
-                                onChange={(e) => handleInputChange('bagCapacity', e.target.value)}
+                                value={formData.bagCapacity !== undefined && formData.bagCapacity !== null && formData.bagCapacity !== '' ? formData.bagCapacity : (formData.capacity !== undefined && formData.capacity !== null ? formData.capacity : '')}
+                                onChange={(e) => {
+                                    handleInputChange('bagCapacity', e.target.value);
+                                    handleInputChange('capacity', e.target.value);
+                                }}
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                             />
                         </div>
@@ -3720,10 +3808,11 @@ export default function TabbedResourcePage({
                                 step="0.001"
                                 min="0"
                                 placeholder="e.g. 75"
-                                value={formData.bagWeightGms || formData.tareWeightGram || ''}
+                                value={formData.bagWeightGms !== undefined && formData.bagWeightGms !== null && formData.bagWeightGms !== '' ? formData.bagWeightGms : (formData.tareWeightGram !== undefined && formData.tareWeightGram !== null && formData.tareWeightGram !== '' ? formData.tareWeightGram : (formData.bagWeight !== undefined && formData.bagWeight !== null ? formData.bagWeight : ''))}
                                 onChange={(e) => {
                                     handleInputChange('bagWeightGms', e.target.value);
                                     handleInputChange('tareWeightGram', e.target.value);
+                                    handleInputChange('bagWeight', e.target.value);
                                 }}
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                             />

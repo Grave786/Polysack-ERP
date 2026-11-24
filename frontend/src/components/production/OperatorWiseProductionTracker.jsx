@@ -18,25 +18,13 @@ import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../store/authStore';
 import { isTenantAdmin, checkIsSuperAdmin } from '../../utils/permissionUtils';
+import { formatDate } from '../../utils/dateUtils';
 
 /**
- * Format IST Date for display (e.g., "30 Sep 2026") without toISOString() timezone shift
+ * Format IST Date for display (e.g., "30/09/2026")
  */
 const formatIstDate = (dateVal) => {
-    if (!dateVal) return '-';
-    try {
-        const d = (typeof dateVal === 'string' && dateVal.length === 10)
-            ? new Date(`${dateVal}T00:00:00.000+05:30`)
-            : new Date(dateVal);
-        return new Intl.DateTimeFormat('en-IN', {
-            timeZone: 'Asia/Kolkata',
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric'
-        }).format(d);
-    } catch {
-        return String(dateVal);
-    }
+    return formatDate(dateVal);
 };
 
 /**

@@ -150,17 +150,26 @@ const createFinishedGood = async (req, res) => {
             unit: selectedUnit
         } : undefined;
 
+        const gsmVal = fabricGSM !== undefined ? fabricGSM : req.body.gsm;
+        const capVal = bagCapacity !== undefined ? bagCapacity : req.body.capacity;
+        const weightVal = req.body.bagWeightGms !== undefined ? req.body.bagWeightGms : (req.body.tareWeightGram !== undefined ? req.body.tareWeightGram : req.body.bagWeight);
+        const numWeight = (weightVal !== undefined && weightVal !== '' && weightVal !== null && !isNaN(Number(weightVal))) ? Number(weightVal) : 0;
+
         const finishedGood = new FinishedGood({
             code: formattedCode,
             name: formattedName,
+            baseName: req.body.baseName || '',
             category,
             uom,
             defaultLocation: defaultLocation || null,
-            fabricGSM: fabricGSM !== undefined ? Number(fabricGSM) : undefined,
+            fabricGSM: (gsmVal !== undefined && gsmVal !== '' && gsmVal !== null && !isNaN(Number(gsmVal))) ? Number(gsmVal) : undefined,
             bagShape,
             dimensions: formattedDimensions,
             dimensionUnit: selectedUnit,
-            bagCapacity: bagCapacity !== undefined ? Number(bagCapacity) : undefined,
+            bagCapacity: (capVal !== undefined && capVal !== '' && capVal !== null && !isNaN(Number(capVal))) ? Number(capVal) : undefined,
+            bagWeightGms: numWeight,
+            tareWeightGram: numWeight,
+            bagType: req.body.bagType || 'Laminated PP Woven Sack',
             pricePerBag: pricePerBag !== undefined ? Number(pricePerBag) : 0,
             inks: Array.isArray(req.body.inks) ? req.body.inks.filter(Boolean) : (Array.isArray(req.body.inksUsed) ? req.body.inksUsed : []),
             storageBayLocation: req.body.storageBayLocation !== undefined ? req.body.storageBayLocation : (req.body.warehouseLocation || ''),
@@ -539,7 +548,10 @@ const updateFinishedGood = async (req, res) => {
             }
         }
 
-        if (fabricGSM !== undefined) finishedGood.fabricGSM = Number(fabricGSM);
+        const gsmVal = fabricGSM !== undefined ? fabricGSM : req.body.gsm;
+        if (gsmVal !== undefined) {
+            finishedGood.fabricGSM = (gsmVal !== '' && gsmVal !== null && !isNaN(Number(gsmVal))) ? Number(gsmVal) : undefined;
+        }
         if (bagShape !== undefined) finishedGood.bagShape = bagShape;
         if (dimensions !== undefined) {
             const unit = dimensions.unit || dimensionUnit || finishedGood.dimensionUnit || finishedGood.dimensions?.unit || 'cm';
@@ -555,8 +567,19 @@ const updateFinishedGood = async (req, res) => {
                 finishedGood.dimensions.unit = dimensionUnit;
             }
         }
-        if (bagCapacity !== undefined) finishedGood.bagCapacity = Number(bagCapacity);
+        const capVal = bagCapacity !== undefined ? bagCapacity : req.body.capacity;
+        if (capVal !== undefined) {
+            finishedGood.bagCapacity = (capVal !== '' && capVal !== null && !isNaN(Number(capVal))) ? Number(capVal) : undefined;
+        }
+        const weightVal = req.body.bagWeightGms !== undefined ? req.body.bagWeightGms : (req.body.tareWeightGram !== undefined ? req.body.tareWeightGram : req.body.bagWeight);
+        if (weightVal !== undefined) {
+            const numWeight = (weightVal !== '' && weightVal !== null && !isNaN(Number(weightVal))) ? Number(weightVal) : 0;
+            finishedGood.bagWeightGms = numWeight;
+            finishedGood.tareWeightGram = numWeight;
+        }
         if (pricePerBag !== undefined) finishedGood.pricePerBag = Number(pricePerBag);
+        if (req.body.baseName !== undefined) finishedGood.baseName = req.body.baseName;
+        if (req.body.bagType !== undefined) finishedGood.bagType = req.body.bagType;
         if (req.body.inks !== undefined) {
             finishedGood.inks = Array.isArray(req.body.inks) ? req.body.inks.filter(Boolean) : [];
         } else if (req.body.inksUsed !== undefined) {

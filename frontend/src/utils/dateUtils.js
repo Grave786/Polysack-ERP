@@ -39,3 +39,55 @@ export const formatToLocalDateString = (dateInput) => {
     const day = String(d.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
 };
+
+/**
+ * Formats a date value into dd/mm/yyyy string.
+ * Zero-pads day and month.
+ * Avoids timezone shift issues for date-only strings (YYYY-MM-DD or midnight ISO).
+ * Returns "-" for null, undefined or invalid dates.
+ */
+export const formatDate = (val) => {
+    if (!val) return '-';
+
+    if (typeof val === 'string') {
+        const trimmed = val.trim();
+        if (!trimmed) return '-';
+
+        // Check if string matches YYYY-MM-DD (e.g. "2026-09-28" or "2026-09-28T00:00:00...")
+        const dateOnlyMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?(?:Z|[+-]\d{2}:?\d{2})?)?$/);
+        if (dateOnlyMatch) {
+            const [, y, m, d] = dateOnlyMatch;
+            return `${d}/${m}/${y}`;
+        }
+    }
+
+    const d = (val instanceof Date) ? val : new Date(val);
+    if (isNaN(d.getTime())) return '-';
+
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}/${month}/${year}`;
+};
+
+/**
+ * Formats a date/time value into "dd/mm/yyyy, hh:mm AM/PM" string.
+ * Returns "-" for null, undefined or invalid dates.
+ */
+export const formatDateTime = (val) => {
+    if (!val) return '-';
+    const d = (val instanceof Date) ? val : new Date(val);
+    if (isNaN(d.getTime())) return '-';
+
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+
+    let hours = d.getHours();
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? String(hours).padStart(2, '0') : '12';
+
+    return `${day}/${month}/${year}, ${hours}:${minutes} ${ampm}`;
+};

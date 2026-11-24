@@ -24,33 +24,15 @@ import axiosInstance from '../api/axiosInstance';
 import { useAuthStore } from '../store/authStore';
 import { isTenantAdmin } from '../utils/permissionUtils';
 import toast from 'react-hot-toast';
+import { formatDate, formatDateTime } from '../utils/dateUtils';
 
 // ── IST Date Formatting Helpers (Strictly NO toISOString) ─────────────────────
 const formatISTDate = (dateVal) => {
-    if (!dateVal) return '-';
-    const d = new Date(dateVal);
-    if (isNaN(d.getTime())) return '-';
-    return d.toLocaleDateString('en-IN', {
-        timeZone: 'Asia/Kolkata',
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric'
-    });
+    return formatDate(dateVal);
 };
 
 const formatISTDateTime = (dateVal) => {
-    if (!dateVal) return '-';
-    const d = new Date(dateVal);
-    if (isNaN(d.getTime())) return '-';
-    return d.toLocaleString('en-IN', {
-        timeZone: 'Asia/Kolkata',
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true
-    });
+    return formatDateTime(dateVal);
 };
 
 const getWaitingTime = (dateVal) => {

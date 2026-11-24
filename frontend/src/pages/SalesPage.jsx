@@ -7,6 +7,7 @@ import GenerateInvoiceModal from '../components/sales/GenerateInvoiceModal';
 import RecordPaymentModal from '../components/sales/RecordPaymentModal';
 import ViewSalesOrderModal from '../components/sales/ViewSalesOrderModal';
 import ViewInvoiceModal from '../components/sales/ViewInvoiceModal';
+import { formatDate } from '../utils/dateUtils';
 
 export default function SalesPage() {
     const [searchParams] = useSearchParams();
@@ -63,19 +64,19 @@ export default function SalesPage() {
         },
         {
             header: 'ORDER DATE',
-            exportValue: (row) => row.orderDate || '',
+            exportValue: (row) => formatDate(row.orderDate),
             render: (row) => (
                 <span className="font-mono text-text-muted text-xs">
-                    {row.orderDate ? new Date(row.orderDate).toLocaleDateString() : '-'}
+                    {formatDate(row.orderDate)}
                 </span>
             )
         },
         {
             header: 'DELIVERY DUE',
-            exportValue: (row) => row.deliveryDue || '',
+            exportValue: (row) => formatDate(row.deliveryDue),
             render: (row) => (
                 <span className="font-mono font-semibold text-text-main text-xs">
-                    {row.deliveryDue ? new Date(row.deliveryDue).toLocaleDateString() : '-'}
+                    {formatDate(row.deliveryDue)}
                 </span>
             )
         },
@@ -259,10 +260,10 @@ export default function SalesPage() {
         },
         {
             header: 'INVOICE DATE',
-            exportValue: (row) => row.invoiceDate || '',
+            exportValue: (row) => formatDate(row.invoiceDate),
             render: (row) => (
                 <span className="font-mono text-text-muted text-xs">
-                    {row.invoiceDate ? new Date(row.invoiceDate).toLocaleDateString() : '-'}
+                    {formatDate(row.invoiceDate)}
                 </span>
             )
         },

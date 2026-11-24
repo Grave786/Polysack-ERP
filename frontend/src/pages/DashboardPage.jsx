@@ -212,7 +212,7 @@ export default function DashboardPage() {
             const d = new Date(today);
             d.setDate(today.getDate() - i);
             const isoDate = d.toISOString().split('T')[0];
-            const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
+            const dayLabel = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'numeric' });
 
             let dailyBags = 0;
             workOrders.forEach((wo) => {

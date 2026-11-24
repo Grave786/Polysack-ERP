@@ -1,4 +1,5 @@
 import { Receipt, Printer, CreditCard, CheckCircle2, User } from 'lucide-react';
+import { formatDate } from '../../utils/dateUtils';
 
 export default function ViewInvoiceModal({ isOpen, invoice, onClose, onRecordPayment }) {
     if (!isOpen || !invoice) return null;
@@ -82,7 +83,7 @@ export default function ViewInvoiceModal({ isOpen, invoice, onClose, onRecordPay
 
                     <div className="space-y-1 sm:text-right">
                         <div className="text-[11px] text-text-muted">
-                            Invoice Date: <span className="font-mono font-bold text-text-main">{invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString() : '-'}</span>
+                            Invoice Date: <span className="font-mono font-bold text-text-main">{formatDate(invoice.invoiceDate)}</span>
                         </div>
                         {invoice.salesOrder && (
                             <div className="text-[11px] text-text-muted">

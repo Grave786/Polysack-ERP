@@ -16,6 +16,7 @@ import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
 import { isTenantAdmin, checkIsSuperAdmin } from '../utils/permissionUtils';
+import { formatDate } from '../utils/dateUtils';
 
 // ── Attribute type keys matching rawMaterialAttributes.constants.js ──────────
 const ATTR = {
@@ -955,10 +956,10 @@ export default function CustomerCrmPage() {
         },
         {
             header: 'DATE',
-            exportValue: (row) => row.date || row.createdAt || '',
+            exportValue: (row) => formatDate(row.date || row.createdAt),
             render: (row) => {
                 const d = row.date || row.createdAt;
-                return <span className="font-mono text-xs text-text-main">{d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</span>;
+                return <span className="font-mono text-xs text-text-main">{formatDate(d)}</span>;
             },
             sortable: true
         },
@@ -1152,10 +1153,10 @@ export default function CustomerCrmPage() {
         },
         {
             header: 'ENQUIRY DATE',
-            exportValue: (row) => row.enquiryDate || row.createdAt || '',
+            exportValue: (row) => formatDate(row.enquiryDate || row.createdAt),
             render: (row) => {
                 const d = row.enquiryDate || row.createdAt;
-                return <span className="font-mono text-xs text-text-main">{d ? new Date(d).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</span>;
+                return <span className="font-mono text-xs text-text-main">{formatDate(d)}</span>;
             },
             sortable: true
         },

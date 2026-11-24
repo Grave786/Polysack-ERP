@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Printer, X, FileText } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import { useAuthStore } from '../../store/authStore';
+import { formatDate } from '../../utils/dateUtils';
 
 export default function PrintPOModal({ isOpen, onClose, po }) {
     const user = useAuthStore((state) => state.user);
@@ -43,8 +44,8 @@ export default function PrintPOModal({ isOpen, onClose, po }) {
     const terms = activePo.termsAndConditions || activePo.terms || null;
 
     const poNumber = activePo.poNumber || 'PO-0000';
-    const poDate = activePo.poDate ? new Date(activePo.poDate).toLocaleDateString() : (activePo.createdAt ? new Date(activePo.createdAt).toLocaleDateString() : new Date().toLocaleDateString());
-    const expectedDelivery = activePo.expectedDelivery ? new Date(activePo.expectedDelivery).toLocaleDateString() : 'N/A';
+    const poDate = formatDate(activePo.poDate || activePo.createdAt || new Date());
+    const expectedDelivery = activePo.expectedDelivery ? formatDate(activePo.expectedDelivery) : 'N/A';
 
     const supplierName = typeof activePo.supplier === 'object' ? (activePo.supplier?.companyName || activePo.supplier?.name) : (activePo.supplier || 'N/A');
     const supplierContact = typeof activePo.supplier === 'object' ? (activePo.supplier?.contactPerson || activePo.supplier?.contactPersonName || '-') : '-';

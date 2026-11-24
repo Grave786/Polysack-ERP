@@ -8,7 +8,7 @@ import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
 import { isTenantAdmin, checkIsSuperAdmin } from '../utils/permissionUtils';
-import { getTodayLocalDateString } from '../utils/dateUtils';
+import { getTodayLocalDateString, formatDate } from '../utils/dateUtils';
 
 export default function DispatchPage() {
     const user = useAuthStore((state) => state.user);
@@ -420,15 +420,12 @@ export default function DispatchPage() {
         },
         {
             header: 'DISPATCH DATE',
-            exportValue: (row) => {
-                const d = row.dispatchDate || row.createdAt;
-                return d ? new Date(d).toLocaleDateString('en-IN') : '';
-            },
+            exportValue: (row) => formatDate(row.dispatchDate || row.createdAt),
             render: (row) => {
                 const d = row.dispatchDate || row.createdAt;
                 return (
                     <span className="font-mono font-bold text-text-main text-xs whitespace-nowrap">
-                        {d ? new Date(d).toLocaleDateString('en-IN') : '-'}
+                        {formatDate(d)}
                     </span>
                 );
             },
@@ -649,10 +646,10 @@ export default function DispatchPage() {
         },
         {
             header: 'DISPATCH DATE',
-            exportValue: (row) => row.dispatchDate ? new Date(row.dispatchDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '',
+            exportValue: (row) => formatDate(row.dispatchDate),
             render: (row) => (
                 <span className="font-mono text-xs text-text-main whitespace-nowrap">
-                    {row.dispatchDate ? new Date(row.dispatchDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-'}
+                    {formatDate(row.dispatchDate)}
                 </span>
             ),
             sortable: true
@@ -841,7 +838,7 @@ export default function DispatchPage() {
             header: 'POD RECEIVER & DATE',
             exportValue: (row) => {
                 const receiver = row.podReceiverName || '-';
-                const date = row.podConfirmedDate ? new Date(row.podConfirmedDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-';
+                const date = formatDate(row.podConfirmedDate);
                 return `Recd By: ${receiver} on ${date}`;
             },
             render: (row) => (
@@ -851,7 +848,7 @@ export default function DispatchPage() {
                     </div>
                     {row.podConfirmedDate && (
                         <div className="font-mono text-[10px] text-emerald-600 dark:text-emerald-400">
-                            {new Date(row.podConfirmedDate).toLocaleDateString('en-GB').replace(/\//g, '-')}
+                            {formatDate(row.podConfirmedDate)}
                         </div>
                     )}
                 </div>
@@ -962,11 +959,11 @@ export default function DispatchPage() {
                 list.forEach((r) => {
                     const row = [
                         `"${(r.dispatchNumber || '').replace(/"/g, '""')}"`,
-                        `"${r.dispatchDate ? new Date(r.dispatchDate).toLocaleDateString('en-GB').replace(/\//g, '-') : ''}"`,
+                        `"${r.dispatchDate ? formatDate(r.dispatchDate) : ''}"`,
                         `"${(r.sourceType === 'POS_INVOICE' ? 'POS Counter Sale' : 'Sales Order').replace(/"/g, '""')}"`,
                         `"${(r.referenceNumber || '').replace(/"/g, '""')}"`,
-                        `"${r.orderDate ? new Date(r.orderDate).toLocaleDateString('en-GB').replace(/\//g, '-') : ''}"`,
-                        `"${r.deliveryDueDate ? new Date(r.deliveryDueDate).toLocaleDateString('en-GB').replace(/\//g, '-') : ''}"`,
+                        `"${r.orderDate ? formatDate(r.orderDate) : ''}"`,
+                        `"${r.deliveryDueDate ? formatDate(r.deliveryDueDate) : ''}"`,
                         `"${(r.customerName || '').replace(/"/g, '""')}"`,
                         `"${(r.customerCode || '').replace(/"/g, '""')}"`,
                         `"${(r.customerGstin || '').replace(/"/g, '""')}"`,
@@ -989,7 +986,7 @@ export default function DispatchPage() {
                         `"${(r.deliveryStatus || '').replace(/"/g, '""')}"`,
                         `"${(r.podReceiverName || '').replace(/"/g, '""')}"`,
                         `"${(r.podReceiverPhone || '').replace(/"/g, '""')}"`,
-                        `"${r.podConfirmedDate ? new Date(r.podConfirmedDate).toLocaleDateString('en-GB').replace(/\//g, '-') : ''}"`,
+                        `"${r.podConfirmedDate ? formatDate(r.podConfirmedDate) : ''}"`,
                         `"${(r.dispatchedBy || '').replace(/"/g, '""')}"`,
                         `"${(r.remarks || '').replace(/"/g, '""')}"`
                     ];
@@ -1039,20 +1036,20 @@ export default function DispatchPage() {
                 const headers = ['Dispatch #', 'Date', 'Ref / SO #', 'Customer', 'Product / Specs', 'Qty (Bags)', 'Transporter & Vehicle', 'Status', 'POD Confirmed'];
                 const rows = list.map((r) => [
                     r.dispatchNumber || '-',
-                    r.dispatchDate ? new Date(r.dispatchDate).toLocaleDateString('en-GB').replace(/\//g, '-') : '-',
+                    formatDate(r.dispatchDate),
                     r.referenceNumber || '-',
                     r.customerName || '-',
                     `${r.productName || '-'}${r.fabricGsm !== '-' ? ' (' + r.fabricGsm + ')' : ''}`,
                     `${Number(r.dispatchedQuantity || 0).toLocaleString('en-IN')} ${r.unit || 'Bags'}`,
                     `${r.transporter || '-'}\n${r.vehicleNumber || '-'}`,
                     (r.deliveryStatus || 'IN_TRANSIT').replace(/_/g, ' '),
-                    r.podConfirmedDate ? `${r.podReceiverName || 'Received'} on ${new Date(r.podConfirmedDate).toLocaleDateString('en-GB').replace(/\//g, '-')}` : 'Pending'
+                    r.podConfirmedDate ? `${r.podReceiverName || 'Received'} on ${formatDate(r.podConfirmedDate)}` : 'Pending'
                 ]);
 
                 generatePdfReport({
                     title: 'Detailed Delivery & Dispatch Register',
-                    subtitle: `Outward Logistics, Transporter & Delivery Register • Period: ${startDate ? new Date(startDate).toLocaleDateString('en-GB').replace(/\//g, '-') : 'All'} to ${endDate ? new Date(endDate).toLocaleDateString('en-GB').replace(/\//g, '-') : 'Today'}`,
-                    generatedDate: new Date().toLocaleDateString('en-GB').replace(/\//g, '-'),
+                    subtitle: `Outward Logistics, Transporter & Delivery Register • Period: ${startDate ? formatDate(startDate) : 'All'} to ${endDate ? formatDate(endDate) : 'Today'}`,
+                    generatedDate: formatDate(new Date()),
                     filename: `Delivery_Register_${Date.now()}.pdf`,
                     summaryCards,
                     sections: [

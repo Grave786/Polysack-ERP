@@ -6,6 +6,7 @@ import { Building2, ChevronDown, ShieldCheck, Bell, BellOff, LogOut, Loader2, Ch
 import axiosInstance from '../../api/axiosInstance';
 import { hasModulePermission, checkIsSuperAdmin, isTenantAdmin } from '../../utils/permissionUtils';
 import toast from 'react-hot-toast';
+import { formatDate } from '../../utils/dateUtils';
 
 // Helper to detect 24-character hexadecimal MongoDB ObjectId
 const isMongoObjectId = (val) => {
@@ -65,7 +66,7 @@ export default function Topbar({ onToggleSidebar }) {
         if (diff < 60) return 'Just now';
         if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
         if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-        return new Date(dateStr).toLocaleDateString();
+        return formatDate(dateStr);
     };
 
     // Fetch System Notifications (Low Stock alerts & PO Approvals) - strictly for tenant users

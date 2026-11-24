@@ -3,6 +3,7 @@ import { Activity, Flame, Layers, Package, TrendingUp, TrendingDown, RefreshCw, 
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { generatePdfReport } from '../../utils/pdfExportUtils';
+import { formatDate } from '../../utils/dateUtils';
 
 const escapeCsvCell = (val) => {
     if (val === undefined || val === null) return '""';
@@ -17,7 +18,7 @@ const formatCsvDate = (dateVal) => {
     const day = String(d.getDate()).padStart(2, '0');
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const year = d.getFullYear();
-    return `${day}-${month}-${year}`;
+    return `${day}/${month}/${year}`;
 };
 
 const getTodayDdMmYyyy = () => {
@@ -25,7 +26,7 @@ const getTodayDdMmYyyy = () => {
     const dd = String(today.getDate()).padStart(2, '0');
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const yyyy = today.getFullYear();
-    return `${dd}-${mm}-${yyyy}`;
+    return `${dd}/${mm}/${yyyy}`;
 };
 
 const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
@@ -86,7 +87,7 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
 
     const exportCsv = () => {
         const todayStr = getTodayDdMmYyyy();
-        const filename = `executive-audit-report-production-yield-${todayStr}.csv`;
+        const filename = `executive-audit-report-production-yield-${todayStr.replace(/\//g, '-')}.csv`;
 
         const csvLines = [
             [escapeCsvCell('EXECUTIVE AUDIT REPORT - PRODUCTION YIELD & SCRAP RECOVERY')],
@@ -225,7 +226,7 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
             title: 'Production Yield & Scrap Recovery Report',
             subtitle: dateRangeStr,
             generatedDate: todayStr,
-            filename: `executive-audit-report-production-yield-${todayStr}.pdf`,
+            filename: `executive-audit-report-production-yield-${todayStr.replace(/\//g, '-')}.pdf`,
             summaryCards: [
                 { label: 'Total Production', value: `${Number(todayBags || 0).toLocaleString('en-IN')} Bags`, notes: 'Bags produced' },
                 { label: 'Available Raw Fabric', value: `${Number(availableFabricKg || 0).toLocaleString('en-IN')} Kg`, notes: 'In-stock fabric' },
@@ -459,7 +460,7 @@ const ProductionYieldTab = forwardRef(function ProductionYieldTab(props, ref) {
                                                     <span className="font-mono">{row.workOrderNumber || 'N/A'}</span>
                                                     {row.date && (
                                                         <span className="block text-[10px] text-text-muted font-normal font-sans">
-                                                            {new Date(row.date).toLocaleDateString()}
+                                                            {formatDate(row.date)}
                                                         </span>
                                                     )}
                                                 </div>
