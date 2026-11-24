@@ -260,8 +260,8 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                             {finalStageOperatorsCount > 0
                                 ? `across ${finalStageOperatorsCount} operator${finalStageOperatorsCount > 1 ? 's' : ''}`
                                 : hasLegacyStages
-                                ? '(Historical Work Order total)'
-                                : 'across assigned operators'}
+                                    ? '(Historical Work Order total)'
+                                    : 'across assigned operators'}
                         </span>
                     </div>
                 </div>
@@ -327,7 +327,6 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                             </thead>
                             <tbody className="divide-y divide-border text-text-main">
                                 {timeline.map((entry, idx) => {
-                                    let dateDisplay = entry.date;
                                     const dateDisplay = formatDate(entry.date);
 
                                     return (
@@ -338,7 +337,7 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                                                     <span>{dateDisplay}</span>
                                                 </div>
                                                 <div className="text-[10px] text-text-muted font-mono mt-0.5 ml-4">
-                                                    {formatDate(entry.date)}
+                                                    {dateDisplay}
                                                 </div>
                                             </td>
                                             <td className="p-3.5 align-top">
