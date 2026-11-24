@@ -11,6 +11,7 @@ export default function InlineLookupSelect({
     onChange,
     options = [],
     placeholder,
+    formatOptionLabel,
     onOpenAdd,
     onOpenEdit,
     onDelete,
@@ -66,7 +67,7 @@ export default function InlineLookupSelect({
                                     </button>
                                     <div className="pointer-events-none absolute bottom-full right-0 mb-1.5 hidden group-hover:flex flex-col items-end z-[90] animate-in fade-in zoom-in-95 duration-100">
                                         <span className="w-max max-w-[180px] whitespace-normal text-center leading-tight break-words rounded bg-slate-900/95 backdrop-blur-xs text-white text-[10px] font-medium px-2.5 py-1 shadow-xl border border-slate-700/50">
-                                            Edit '{matchedOption.name}'
+                                            Edit '{formatOptionLabel ? formatOptionLabel(matchedOption.name) : matchedOption.name}'
                                         </span>
                                         <div className="w-0 h-0 border-x-4 border-x-transparent border-t-4 border-t-slate-900/95 mr-2 -mt-[1px]" />
                                     </div>
@@ -85,7 +86,7 @@ export default function InlineLookupSelect({
                                     </button>
                                     <div className="pointer-events-none absolute bottom-full right-0 mb-1.5 hidden group-hover:flex flex-col items-end z-[90] animate-in fade-in zoom-in-95 duration-100">
                                         <span className="w-max max-w-[180px] whitespace-normal text-center leading-tight break-words rounded bg-slate-900/95 backdrop-blur-xs text-white text-[10px] font-medium px-2.5 py-1 shadow-xl border border-slate-700/50">
-                                            Delete '{matchedOption.name}'
+                                            Delete '{formatOptionLabel ? formatOptionLabel(matchedOption.name) : matchedOption.name}'
                                         </span>
                                         <div className="w-0 h-0 border-x-4 border-x-transparent border-t-4 border-t-slate-900/95 mr-2 -mt-[1px]" />
                                     </div>
@@ -108,7 +109,7 @@ export default function InlineLookupSelect({
                     <option value="">{placeholder || `-- Select ${label} --`}</option>
                     {options.map((opt) => (
                         <option key={opt._id || opt.name} value={opt.name}>
-                            {opt.name}
+                            {formatOptionLabel ? formatOptionLabel(opt.name) : opt.name}
                         </option>
                     ))}
                 </select>

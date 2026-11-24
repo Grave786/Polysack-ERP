@@ -7,6 +7,7 @@ import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import InlineLookupSelect from './InlineLookupSelect';
 import DetailViewModal from './DetailViewModal';
+import { formatGsmDisplay } from '../../utils/gsmUtils';
 
 // Helper to auto-compose descriptive Raw Material title from attributes
 // Pattern: [Lamination Type] [Material Description] [Capacity/Weight if applicable] (Dimensions if applicable, [Fabric Grammage] - [Material Colour])
@@ -57,8 +58,8 @@ export const composeRawMaterialTitle = (data = {}) => {
     // Parenthetical specs: (Dimensions if applicable, [Fabric Grammage] - [Material Colour])
     const dim = isPresent(data.fabricSize) ? data.fabricSize.trim() : '';
     let gsm = isPresent(data.fabricGrammage) ? data.fabricGrammage.trim() : '';
-    if (gsm && /^\d+$/.test(gsm)) {
-        gsm = `${gsm} GSM`;
+    if (gsm) {
+        gsm = formatGsmDisplay(gsm);
     }
     const col = isPresent(data.materialColour || data.color) ? (data.materialColour || data.color).trim() : '';
 
@@ -179,9 +180,18 @@ export const composeFinishedBagTitle = (data = {}, categoriesList = [], bagShape
         ? `${w}x${l}${dimUnit}`
         : '';
 
-    const gsm = (data.fabricGSM !== undefined && data.fabricGSM !== '' && data.fabricGSM !== null)
-        ? Number(data.fabricGSM)
-        : (data.gsm !== undefined && data.gsm !== '' && data.gsm !== null ? Number(data.gsm) : null);
+    const gsmRaw = (data.fabricGSM !== undefined && data.fabricGSM !== '' && data.fabricGSM !== null)
+        ? data.fabricGSM
+        : (data.gsm !== undefined && data.gsm !== '' && data.gsm !== null
+            ? data.gsm
+            : (data.fabricGsm !== undefined && data.fabricGsm !== '' && data.fabricGsm !== null ? data.fabricGsm : null));
+    let gsm = null;
+    if (gsmRaw !== null && !isNaN(Number(gsmRaw))) {
+        gsm = Number(gsmRaw);
+    } else if (typeof data.name === 'string') {
+        const match = data.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+        if (match) gsm = Number(match[1]);
+    }
     const gsmStr = (gsm !== null && !isNaN(gsm) && gsm > 0) ? `${gsm} GSM` : '';
 
     let colorStr = '';
@@ -367,6 +377,7 @@ export default function TabbedResourcePage({
     onEdit = null,
     headerActions = null,
     tabBarActions = null,
+    topSlot = null,
     filterSlot = null,
     extraFilterControls = null,
     extraParams = null,
@@ -1828,13 +1839,17 @@ export default function TabbedResourcePage({
 
             const gsmVal = formData.fabricGSM !== undefined && formData.fabricGSM !== '' 
                 ? formData.fabricGSM 
-                : (formData.gsm !== undefined && formData.gsm !== '' ? formData.gsm : null);
-            if (gsmVal !== null) {
+                : (formData.gsm !== undefined && formData.gsm !== '' 
+                    ? formData.gsm 
+                    : (formData.fabricGsm !== undefined && formData.fabricGsm !== '' ? formData.fabricGsm : null));
+            if (gsmVal !== null && !isNaN(Number(gsmVal))) {
                 payload.fabricGSM = Number(gsmVal);
                 payload.gsm = Number(gsmVal);
+                payload.fabricGsm = Number(gsmVal);
             } else {
                 payload.fabricGSM = null;
                 payload.gsm = null;
+                payload.fabricGsm = null;
             }
 
             const capVal = formData.bagCapacity !== undefined && formData.bagCapacity !== '' 
@@ -2000,6 +2015,7 @@ export default function TabbedResourcePage({
             colors: [],
             fabricGSM: '',
             gsm: '',
+            fabricGsm: '',
             bagCapacity: '',
             capacity: '',
             bagWeightGms: '',
@@ -2091,7 +2107,22 @@ export default function TabbedResourcePage({
         }
 
         const editDimUnit = row.dimensionUnit || row.dimensions?.unit || 'cm';
-        const gsmValue = row.fabricGSM !== undefined && row.fabricGSM !== null ? row.fabricGSM : (row.gsm !== undefined && row.gsm !== null ? row.gsm : '');
+        let gsmValue = row.fabricGSM !== undefined && row.fabricGSM !== null && row.fabricGSM !== '' 
+            ? row.fabricGSM 
+            : (row.gsm !== undefined && row.gsm !== null && row.gsm !== '' 
+                ? row.gsm 
+                : (row.fabricGsm !== undefined && row.fabricGsm !== null && row.fabricGsm !== '' ? row.fabricGsm : ''));
+
+        if ((gsmValue === '' || gsmValue === undefined || gsmValue === null) && row.fabricGrammage) {
+            const num = Number(String(row.fabricGrammage).replace(/[^0-9.]/g, ''));
+            if (!isNaN(num) && num > 0) gsmValue = num;
+        }
+        if ((gsmValue === '' || gsmValue === undefined || gsmValue === null) && typeof row.name === 'string') {
+            const match = row.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+            if (match) {
+                gsmValue = Number(match[1]);
+            }
+        }
         const widthValue = row.dimensions?.width !== undefined && row.dimensions?.width !== null ? row.dimensions.width : (row.width !== undefined && row.width !== null ? row.width : '');
         const lengthValue = row.dimensions?.length !== undefined && row.dimensions?.length !== null ? row.dimensions.length : (row.length !== undefined && row.length !== null ? row.length : '');
         const capValue = row.bagCapacity !== undefined && row.bagCapacity !== null ? row.bagCapacity : (row.capacity !== undefined && row.capacity !== null ? row.capacity : '');
@@ -2121,6 +2152,7 @@ export default function TabbedResourcePage({
             length: lengthValue,
             fabricGSM: gsmValue,
             gsm: gsmValue,
+            fabricGsm: gsmValue,
             bagCapacity: capValue,
             capacity: capValue,
             bagWeightGms: weightValue,
@@ -3243,6 +3275,7 @@ export default function TabbedResourcePage({
                                 value={formData.fabricGrammage || ''}
                                 onChange={(val) => handleInputChange('fabricGrammage', val)}
                                 options={rmAttributes.fabricGrammage || []}
+                                formatOptionLabel={formatGsmDisplay}
                                 onOpenAdd={() => handleOpenAddAttributeModal('fabricGrammage', 'Fabric Grammage')}
                                 onOpenEdit={(opt) => handleOpenEditAttributeModal('fabricGrammage', 'Fabric Grammage', opt)}
                                 onDelete={(opt) => handleDeleteAttributeInline('fabricGrammage', 'Fabric Grammage', opt)}
@@ -3689,24 +3722,6 @@ export default function TabbedResourcePage({
                         </div>
                     </div>
 
-                    <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            GSM
-                        </label>
-                        <input
-                            type="number"
-                            step="any"
-                            min="0"
-                            placeholder="e.g. 45"
-                            value={formData.fabricGSM !== undefined && formData.fabricGSM !== null ? formData.fabricGSM : (formData.gsm !== undefined && formData.gsm !== null ? formData.gsm : '')}
-                            onChange={(e) => {
-                                handleInputChange('fabricGSM', e.target.value);
-                                handleInputChange('gsm', e.target.value);
-                            }}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
-                        />
-                    </div>
-
                     <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
@@ -3780,6 +3795,20 @@ export default function TabbedResourcePage({
                         </div>
                     </div>
 
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            Product Description / Notes
+                        </label>
+                        <input
+                            type="text"
+                            placeholder="e.g. Heavy-duty Laminated PP Woven Sack with liner"
+                            value={formData.bagType || ''}
+                            onChange={(e) => handleInputChange('bagType', e.target.value)}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                        />
+                    </div>
+
+                    {/* Capacity (Kg) and GSM in one 2-column row */}
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
@@ -3801,35 +3830,23 @@ export default function TabbedResourcePage({
 
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                Bag Weight (Gms)
+                                GSM
                             </label>
                             <input
                                 type="number"
-                                step="0.001"
+                                step="any"
                                 min="0"
-                                placeholder="e.g. 75"
-                                value={formData.bagWeightGms !== undefined && formData.bagWeightGms !== null && formData.bagWeightGms !== '' ? formData.bagWeightGms : (formData.tareWeightGram !== undefined && formData.tareWeightGram !== null && formData.tareWeightGram !== '' ? formData.tareWeightGram : (formData.bagWeight !== undefined && formData.bagWeight !== null ? formData.bagWeight : ''))}
+                                placeholder="e.g. 45"
+                                value={formData.fabricGSM !== undefined && formData.fabricGSM !== null ? formData.fabricGSM : (formData.gsm !== undefined && formData.gsm !== null ? formData.gsm : (formData.fabricGsm !== undefined && formData.fabricGsm !== null ? formData.fabricGsm : ''))}
                                 onChange={(e) => {
-                                    handleInputChange('bagWeightGms', e.target.value);
-                                    handleInputChange('tareWeightGram', e.target.value);
-                                    handleInputChange('bagWeight', e.target.value);
+                                    const val = e.target.value;
+                                    handleInputChange('fabricGSM', val);
+                                    handleInputChange('gsm', val);
+                                    handleInputChange('fabricGsm', val);
                                 }}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans font-mono"
                             />
                         </div>
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Product Description / Notes
-                        </label>
-                        <input
-                            type="text"
-                            placeholder="e.g. Heavy-duty Laminated PP Woven Sack with liner"
-                            value={formData.bagType || ''}
-                            onChange={(e) => handleInputChange('bagType', e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                        />
                     </div>
 
                     {/* Color & Print Specification (Front/Back) */}
@@ -4446,6 +4463,13 @@ export default function TabbedResourcePage({
                                     </span>
                                 )}
                             </label>
+                        </div>
+                    )}
+                    {(topSlot || activeTab?.topSlot) && (
+                        <div className="w-full mb-3">
+                            {typeof (topSlot || activeTab?.topSlot) === 'function'
+                                ? (topSlot || activeTab?.topSlot)()
+                                : (topSlot || activeTab?.topSlot)}
                         </div>
                     )}
                     <DataTable

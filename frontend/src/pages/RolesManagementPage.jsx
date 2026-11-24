@@ -346,8 +346,10 @@ export default function RolesManagementPage() {
                     const match = systemPermissions.find(
                         (sp) => `${sp.module.trim().toUpperCase()}:${sp.action.trim().toUpperCase()}` === key
                     );
-                    if (match && match._id) {
+                    if (match && match._id && !match._id.includes(':')) {
                         canonicalIds.push(match._id);
+                    } else {
+                        canonicalIds.push(key);
                     }
                 }
             });
@@ -372,7 +374,8 @@ export default function RolesManagementPage() {
             }
         } catch (err) {
             console.error('Error saving role:', err);
-            toast.error(err.response?.data?.message || 'Failed to save role');
+            const serverMsg = err.response?.data?.message || err.response?.data?.error || err.message;
+            toast.error(serverMsg || 'Failed to save role');
         } finally {
             setIsSubmitting(false);
         }

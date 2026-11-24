@@ -91,3 +91,42 @@ export const formatDateTime = (val) => {
 
     return `${day}/${month}/${year}, ${hours}:${minutes} ${ampm}`;
 };
+
+/**
+ * Safely parses any date representation (Date obj, timestamp, ISO string, DD/MM/YYYY, DD-MM-YYYY).
+ * Returns Date object or null if invalid.
+ */
+export const parseDateValue = (val) => {
+    if (!val) return null;
+    if (val instanceof Date) {
+        return isNaN(val.getTime()) ? null : val;
+    }
+    if (typeof val === 'number') {
+        const d = new Date(val);
+        return isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof val === 'string') {
+        const trimmed = val.trim();
+        // Check for DD/MM/YYYY or DD-MM-YYYY (e.g. 12/10/2026 or 28/09/2026)
+        const ddmmyyyyMatch = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(.*)$/);
+        if (ddmmyyyyMatch) {
+            const day = parseInt(ddmmyyyyMatch[1], 10);
+            const month = parseInt(ddmmyyyyMatch[2], 10) - 1;
+            const year = parseInt(ddmmyyyyMatch[3], 10);
+            const d = new Date(year, month, day, 23, 59, 59, 999);
+            if (!isNaN(d.getTime())) return d;
+        }
+        const d = new Date(trimmed);
+        if (!isNaN(d.getTime())) return d;
+    }
+    return null;
+};
+
+/**
+ * Checks if a given date is strictly in the past (before today / now).
+ */
+export const isDateOverdue = (dateVal, now = new Date()) => {
+    const d = parseDateValue(dateVal);
+    if (!d) return false;
+    return d.getTime() < now.getTime();
+};

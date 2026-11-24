@@ -166,7 +166,7 @@ export default function DataTable({
                 </div>
 
                 {/* Right Action Controls: Extra Filter Controls, Status Filter, Columns & Export CSV */}
-                <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end shrink-0 flex-wrap sm:flex-nowrap">
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end shrink-0 flex-wrap">
                     {/* Optional Custom Extra Filter Controls (e.g. Date Range) */}
                     {extraFilterControls}
 
@@ -419,7 +419,7 @@ export default function DataTable({
                             <table className="w-full text-left border-collapse text-xs min-w-[600px]">
                                 <thead>
                                     <tr className="bg-table-header-bg text-table-header-text font-extrabold uppercase tracking-wider text-[11px]">
-                                        <th className="px-4 py-3.5 border-b border-border/40 w-10 text-center">
+                                        <th className="px-3 py-3 border-b border-border/40 w-10 text-center">
                                             <input
                                                 type="checkbox"
                                                 checked={isAllSelected}
@@ -436,9 +436,14 @@ export default function DataTable({
                                             const colKey = col.key || col.header;
                                             if (visibleColumns[colKey] === false) return null;
 
+                                            const isRightAlign = col.align === 'right';
+                                            const isCenterAlign = col.align === 'center';
+                                            const alignClass = isRightAlign ? 'text-right' : isCenterAlign ? 'text-center' : 'text-left';
+                                            const flexAlignClass = isRightAlign ? 'justify-end' : isCenterAlign ? 'justify-center' : 'justify-start';
+
                                             return (
-                                                <th key={idx} className="px-4 py-3.5 border-b border-border/40 whitespace-nowrap">
-                                                    <div className="flex items-center gap-1.5">
+                                                <th key={idx} className={`px-3 py-3 border-b border-border/40 whitespace-nowrap ${alignClass}`}>
+                                                    <div className={`flex items-center gap-1.5 ${flexAlignClass}`}>
                                                         <span>{col.header}</span>
                                                         {col.sortable && (
                                                             <ArrowUpDown size={12} className="text-table-header-text/70 shrink-0" />
@@ -449,7 +454,7 @@ export default function DataTable({
                                         })}
 
                                         {showActionColumn && (
-                                            <th className="px-4 py-3.5 border-b border-border/40 text-right whitespace-nowrap">
+                                            <th className="px-3 py-3 border-b border-border/40 text-right whitespace-nowrap">
                                                 ACTIONS
                                             </th>
                                         )}
@@ -473,7 +478,7 @@ export default function DataTable({
                                                         : 'hover:bg-app-bg/60'
                                                 }`}
                                             >
-                                                <td className="px-4 py-3.5 w-10 text-center whitespace-nowrap">
+                                                <td className="px-3 py-3 w-10 text-center whitespace-nowrap">
                                                     <input
                                                         type="checkbox"
                                                         checked={isRowSelected}
@@ -504,15 +509,19 @@ export default function DataTable({
                                                         );
                                                     }
 
+                                                    const isRightAlign = col.align === 'right';
+                                                    const isCenterAlign = col.align === 'center';
+                                                    const alignClass = isRightAlign ? 'text-right' : isCenterAlign ? 'text-center' : 'text-left';
+
                                                     return (
-                                                        <td key={colIndex} className="px-4 py-3.5 whitespace-nowrap text-xs font-medium">
+                                                        <td key={colIndex} className={`px-3 py-3 whitespace-nowrap text-xs font-medium ${alignClass}`}>
                                                             {cellValue !== null && cellValue !== undefined ? cellValue : '-'}
                                                         </td>
                                                     );
                                                 })}
 
                                                 {showActionColumn && (
-                                                    <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                                                    <td className="px-3 py-3 text-right whitespace-nowrap">
                                                         <div className="flex items-center justify-end gap-2">
                                                             {isViewable && onView && (
                                                                 <button

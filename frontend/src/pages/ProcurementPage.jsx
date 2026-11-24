@@ -1,23 +1,22 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Download, Truck, FileText, Check, Eye, Pencil, X } from 'lucide-react';
+import { Plus, Download, Truck, FileText, Check, Eye, Pencil, X, Wallet, AlertCircle, Users, CreditCard } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreatePurchaseOrderPanel from '../components/procurement/CreatePurchaseOrderPanel';
 import CreateGRNPanel from '../components/procurement/CreateGRNPanel';
 import PrintPOModal from '../components/procurement/PrintPOModal';
 import DetailViewModal from '../components/shared/DetailViewModal';
+import RecordPaymentModal from '../components/sales/RecordPaymentModal';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
 import { isTenantAdmin } from '../utils/permissionUtils';
-import { formatDate, formatDateTime } from '../utils/dateUtils';
+import { formatDate, formatDateTime, isDateOverdue } from '../utils/dateUtils';
 
 export default function ProcurementPage() {
     const user = useAuthStore((state) => state.user);
     const isAdmin = isTenantAdmin(user);
-    const [searchParams] = useSearchParams();
-    const tabFromUrl = searchParams.get('tab');
-
+    const [searchParams, setSearchParams] = useSearchParams();
 
     const [isCreatePoOpen, setIsCreatePoOpen] = useState(false);
     const [editPo, setEditPo] = useState(null);
@@ -25,13 +24,48 @@ export default function ProcurementPage() {
     const [editGrn, setEditGrn] = useState(null);
     const [isGrnPanelOpen, setIsGrnPanelOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
-    const [activeTab, setActiveTab] = useState(tabFromUrl || 'purchase-orders');
+    const [activeTab, setActiveTab] = useState('purchase-orders');
+    const [dashboardFilter, setDashboardFilter] = useState(null);
+    const [recordingPaymentPo, setRecordingPaymentPo] = useState(null);
+    const [payablesSummary, setPayablesSummary] = useState(null);
+
+    // One-time consumption of dashboard redirect params (tab & filter)
+    useEffect(() => {
+        const tab = searchParams.get('tab');
+        const filter = searchParams.get('filter') || searchParams.get('paymentStatus');
+        const isOutstanding = filter === 'outstanding' || filter === 'OUTSTANDING' || filter === 'UNPAID';
+
+        if (tab || isOutstanding) {
+            if (tab) {
+                setActiveTab(tab);
+            } else if (isOutstanding) {
+                setActiveTab('purchase-orders');
+            }
+            if (isOutstanding) {
+                setDashboardFilter('OUTSTANDING');
+            }
+            // Clear redirect params from URL with replace so subsequent tab changes are clean and unrestricted
+            setSearchParams({}, { replace: true });
+        }
+    }, [searchParams, setSearchParams]);
+
+    const handleTabChange = (key) => {
+        setActiveTab(key);
+        // Clear the dashboard-applied filter when switching tabs so other tabs show normal data
+        setDashboardFilter(null);
+    };
 
     useEffect(() => {
-        if (tabFromUrl && tabFromUrl !== activeTab) {
-            setActiveTab(tabFromUrl);
-        }
-    }, [tabFromUrl, activeTab]);
+        axiosInstance.get('/purchase-orders/payables-summary')
+            .then(res => {
+                if (res.data?.success && res.data.data) {
+                    setPayablesSummary(res.data.data);
+                }
+            })
+            .catch(err => {
+                console.error('Failed to load payables summary:', err);
+            });
+    }, [refreshKey]);
 
     // Detail View Modal State
     const [viewRecord, setViewRecord] = useState(null);
@@ -123,22 +157,49 @@ export default function ProcurementPage() {
             )
         },
         {
-            header: 'EXPECTED DELIVERY',
-            exportValue: (row) => formatDate(row.expectedDelivery),
+            header: 'DUE DATE',
+            exportValue: (row) => formatDate(row.dueDate || row.expectedDelivery),
+            render: (row) => {
+                const dueD = row.dueDate || row.expectedDelivery;
+                const isOverdue = row.paymentStatus === 'OVERDUE' || (row.paymentStatus !== 'PAID' && isDateOverdue(dueD));
+                return (
+                    <span className={`font-mono text-xs font-semibold ${isOverdue ? 'text-danger font-bold' : 'text-text-main'}`}>
+                        {formatDate(dueD)}
+                    </span>
+                );
+            }
+        },
+        {
+            header: 'PO TOTAL VALUE (₹)',
+            exportValue: (row) => (row.totalValue !== undefined ? row.totalValue : (row.totalAmount || 0)),
             render: (row) => (
-                <span className="font-mono text-xs text-text-main font-semibold">
-                    {formatDate(row.expectedDelivery)}
+                <span className="font-mono font-bold text-text-main">
+                    ₹{Number(row.totalValue !== undefined ? row.totalValue : (row.totalAmount || 0)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                 </span>
             )
         },
         {
-            header: 'PO TOTAL VALUE (₹)',
-            exportValue: (row) => (row.totalValue !== undefined ? row.totalValue : 0),
+            header: 'PAID AMOUNT (₹)',
+            exportValue: (row) => (row.paidAmount || 0),
             render: (row) => (
-                <span className="font-mono font-bold text-text-main">
-                    ₹{(row.totalValue || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                <span className="font-mono font-semibold text-emerald-700">
+                    ₹{(row.paidAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                 </span>
             )
+        },
+        {
+            header: 'BALANCE (OUTSTANDING) (₹)',
+            exportValue: (row) => Math.max(0, (row.totalValue !== undefined ? row.totalValue : (row.totalAmount || 0)) - (row.paidAmount || 0)),
+            render: (row) => {
+                const total = Number(row.totalValue !== undefined ? row.totalValue : (row.totalAmount || 0));
+                const paid = Number(row.paidAmount || 0);
+                const bal = Math.max(0, total - paid);
+                return (
+                    <span className={`font-mono font-bold ${bal > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                        ₹{bal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    </span>
+                );
+            }
         },
         {
             header: 'ORDERED vs RECEIVED',
@@ -210,7 +271,36 @@ export default function ProcurementPage() {
             }
         },
         {
-            header: 'STATUS',
+            header: 'PAYMENT STATUS',
+            exportValue: (row) => row.paymentStatus || 'UNPAID',
+            render: (row) => {
+                const status = row.paymentStatus || 'UNPAID';
+                let badgeStyle = 'bg-slate-100 text-slate-800 border-slate-300';
+                let label = 'Unpaid';
+
+                if (status === 'PAID') {
+                    badgeStyle = 'bg-emerald-100 text-emerald-800 border-emerald-300';
+                    label = 'Paid';
+                } else if (status === 'PARTIALLY_PAID') {
+                    badgeStyle = 'bg-blue-100 text-blue-800 border-blue-300';
+                    label = 'Partial';
+                } else if (status === 'OVERDUE') {
+                    badgeStyle = 'bg-rose-100 text-rose-800 border-rose-300';
+                    label = 'Overdue';
+                } else {
+                    badgeStyle = 'bg-amber-100 text-amber-800 border-amber-300';
+                    label = 'Unpaid';
+                }
+
+                return (
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${badgeStyle}`}>
+                        • {label}
+                    </span>
+                );
+            }
+        },
+        {
+            header: 'PO STATUS',
             exportValue: (row) => row.status || 'DRAFT',
             render: (row) => {
                 const status = row.status || 'DRAFT';
@@ -258,6 +348,8 @@ export default function ProcurementPage() {
             render: (row) => {
                 const canReceive = row.status === 'SENT_TO_SUPPLIER' || row.status === 'PARTIALLY_RECEIVED';
                 const isPendingApproval = row.status === 'PENDING_APPROVAL';
+                const bal = row.balanceAmount !== undefined ? row.balanceAmount : Math.max(0, (row.totalValue || 0) - (row.paidAmount || 0));
+                const canPay = bal > 0 && row.status !== 'CANCELLED' && row.status !== 'DRAFT';
 
                 return (
                     <div className="flex items-center gap-2">
@@ -281,6 +373,18 @@ export default function ProcurementPage() {
                         >
                             <Eye size={14} />
                         </button>
+
+                        {canPay && (
+                            <button
+                                type="button"
+                                onClick={() => setRecordingPaymentPo(row)}
+                                className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold shadow-2xs transition-colors cursor-pointer"
+                                title="Record Supplier Payment"
+                            >
+                                <CreditCard size={13} />
+                                <span>Pay</span>
+                            </button>
+                        )}
 
                         {row.status === 'DRAFT' && (
                             <button
@@ -381,6 +485,108 @@ export default function ProcurementPage() {
                     </div>
                 );
             }
+        }
+    ];
+
+    // ─── Supplier Outstanding Columns (AP) ───────────────────────────────────
+    const supplierOutstandingColumns = [
+        {
+            header: 'SUPPLIER',
+            sortable: true,
+            exportValue: (row) => row.supplierName || '',
+            render: (row) => (
+                <div className="max-w-[200px]" title={row.supplierName}>
+                    <div className="font-bold text-text-main text-xs truncate">{row.supplierName || '-'}</div>
+                    {row.supplierCode && row.supplierCode !== '-' && (
+                        <span className="font-mono text-[10px] text-text-muted bg-primary/10 text-primary px-1.5 py-0.2 rounded font-bold">
+                            {row.supplierCode}
+                        </span>
+                    )}
+                </div>
+            )
+        },
+        {
+            header: 'CONTACT PHONE',
+            exportValue: (row) => row.phone || row.email || '-',
+            render: (row) => (
+                <div className="text-xs text-text-muted space-y-0.5 whitespace-nowrap pl-0.5">
+                    {row.phone && <div className="font-mono">{row.phone}</div>}
+                    {row.email && !row.phone && <div className="text-[11px] font-mono">{row.email}</div>}
+                    {!row.phone && !row.email && '-'}
+                </div>
+            )
+        },
+        {
+            header: 'TOTAL PURCHASED (₹)',
+            align: 'right',
+            sortable: true,
+            exportValue: (row) => row.totalPurchased || 0,
+            render: (row) => (
+                <span className="font-mono font-bold text-xs text-text-main">
+                    ₹{Number(row.totalPurchased || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
+            header: 'TOTAL PAID (₹)',
+            align: 'right',
+            sortable: true,
+            exportValue: (row) => row.totalPaid || 0,
+            render: (row) => (
+                <span className="font-mono font-bold text-xs text-emerald-700">
+                    ₹{Number(row.totalPaid || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
+            header: 'BALANCE (OUTSTANDING) (₹)',
+            align: 'right',
+            sortable: true,
+            exportValue: (row) => row.balance || 0,
+            render: (row) => (
+                <span className={`font-mono font-extrabold text-xs ${Number(row.balance || 0) > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                    ₹{Number(row.balance || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
+            header: 'OVERDUE (₹)',
+            align: 'right',
+            sortable: true,
+            exportValue: (row) => row.overdueAmount || 0,
+            render: (row) => (
+                <span className={`font-mono font-extrabold text-xs ${Number(row.overdueAmount || 0) > 0 ? 'text-amber-600' : 'text-text-muted'}`}>
+                    {Number(row.overdueAmount || 0) > 0 ? `₹${Number(row.overdueAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : '₹0'}
+                </span>
+            )
+        },
+        {
+            header: 'UNPAID POs',
+            align: 'center',
+            exportValue: (row) => `${row.unpaidPoCount || 0} / ${row.poCount || 0}`,
+            render: (row) => (
+                <span className="inline-block px-2 py-0.5 rounded-full text-xs font-mono font-bold bg-app-bg border border-border whitespace-nowrap">
+                    <span className="text-amber-700 font-black">{row.unpaidPoCount || 0}</span> / {row.poCount || 0}
+                </span>
+            )
+        },
+        {
+            header: 'ACTIONS',
+            align: 'right',
+            render: (row) => (
+                <div className="flex items-center justify-end">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setActiveTab('purchase-orders');
+                        }}
+                        className="p-1 text-text-muted hover:text-primary transition-colors cursor-pointer rounded"
+                        title="View Purchase Orders"
+                    >
+                        <Eye size={15} />
+                    </button>
+                </div>
+            )
         }
     ];
 
@@ -880,6 +1086,63 @@ export default function ProcurementPage() {
         }
     };
 
+    // Payables summary cards for Accounts Payable (3-column responsive grid)
+    const renderPayablesSummaryCards = () => {
+        if (activeTab !== 'purchase-orders' && activeTab !== 'supplier-outstanding') return null;
+
+        const totalPayable = Number(payablesSummary?.totalPayable || 0);
+        const overduePayable = Number(payablesSummary?.overduePayable !== undefined ? payablesSummary.overduePayable : (payablesSummary?.overdueAmount || 0));
+        const suppCount = Number(payablesSummary?.suppliersWithDues || 0);
+
+        return (
+            <div className="w-full mb-3 space-y-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 w-full">
+                    <div className="bg-card-bg border border-border rounded-xl p-3.5 sm:p-4 shadow-2xs flex items-center justify-between">
+                        <div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">TOTAL PAYABLE (AP)</span>
+                            <span className="text-base sm:text-lg font-black font-mono text-slate-900 block mt-0.5">
+                                ₹{totalPayable.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            </span>
+                        </div>
+                        <div className="p-2.5 bg-amber-50 border border-amber-200/80 rounded-xl text-amber-600 shrink-0">
+                            <Wallet size={20} className="text-amber-600" />
+                        </div>
+                    </div>
+
+                    <div className="bg-card-bg border border-border rounded-xl p-3.5 sm:p-4 shadow-2xs flex items-center justify-between">
+                        <div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">OVERDUE PAYABLE</span>
+                            <span className={`text-base sm:text-lg font-black font-mono block mt-0.5 ${overduePayable > 0 ? 'text-red-600' : 'text-slate-900'}`}>
+                                ₹{overduePayable.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            </span>
+                        </div>
+                        <div className="p-2.5 bg-red-50 border border-red-200/80 rounded-xl text-red-600 shrink-0">
+                            <AlertCircle size={20} className="text-red-600" />
+                        </div>
+                    </div>
+
+                    <div className="bg-card-bg border border-border rounded-xl p-3.5 sm:p-4 shadow-2xs flex items-center justify-between sm:col-span-2 lg:col-span-1">
+                        <div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">SUPPLIERS WITH DUES</span>
+                            <span className="text-base sm:text-lg font-black font-mono text-slate-900 block mt-0.5">
+                                {suppCount} Suppliers
+                            </span>
+                        </div>
+                        <div className="p-2.5 bg-blue-50 border border-blue-200/80 rounded-xl text-blue-600 shrink-0">
+                            <Users size={20} className="text-blue-600" />
+                        </div>
+                    </div>
+                </div>
+
+                {dashboardFilter === 'OUTSTANDING' && activeTab === 'purchase-orders' && (
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-600 text-xs font-bold">
+                        <span>Filtering: Outstanding POs Only</span>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     // ─── Tabs config ──────────────────────────────────────────────────────────
     const tabs = [
         {
@@ -887,6 +1150,15 @@ export default function ProcurementPage() {
             label: 'Purchase Orders',
             resourcePath: '/purchase-orders',
             columns: poColumns
+        },
+        {
+            key: 'supplier-outstanding',
+            label: 'Supplier Outstanding (AP)',
+            resourcePath: '/purchase-orders/supplier-outstanding',
+            columns: supplierOutstandingColumns,
+            availableStatuses: ['All Statuses', 'Outstanding', 'Overdue', 'Paid'],
+            isDeletable: false,
+            isEditable: false
         },
         {
             key: 'grns',
@@ -953,10 +1225,17 @@ export default function ProcurementPage() {
                 description="Manage Purchase Orders, Goods Receipt Notes (GRN) and Item-Wise Detailed Purchase Register"
                 tabs={tabs}
                 headerActions={headerActions}
+                topSlot={renderPayablesSummaryCards}
                 filterSlot={activeTab === 'purchase-register' ? dateFilterControls : null}
-                extraFilterParams={activeTab === 'purchase-register' ? extraFilterParams : null}
+                extraFilterParams={
+                    activeTab === 'purchase-register'
+                        ? extraFilterParams
+                        : (activeTab === 'purchase-orders' && dashboardFilter === 'OUTSTANDING')
+                            ? { paymentStatus: 'OUTSTANDING' }
+                            : null
+                }
                 activeTabKey={activeTab}
-                onTabChange={setActiveTab}
+                onTabChange={handleTabChange}
             />
 
             {/* Issue / Edit Purchase Order Panel */}
@@ -1000,6 +1279,15 @@ export default function ProcurementPage() {
                 record={viewRecord}
                 tabKey={activeTab}
                 tabLabel={activeTab === 'purchase-orders' ? 'Purchase Order' : 'Goods Receipt Note'}
+            />
+
+            {/* Record PO Payment Modal */}
+            <RecordPaymentModal
+                isOpen={Boolean(recordingPaymentPo)}
+                po={recordingPaymentPo}
+                type="po"
+                onClose={() => setRecordingPaymentPo(null)}
+                onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />
         </>
     );

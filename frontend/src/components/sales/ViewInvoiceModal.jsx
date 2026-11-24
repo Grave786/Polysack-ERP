@@ -11,6 +11,7 @@ export default function ViewInvoiceModal({ isOpen, invoice, onClose, onRecordPay
     const grandTotal = invoice.grandTotal || 0;
     const paidAmount = invoice.paidAmount || 0;
     const dueAmount = invoice.dueAmount !== undefined ? invoice.dueAmount : Math.max(0, grandTotal - paidAmount);
+    const balanceAmount = invoice.balanceAmount !== undefined ? invoice.balanceAmount : dueAmount;
     const isPaid = invoice.paymentStatus === 'PAID';
 
     return (
@@ -85,6 +86,11 @@ export default function ViewInvoiceModal({ isOpen, invoice, onClose, onRecordPay
                         <div className="text-[11px] text-text-muted">
                             Invoice Date: <span className="font-mono font-bold text-text-main">{formatDate(invoice.invoiceDate)}</span>
                         </div>
+                        {invoice.dueDate && (
+                            <div className="text-[11px] text-text-muted">
+                                Due Date: <span className="font-mono font-bold text-rose-600">{formatDate(invoice.dueDate)}</span>
+                            </div>
+                        )}
                         {invoice.salesOrder && (
                             <div className="text-[11px] text-text-muted">
                                 Sales Order Ref: <span className="font-mono font-bold text-primary">{invoice.salesOrder.soNumber || 'SO'}</span>
@@ -139,11 +145,45 @@ export default function ViewInvoiceModal({ isOpen, invoice, onClose, onRecordPay
                         <div className="text-[11px] text-emerald-700">
                             Paid: <span className="font-mono font-bold">₹{paidAmount.toLocaleString()}</span>
                         </div>
-                        <div className="text-[11px] text-amber-800 font-bold">
-                            Outstanding Due: <span className="font-mono">₹{dueAmount.toLocaleString()}</span>
+                        <div className="text-[11px] text-rose-600 font-bold">
+                            Balance Due: <span className="font-mono">₹{balanceAmount.toLocaleString()}</span>
                         </div>
                     </div>
                 </div>
+
+                {/* Payment History */}
+                {Array.isArray(invoice.payments) && invoice.payments.length > 0 && (
+                    <div className="space-y-2 bg-app-bg border border-border rounded-xl p-3.5">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-text-muted flex items-center justify-between">
+                            <span>Payment History ({invoice.payments.length})</span>
+                            <span className="text-emerald-700 font-mono font-bold">Total Paid: ₹{paidAmount.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div className="border border-border rounded-lg overflow-hidden bg-card-bg">
+                            <table className="w-full text-left text-xs border-collapse">
+                                <thead>
+                                    <tr className="border-b border-border/60 bg-table-header-bg text-[10px] font-bold uppercase text-table-header-text">
+                                        <th className="p-2">Date</th>
+                                        <th className="p-2">Mode</th>
+                                        <th className="p-2">Reference</th>
+                                        <th className="p-2">Notes</th>
+                                        <th className="p-2 text-right">Amount (₹)</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-border/40 font-sans">
+                                    {invoice.payments.map((p, pIdx) => (
+                                        <tr key={pIdx} className="hover:bg-app-bg/50">
+                                            <td className="p-2 font-mono text-text-muted">{formatDate(p.paymentDate || p.createdAt)}</td>
+                                            <td className="p-2 font-semibold text-text-main">{p.paymentMode || 'CASH'}</td>
+                                            <td className="p-2 font-mono text-text-muted">{p.reference || '-'}</td>
+                                            <td className="p-2 text-text-muted">{p.notes || '-'}</td>
+                                            <td className="p-2 text-right font-mono font-bold text-emerald-600">₹{Number(p.amount || 0).toLocaleString('en-IN')}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
 
                 {/* Terms & Conditions & Signature Block */}
                 <div className="border-t border-border mt-8 pt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">

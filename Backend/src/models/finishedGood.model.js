@@ -159,7 +159,20 @@ const FinishedGoodSchema = new mongoose.Schema({
         type: Boolean,
         default: true
     }
-}, { timestamps: true });
+}, { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } });
+
+// Virtual aliases for gsm and fabricGsm to seamlessly support both naming conventions
+FinishedGoodSchema.virtual('gsm').get(function() {
+    return this.fabricGSM;
+}).set(function(v) {
+    this.fabricGSM = v;
+});
+
+FinishedGoodSchema.virtual('fabricGsm').get(function() {
+    return this.fabricGSM;
+}).set(function(v) {
+    this.fabricGSM = v;
+});
 
 // Compound unique indexes per tenant
 FinishedGoodSchema.index({ tenant: 1, code: 1 }, { unique: true });

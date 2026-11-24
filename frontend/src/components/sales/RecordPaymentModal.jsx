@@ -1,20 +1,45 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { CreditCard, CheckCircle2, DollarSign } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { getTodayLocalDateString, formatDate } from '../../utils/dateUtils';
 
-export default function RecordPaymentModal({ isOpen, invoice, onClose, onSuccess }) {
-    if (!isOpen || !invoice) return null;
+export default function RecordPaymentModal({ isOpen, invoice, po, onClose, onSuccess, type = 'invoice' }) {
+    const isPO = type === 'po' || Boolean(po && !invoice);
+    const target = isPO ? po : invoice;
 
-    const [paymentAmount, setPaymentAmount] = useState(
-        invoice.dueAmount !== undefined ? String(invoice.dueAmount) : String(invoice.grandTotal || 0)
-    );
-    const [paymentMode, setPaymentMode] = useState(invoice.paymentMode || 'UPI');
+    if (!isOpen || !target) return null;
+
+    const totalValue = isPO ? (target.totalValue || 0) : (target.grandTotal || 0);
+    const paidAmount = target.paidAmount || 0;
+    const balanceAmount = target.balanceAmount !== undefined && target.balanceAmount !== null
+        ? target.balanceAmount
+        : (target.dueAmount !== undefined ? target.dueAmount : Math.max(0, totalValue - paidAmount));
+
+    const [paymentAmount, setPaymentAmount] = useState(balanceAmount > 0 ? String(balanceAmount) : '');
+    const [paymentDate, setPaymentDate] = useState(getTodayLocalDateString());
+    const [paymentMode, setPaymentMode] = useState(target.paymentMode || 'UPI');
+    const [reference, setReference] = useState('');
+    const [notes, setNotes] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const grandTotal = invoice.grandTotal || 0;
-    const paidAmount = invoice.paidAmount || 0;
-    const dueAmount = invoice.dueAmount !== undefined ? invoice.dueAmount : Math.max(0, grandTotal - paidAmount);
+    useEffect(() => {
+        if (target) {
+            const bal = target.balanceAmount !== undefined && target.balanceAmount !== null
+                ? target.balanceAmount
+                : (target.dueAmount !== undefined ? target.dueAmount : Math.max(0, (isPO ? target.totalValue : target.grandTotal) - (target.paidAmount || 0)));
+            setPaymentAmount(bal > 0 ? String(bal) : '');
+            setPaymentDate(getTodayLocalDateString());
+            setPaymentMode(target.paymentMode || 'UPI');
+            setReference('');
+            setNotes('');
+        }
+    }, [target, isPO]);
+
+    const titlePrefix = isPO ? `Purchase Order ${target.poNumber || ''}` : `Invoice ${target.invoiceNumber || ''}`;
+    const partyName = isPO
+        ? (typeof target.supplier === 'object' ? (target.supplier?.name || target.supplier?.companyName) : target.supplier)
+        : (typeof target.customer === 'object' ? (target.customer?.companyName || target.customer?.name) : (target.walkInCustomer?.name || 'Customer'));
 
     const handleRecordPayment = async (e) => {
         e.preventDefault();
@@ -24,16 +49,30 @@ export default function RecordPaymentModal({ isOpen, invoice, onClose, onSuccess
             return;
         }
 
+        if (amt > balanceAmount + 0.001) {
+            toast.error(`Payment amount (₹${amt}) cannot exceed remaining balance (₹${balanceAmount.toFixed(2)}).`);
+            return;
+        }
+
         try {
             setIsSubmitting(true);
-            const res = await axiosInstance.patch(`/invoices/${invoice._id}/payment`, {
+            const endpoint = isPO
+                ? `/purchase-orders/${target._id}/payment`
+                : `/invoices/${target._id}/payment`;
+
+            const payload = {
                 amount: amt,
                 paymentAmount: amt,
-                paymentMode
-            });
+                paymentDate,
+                paymentMode,
+                reference: reference.trim(),
+                notes: notes.trim()
+            };
+
+            const res = await axiosInstance.patch(endpoint, payload);
 
             if (res.data?.success) {
-                toast.success(`Payment recorded for Invoice ${invoice.invoiceNumber}! Status: ${res.data.data?.paymentStatus}`);
+                toast.success(`Payment of ₹${amt.toLocaleString('en-IN')} recorded successfully!`);
                 onClose();
                 if (onSuccess) onSuccess();
             }
@@ -51,7 +90,10 @@ export default function RecordPaymentModal({ isOpen, invoice, onClose, onSuccess
                 <div className="flex justify-between items-center pb-2.5 border-b border-border">
                     <div className="flex items-center gap-2">
                         <CreditCard className="text-primary" size={18} />
-                        <h3 className="font-bold text-sm text-text-main">Record Payment for {invoice.invoiceNumber}</h3>
+                        <div>
+                            <h3 className="font-bold text-sm text-text-main">Record Payment</h3>
+                            <p className="text-[11px] text-text-muted">{titlePrefix} • {partyName || 'Party'}</p>
+                        </div>
                     </div>
                     <button
                         type="button"
@@ -64,34 +106,50 @@ export default function RecordPaymentModal({ isOpen, invoice, onClose, onSuccess
 
                 <div className="bg-app-bg border border-border rounded-lg p-3 space-y-1.5 text-xs">
                     <div className="flex justify-between items-center">
-                        <span className="text-text-muted">Invoice Grand Total:</span>
-                        <span className="font-mono font-bold text-text-main">₹{grandTotal.toLocaleString()}</span>
+                        <span className="text-text-muted">Total Amount:</span>
+                        <span className="font-mono font-bold text-text-main">₹{totalValue.toLocaleString('en-IN')}</span>
                     </div>
                     <div className="flex justify-between items-center">
                         <span className="text-text-muted">Already Paid:</span>
-                        <span className="font-mono font-semibold text-emerald-700">₹{paidAmount.toLocaleString()}</span>
+                        <span className="font-mono font-semibold text-emerald-700">₹{paidAmount.toLocaleString('en-IN')}</span>
                     </div>
                     <div className="flex justify-between items-center pt-1 border-t border-border/80">
-                        <span className="font-bold text-text-main">Current Outstanding Due:</span>
-                        <span className="font-mono font-extrabold text-amber-700">₹{dueAmount.toLocaleString()}</span>
+                        <span className="font-bold text-text-main">Current Outstanding Balance:</span>
+                        <span className="font-mono font-extrabold text-amber-700">₹{balanceAmount.toLocaleString('en-IN')}</span>
                     </div>
                 </div>
 
                 <form onSubmit={handleRecordPayment} className="space-y-3">
-                    <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
-                            Payment Amount (₹) *
-                        </label>
-                        <input
-                            type="number"
-                            required
-                            min="1"
-                            max={dueAmount > 0 ? dueAmount : grandTotal}
-                            step="0.01"
-                            value={paymentAmount}
-                            onChange={(e) => setPaymentAmount(e.target.value)}
-                            className="w-full border border-border rounded-lg p-2.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
-                        />
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
+                                Amount (₹) *
+                            </label>
+                            <input
+                                type="number"
+                                required
+                                min="0.01"
+                                max={balanceAmount > 0 ? balanceAmount : totalValue}
+                                step="any"
+                                placeholder={`Max ₹${balanceAmount}`}
+                                value={paymentAmount}
+                                onChange={(e) => setPaymentAmount(e.target.value)}
+                                className="w-full border border-border rounded-lg p-2.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
+                                Payment Date *
+                            </label>
+                            <input
+                                type="date"
+                                required
+                                value={paymentDate}
+                                onChange={(e) => setPaymentDate(e.target.value)}
+                                className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary"
+                            />
+                        </div>
                     </div>
 
                     <div>
@@ -106,8 +164,23 @@ export default function RecordPaymentModal({ isOpen, invoice, onClose, onSuccess
                             <option value="UPI">UPI / NetBanking</option>
                             <option value="CASH">Cash</option>
                             <option value="CARD">Debit / Credit Card</option>
-                            <option value="OTHER">Bank Transfer / Cheque</option>
+                            <option value="BANK_TRANSFER">Bank Transfer (NEFT/RTGS/IMPS)</option>
+                            <option value="CHEQUE">Cheque</option>
+                            <option value="OTHER">Other</option>
                         </select>
+                    </div>
+
+                    <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
+                            Reference / UTR / Cheque # (Optional)
+                        </label>
+                        <input
+                            type="text"
+                            placeholder="e.g. UTR-98234123, CHQ-102938"
+                            value={reference}
+                            onChange={(e) => setReference(e.target.value)}
+                            className="w-full border border-border rounded-lg p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono"
+                        />
                     </div>
 
                     <div className="flex justify-end gap-2.5 pt-3 border-t border-border">
@@ -124,7 +197,7 @@ export default function RecordPaymentModal({ isOpen, invoice, onClose, onSuccess
                             className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
                         >
                             <CheckCircle2 size={14} />
-                            <span>{isSubmitting ? 'Recording...' : 'Confirm & Update Status'}</span>
+                            <span>{isSubmitting ? 'Recording...' : 'Record Payment'}</span>
                         </button>
                     </div>
                 </form>

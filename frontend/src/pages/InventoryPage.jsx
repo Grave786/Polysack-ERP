@@ -9,21 +9,24 @@ import StockAdjustmentPanel from '../components/inventory/StockAdjustmentPanel';
 import { formatDate, formatDateTime } from '../utils/dateUtils';
 
 export default function InventoryPage() {
-    const [searchParams] = useSearchParams();
-    const tabFromUrl = searchParams.get('tab');
-
-
-    const [activeTabKey, setActiveTabKey] = useState(tabFromUrl || 'finished-goods');
+    const [searchParams, setSearchParams] = useSearchParams();
+    const [activeTabKey, setActiveTabKey] = useState('finished-goods');
     const [viewMode, setViewMode] = useState('cards'); // 'cards' | 'table'
     const [isAdjustmentPanelOpen, setIsAdjustmentPanelOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
 
-    // Synchronize active tab with URL query parameter when changed
+    // One-time consumption of redirect tab param
     useEffect(() => {
-        if (tabFromUrl) {
-            setActiveTabKey(tabFromUrl);
+        const tab = searchParams.get('tab');
+        if (tab) {
+            setActiveTabKey(tab);
+            setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete('tab');
+                return next;
+            }, { replace: true });
         }
-    }, [tabFromUrl]);
+    }, [searchParams, setSearchParams]);
 
     // Columns config for Finished Bags Data Table View
     const finishedGoodsColumns = [
@@ -43,7 +46,19 @@ export default function InventoryPage() {
         },
         {
             header: 'GSM',
-            render: (row) => <span className="font-mono font-semibold">{row.fabricGSM || row.gsm || '-'}</span>
+            render: (row) => {
+                const g = row.fabricGSM ?? row.gsm ?? row.fabricGsm;
+                if (g !== undefined && g !== null && g !== '' && !isNaN(Number(g))) {
+                    return <span className="font-mono font-semibold">{Number(g)} GSM</span>;
+                }
+                if (typeof row.name === 'string') {
+                    const match = row.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                    if (match) {
+                        return <span className="font-mono font-semibold">{match[1]} GSM</span>;
+                    }
+                }
+                return <span className="font-mono font-semibold">-</span>;
+            }
         },
         {
             header: 'DIMENSIONS (W×L)',

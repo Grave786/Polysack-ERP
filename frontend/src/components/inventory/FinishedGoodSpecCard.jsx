@@ -5,7 +5,12 @@ export default function FinishedGoodSpecCard({ finishedGood, onEdit }) {
 
     const code = finishedGood.code || 'FG-SPEC';
     const name = finishedGood.name || 'Poly Bag Specification';
-    const gsm = finishedGood.fabricGSM || finishedGood.gsm || 'N/A';
+    const rawGsm = finishedGood.fabricGSM ?? finishedGood.gsm ?? finishedGood.fabricGsm;
+    let gsm = (rawGsm !== undefined && rawGsm !== null && rawGsm !== '' && !isNaN(Number(rawGsm))) ? Number(rawGsm) : null;
+    if (gsm === null && typeof finishedGood.name === 'string') {
+        const match = finishedGood.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+        if (match) gsm = Number(match[1]);
+    }
     const rawShape = finishedGood.bagShape || 'FLAT';
     const shapeFormatted = rawShape.charAt(0).toUpperCase() + rawShape.slice(1).toLowerCase().replace('_', ' ');
 
@@ -52,13 +57,13 @@ export default function FinishedGoodSpecCard({ finishedGood, onEdit }) {
 
             {/* 2x2 Grid of Primary Technical Specs */}
             <div className="grid grid-cols-2 gap-2 text-xs">
-                {/* FABRIC GSM Block */}
+                {/* GSM Block */}
                 <div className="bg-amber-50/80 border border-amber-200/80 rounded-lg p-2 flex flex-col">
                     <span className="text-[9px] font-extrabold uppercase tracking-wider text-amber-800">
-                        FABRIC GSM
+                        GSM
                     </span>
                     <span className="text-xs font-bold text-amber-950 mt-0.5 font-mono">
-                        {gsm} GSM
+                        {gsm ? `${gsm} GSM` : '-'}
                     </span>
                 </div>
 

@@ -124,7 +124,13 @@ export default function PosPage() {
     const gsmList = useMemo(() => {
         const set = new Set();
         finishedGoods.forEach((fg) => {
-            if (fg.fabricGSM) set.add(fg.fabricGSM);
+            const g = fg.fabricGSM ?? fg.gsm ?? fg.fabricGsm;
+            if (g !== undefined && g !== null && g !== '' && !isNaN(Number(g))) {
+                set.add(Number(g));
+            } else if (typeof fg.name === 'string') {
+                const match = fg.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                if (match) set.add(Number(match[1]));
+            }
         });
         return ['All', ...Array.from(set).sort((a, b) => a - b)];
     }, [finishedGoods]);
@@ -142,16 +148,28 @@ export default function PosPage() {
     const filteredProducts = useMemo(() => {
         return finishedGoods.filter((fg) => {
             const query = searchQuery.toLowerCase().trim();
+            const normalizedQuery = query.replace(/\b(?:gsm|gms)\b/gi, '').trim();
             const catName = typeof fg.category === 'object' ? fg.category?.name : fg.category;
+
+            const fgGsm = (() => {
+                const g = fg.fabricGSM ?? fg.gsm ?? fg.fabricGsm;
+                if (g !== undefined && g !== null && g !== '' && !isNaN(Number(g))) return Number(g);
+                if (typeof fg.name === 'string') {
+                    const match = fg.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                    if (match) return Number(match[1]);
+                }
+                return null;
+            })();
 
             const matchesSearch = !query ||
                 (fg.name && fg.name.toLowerCase().includes(query)) ||
+                (fg.name && normalizedQuery && fg.name.toLowerCase().includes(normalizedQuery)) ||
                 (fg.code && fg.code.toLowerCase().includes(query)) ||
                 (fg.color && fg.color.toLowerCase().includes(query)) ||
-                (fg.fabricGSM && String(fg.fabricGSM).includes(query));
+                (fgGsm !== null && (String(fgGsm).includes(query) || (normalizedQuery && String(fgGsm).includes(normalizedQuery))));
 
             const matchesCategory = selectedCategory === 'All' || catName === selectedCategory;
-            const matchesGsm = selectedGsm === 'All' || fg.fabricGSM === Number(selectedGsm);
+            const matchesGsm = selectedGsm === 'All' || fgGsm === Number(selectedGsm);
             const matchesShape = selectedShape === 'All' || fg.bagShape === selectedShape;
 
             return matchesSearch && matchesCategory && matchesGsm && matchesShape;

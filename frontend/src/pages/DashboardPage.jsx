@@ -57,6 +57,7 @@ export default function DashboardPage() {
     const [rawMaterials, setRawMaterials] = useState([]);
     const [finishedGoods, setFinishedGoods] = useState([]);
     const [machines, setMachines] = useState([]);
+    const [payablesSummary, setPayablesSummary] = useState(null);
 
     // Fetch datasets on mount depending on user role
     useEffect(() => {
@@ -84,15 +85,17 @@ export default function DashboardPage() {
                 axiosInstance.get('/invoices?limit=200'),
                 axiosInstance.get('/raw-materials?limit=200'),
                 axiosInstance.get('/finished-goods?limit=200'),
-                axiosInstance.get('/machines?isActive=true&limit=200')
+                axiosInstance.get('/machines?isActive=true&limit=200'),
+                axiosInstance.get('/purchase-orders/payables-summary').catch(() => ({ data: { success: false } }))
             ])
-                .then(([soRes, woRes, invRes, rmRes, fgRes, mchRes]) => {
+                .then(([soRes, woRes, invRes, rmRes, fgRes, mchRes, payRes]) => {
                     if (soRes.data?.success && Array.isArray(soRes.data.data)) setSalesOrders(soRes.data.data);
                     if (woRes.data?.success && Array.isArray(woRes.data.data)) setWorkOrders(woRes.data.data);
                     if (invRes.data?.success && Array.isArray(invRes.data.data)) setInvoices(invRes.data.data);
                     if (rmRes.data?.success && Array.isArray(rmRes.data.data)) setRawMaterials(rmRes.data.data);
                     if (fgRes.data?.success && Array.isArray(fgRes.data.data)) setFinishedGoods(fgRes.data.data);
                     if (mchRes.data?.success && Array.isArray(mchRes.data.data)) setMachines(mchRes.data.data);
+                    if (payRes.data?.success && payRes.data.data) setPayablesSummary(payRes.data.data);
                 })
                 .catch((err) => {
                     console.error('Error loading dashboard analytics data:', err);
@@ -552,7 +555,7 @@ export default function DashboardPage() {
                         ₹{(monthlyRevenue / 100000).toFixed(2)}L
                     </div>
                     <div className="text-[11px] text-text-muted font-medium">
-                        Cost: N/A (Supplier AP Module Required)
+                        Payables: ₹{((payablesSummary?.totalPayable || 0) / 100000).toFixed(2)}L
                     </div>
                     <div className="text-[10px] text-text-muted font-mono pt-1 border-t border-border/40">
                         MoM Trend: — (Historical Snapshot Needed)
@@ -616,37 +619,49 @@ export default function DashboardPage() {
                     <span className="text-[10px] text-emerald-600 font-bold block">Target: &gt;90%</span>
                 </div>
 
-                <div className="bg-card-bg border border-border p-3.5 rounded-xl shadow-2xs space-y-1">
+                <div
+                    onClick={() => navigate('/attendance')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                >
                     <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold uppercase text-text-muted">ATTENDANCE RATE</span>
-                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-800">
-                            Soon
+                        <span className="text-[10px] font-bold uppercase text-text-muted">ATTENDANCE</span>
+                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-blue-100 text-blue-800">
+                            Log
                         </span>
                     </div>
-                    <span className="text-lg font-black text-text-muted font-mono block">N/A</span>
-                    <span className="text-[10px] text-text-muted block">HR Module Coming Soon</span>
+                    <span className="text-lg font-black text-text-main font-mono block">Attendance</span>
+                    <span className="text-[10px] text-text-muted block">Shift & Punch Log →</span>
                 </div>
 
                 <div
-                    onClick={() => navigate('/sales?tab=invoices')}
+                    onClick={() => navigate('/sales?tab=invoices&filter=outstanding')}
                     className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
                 >
                     <span className="text-[10px] font-bold uppercase text-text-muted block">RECEIVABLES</span>
                     <span className="text-lg font-black text-text-main font-mono block">
                         ₹{(totalReceivablesLakhs / 100000).toFixed(2)}L
                     </span>
-                    <span className="text-[10px] text-text-muted block">Unpaid Invoices</span>
+                    <span className="text-[10px] text-text-muted block">Outstanding Invoices</span>
                 </div>
 
-                <div className="bg-card-bg border border-border p-3.5 rounded-xl shadow-2xs space-y-1">
+                <div
+                    onClick={() => navigate('/procurement?tab=purchase-orders&filter=outstanding')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                >
                     <div className="flex items-center justify-between">
                         <span className="text-[10px] font-bold uppercase text-text-muted">PAYABLES</span>
-                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-800">
-                            Soon
-                        </span>
+                        {payablesSummary?.overduePayable > 0 && (
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-rose-100 text-rose-800">
+                                Overdue
+                            </span>
+                        )}
                     </div>
-                    <span className="text-lg font-black text-text-muted font-mono block">N/A</span>
-                    <span className="text-[10px] text-text-muted block">Supplier AP Coming Soon</span>
+                    <span className="text-lg font-black text-text-main font-mono block">
+                        ₹{((payablesSummary?.totalPayable || 0) / 100000).toFixed(2)}L
+                    </span>
+                    <span className="text-[10px] text-text-muted block">
+                        {payablesSummary?.suppliersWithDues || 0} Suppliers with dues
+                    </span>
                 </div>
             </div>
 

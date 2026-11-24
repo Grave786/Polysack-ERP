@@ -5,6 +5,43 @@ const Customer = require('../models/customer.model');
 const { calculateGstBreakdown } = require('../utils/gstHelper');
 
 /**
+ * Safely parses any date representation (Date obj, timestamp, ISO string, DD/MM/YYYY, DD-MM-YYYY)
+ */
+const parseDateValue = (val) => {
+    if (!val) return null;
+    if (val instanceof Date) {
+        return isNaN(val.getTime()) ? null : val;
+    }
+    if (typeof val === 'number') {
+        const d = new Date(val);
+        return isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof val === 'string') {
+        const trimmed = val.trim();
+        const ddmmyyyyMatch = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(.*)$/);
+        if (ddmmyyyyMatch) {
+            const day = parseInt(ddmmyyyyMatch[1], 10);
+            const month = parseInt(ddmmyyyyMatch[2], 10) - 1;
+            const year = parseInt(ddmmyyyyMatch[3], 10);
+            const d = new Date(year, month, day, 23, 59, 59, 999);
+            if (!isNaN(d.getTime())) return d;
+        }
+        const d = new Date(trimmed);
+        if (!isNaN(d.getTime())) return d;
+    }
+    return null;
+};
+
+/**
+ * Checks if a given date is strictly in the past (before today / now).
+ */
+const isDateOverdue = (dateVal, now = new Date()) => {
+    const d = parseDateValue(dateVal);
+    if (!d) return false;
+    return d.getTime() < now.getTime();
+};
+
+/**
  * Helper function to auto-generate unique Invoice number per tenant & year within optional transaction session
  */
 const generateInvoiceNumber = async (tenantId, session) => {
@@ -142,7 +179,10 @@ const createInvoiceFromSalesOrder = async (req, res) => {
             grandTotal,
             paidAmount: 0,
             dueAmount: grandTotal,
+            balanceAmount: grandTotal,
+            dueDate: req.body.dueDate || salesOrder.deliveryDue || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
             paymentStatus: 'UNPAID',
+            payments: [],
             isActive: true
         });
 
@@ -197,7 +237,11 @@ const getInvoices = async (req, res) => {
 
         const resolvedPaymentStatus = paymentStatus || req.query.status;
         if (resolvedPaymentStatus && resolvedPaymentStatus !== 'All' && resolvedPaymentStatus !== 'All Statuses') {
-            filter.paymentStatus = resolvedPaymentStatus;
+            if (resolvedPaymentStatus === 'OUTSTANDING' || resolvedPaymentStatus === 'UNPAID') {
+                filter.paymentStatus = { $in: ['UNPAID', 'PARTIALLY_PAID', 'OVERDUE'] };
+            } else {
+                filter.paymentStatus = resolvedPaymentStatus;
+            }
         }
 
         if (customer) {
@@ -215,23 +259,50 @@ const getInvoices = async (req, res) => {
         const [invoices, total] = await Promise.all([
             Invoice.find(filter)
                 .populate('customer', 'companyName code contactPerson phone')
-                .populate('salesOrder', 'soNumber status')
+                .populate('salesOrder', 'soNumber status deliveryDue')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum),
             Invoice.countDocuments(filter)
         ]);
 
+        const now = new Date();
+        const enrichedInvoices = invoices.map((inv) => {
+            const invObj = inv.toObject ? inv.toObject() : { ...inv };
+            const grandTotal = Number(invObj.grandTotal !== undefined ? invObj.grandTotal : (invObj.totalAmount || 0));
+            const paid = Number(invObj.paidAmount || 0);
+            const balance = Math.max(0, grandTotal - paid);
+
+            invObj.paidAmount = paid;
+            invObj.balanceAmount = balance;
+            invObj.dueAmount = balance;
+            invObj.dueDate = invObj.dueDate || invObj.salesOrder?.deliveryDue || invObj.invoiceDate || invObj.createdAt;
+
+            const isOverdue = isDateOverdue(invObj.dueDate, now);
+
+            if (balance <= 0.0001 && (paid > 0 || grandTotal > 0)) {
+                invObj.paymentStatus = 'PAID';
+            } else if (isOverdue || invObj.paymentStatus === 'OVERDUE') {
+                invObj.paymentStatus = 'OVERDUE';
+            } else if (paid > 0) {
+                invObj.paymentStatus = 'PARTIALLY_PAID';
+            } else {
+                invObj.paymentStatus = 'UNPAID';
+            }
+
+            return invObj;
+        });
+
         return res.status(200).json({
             success: true,
-            count: invoices.length,
+            count: enrichedInvoices.length,
             pagination: {
                 total,
                 page: pageNum,
                 limit: limitNum,
                 pages: Math.ceil(total / limitNum) || 1
             },
-            data: invoices
+            data: enrichedInvoices
         });
     } catch (error) {
         console.error('Error in getInvoices:', error);
@@ -337,42 +408,62 @@ const recordPayment = async (req, res) => {
             });
         }
 
-        if (invoice.dueAmount <= 0 || invoice.paymentStatus === 'PAID') {
+        const grandTotal = Number(invoice.grandTotal !== undefined ? invoice.grandTotal : (invoice.totalAmount || 0));
+        const currentPaid = Number(invoice.paidAmount || 0);
+        const currentBalance = Math.max(0, grandTotal - currentPaid);
+
+        if (currentBalance <= 0 || invoice.paymentStatus === 'PAID') {
             return res.status(400).json({
                 success: false,
                 message: 'Invoice is already fully paid.'
             });
         }
 
-        const newPaidAmount = invoice.paidAmount + numAmount;
-        if (newPaidAmount > invoice.grandTotal + 0.001) {
+        if (numAmount > currentBalance + 0.001) {
             return res.status(400).json({
                 success: false,
-                message: `Payment amount (${numAmount}) exceeds remaining due amount (${invoice.dueAmount.toFixed(2)}).`
+                message: `Payment amount (₹${numAmount}) exceeds remaining balance (₹${currentBalance.toFixed(2)}).`
             });
         }
 
+        const newPaidAmount = currentPaid + numAmount;
         invoice.paidAmount = newPaidAmount;
-        invoice.dueAmount = Math.max(0, invoice.grandTotal - invoice.paidAmount);
+        invoice.balanceAmount = Math.max(0, grandTotal - invoice.paidAmount);
+        invoice.dueAmount = invoice.balanceAmount;
 
-        if (invoice.dueAmount <= 0.0001) {
+        const dueD = invoice.dueDate || invoice.invoiceDate || invoice.createdAt;
+        const now = new Date();
+        if (invoice.balanceAmount <= 0.0001) {
             invoice.paymentStatus = 'PAID';
+        } else if (isDateOverdue(dueD, now) || invoice.paymentStatus === 'OVERDUE') {
+            invoice.paymentStatus = 'OVERDUE';
         } else if (invoice.paidAmount > 0) {
             invoice.paymentStatus = 'PARTIALLY_PAID';
         } else {
             invoice.paymentStatus = 'UNPAID';
         }
 
+        if (!Array.isArray(invoice.payments)) invoice.payments = [];
+        invoice.payments.push({
+            amount: numAmount,
+            paymentDate: req.body.paymentDate ? new Date(req.body.paymentDate) : new Date(),
+            paymentMode: req.body.paymentMode || 'UPI',
+            reference: req.body.reference || '',
+            notes: req.body.notes || '',
+            recordedBy: req.user?._id || req.user?.id || null,
+            recordedAt: new Date()
+        });
+
         await invoice.save();
 
         await invoice.populate([
-            { path: 'customer', select: 'companyName code' },
+            { path: 'customer', select: 'companyName code contactPerson phone' },
             { path: 'salesOrder', select: 'soNumber' }
         ]);
 
         return res.status(200).json({
             success: true,
-            message: `Payment of ${numAmount} recorded successfully. Remaining due: ${invoice.dueAmount.toFixed(2)}.`,
+            message: `Payment of ₹${numAmount} recorded successfully. Remaining balance: ₹${invoice.balanceAmount.toFixed(2)}.`,
             data: invoice
         });
     } catch (error) {
@@ -393,9 +484,169 @@ const recordPayment = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get Accounts Receivable Summary (Total receivable, overdue, customer count)
+ * @route   GET /api/invoices/receivables-summary
+ * @access  Private (SALES:READ permission)
+ */
+const getReceivablesSummary = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
+        }
+
+        const invoices = await Invoice.find({ tenant: tenantId, isActive: true })
+            .select('grandTotal totalAmount paidAmount balanceAmount dueAmount dueDate invoiceDate createdAt paymentStatus customer')
+            .lean();
+
+        let totalReceivable = 0;
+        let overdueAmount = 0;
+        const customersWithDues = new Set();
+        const now = new Date();
+
+        invoices.forEach((inv) => {
+            const grandTotal = Number(inv.grandTotal !== undefined ? inv.grandTotal : (inv.totalAmount || 0));
+            const paid = Number(inv.paidAmount || 0);
+            const balance = Math.max(0, grandTotal - paid);
+
+            if (balance > 0.0001) {
+                totalReceivable += balance;
+                if (inv.customer) {
+                    customersWithDues.add(String(inv.customer));
+                }
+                const dueD = inv.dueDate || inv.invoiceDate || inv.createdAt;
+                if (inv.paymentStatus === 'OVERDUE' || isDateOverdue(dueD, now)) {
+                    overdueAmount += balance;
+                }
+            }
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                totalReceivable: Math.round(totalReceivable * 100) / 100,
+                overduePayable: Math.round(overdueAmount * 100) / 100,
+                overdueReceivable: Math.round(overdueAmount * 100) / 100,
+                overdueAmount: Math.round(overdueAmount * 100) / 100,
+                customersWithDues: customersWithDues.size
+            }
+        });
+    } catch (error) {
+        console.error('Error in getReceivablesSummary:', error);
+        return res.status(500).json({ success: false, message: 'Failed to fetch receivables summary.', error: error.message });
+    }
+};
+
+/**
+ * @desc    Get Customer-Wise Outstanding Accounts Receivable
+ * @route   GET /api/invoices/customer-outstanding
+ * @access  Private (SALES:READ permission)
+ */
+const getCustomerOutstanding = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
+        }
+
+        const invoices = await Invoice.find({ tenant: tenantId, isActive: true })
+            .populate('customer', 'companyName code contactPerson phone email')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const customerMap = {};
+        const now = new Date();
+
+        invoices.forEach((inv) => {
+            const custId = inv.customer ? String(inv.customer._id || inv.customer) : (inv.walkInCustomer?.name || 'Walk-In');
+            const custName = inv.customer?.companyName || inv.walkInCustomer?.name || 'Walk-in Customer';
+            const custCode = inv.customer?.code || '-';
+            const phone = inv.customer?.phone || inv.walkInCustomer?.phone || '-';
+
+            if (!customerMap[custId]) {
+                customerMap[custId] = {
+                    customerId: inv.customer?._id || custId,
+                    customerName: custName,
+                    customerCode: custCode,
+                    phone: phone,
+                    totalBilled: 0,
+                    totalPaid: 0,
+                    balance: 0,
+                    overdueAmount: 0,
+                    invoiceCount: 0,
+                    unpaidInvoiceCount: 0
+                };
+            }
+
+            const grandTotal = Number(inv.grandTotal !== undefined ? inv.grandTotal : (inv.totalAmount || 0));
+            const paid = Number(inv.paidAmount || 0);
+            const balance = Math.max(0, grandTotal - paid);
+
+            customerMap[custId].totalBilled += grandTotal;
+            customerMap[custId].totalPaid += paid;
+            customerMap[custId].balance += balance;
+            customerMap[custId].invoiceCount += 1;
+
+            if (balance > 0.0001) {
+                customerMap[custId].unpaidInvoiceCount += 1;
+                const dueD = inv.dueDate || inv.invoiceDate || inv.createdAt;
+                if (inv.paymentStatus === 'OVERDUE' || isDateOverdue(dueD, now)) {
+                    customerMap[custId].overdueAmount += balance;
+                }
+            }
+        });
+
+        let list = Object.values(customerMap).map((c) => ({
+            ...c,
+            totalBilled: Math.round(c.totalBilled * 100) / 100,
+            totalPaid: Math.round(c.totalPaid * 100) / 100,
+            balance: Math.round(c.balance * 100) / 100,
+            overdueAmount: Math.round(c.overdueAmount * 100) / 100
+        })).sort((a, b) => b.balance - a.balance);
+
+        const searchQ = (req.query.search || '').trim().toLowerCase();
+        if (searchQ) {
+            list = list.filter((item) =>
+                (item.customerName && item.customerName.toLowerCase().includes(searchQ)) ||
+                (item.customerCode && item.customerCode.toLowerCase().includes(searchQ)) ||
+                (item.phone && item.phone.toLowerCase().includes(searchQ))
+            );
+        }
+
+        const statusQ = (req.query.status || '').trim().toUpperCase();
+        if (statusQ && statusQ !== 'ALL' && statusQ !== 'ALL STATUSES') {
+            if (statusQ === 'OVERDUE') {
+                list = list.filter((item) => (item.overdueAmount || 0) > 0);
+            } else if (statusQ === 'OUTSTANDING' || statusQ === 'UNPAID') {
+                list = list.filter((item) => (item.balance || 0) > 0.0001);
+            } else if (statusQ === 'PAID') {
+                list = list.filter((item) => (item.balance || 0) <= 0.0001);
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            count: list.length,
+            pagination: {
+                total: list.length,
+                page: 1,
+                limit: Math.max(list.length, 10),
+                pages: 1
+            },
+            data: list
+        });
+    } catch (error) {
+        console.error('Error in getCustomerOutstanding:', error);
+        return res.status(500).json({ success: false, message: 'Failed to fetch customer outstanding.', error: error.message });
+    }
+};
+
 module.exports = {
     createInvoiceFromSalesOrder,
     getInvoices,
     getInvoiceById,
-    recordPayment
+    recordPayment,
+    getReceivablesSummary,
+    getCustomerOutstanding
 };

@@ -25,18 +25,24 @@ export default function ProductionPage() {
     const user = useAuthStore((state) => state.user);
     const isAdmin = isTenantAdmin(user) || checkIsSuperAdmin(user);
 
-    const [searchParams] = useSearchParams();
-    const tabFromUrl = searchParams.get('tab');
+    const [searchParams, setSearchParams] = useSearchParams();
     const woIdFromUrl = searchParams.get('id');
 
     const [selectedWorkOrderId, setSelectedWorkOrderId] = useState(null);
-    const [activeTabKey, setActiveTabKey] = useState(tabFromUrl || 'work-orders');
+    const [activeTabKey, setActiveTabKey] = useState('work-orders');
 
+    // One-time consumption of redirect tab param
     useEffect(() => {
-        if (tabFromUrl && tabFromUrl !== activeTabKey) {
-            setActiveTabKey(tabFromUrl);
+        const tab = searchParams.get('tab');
+        if (tab) {
+            setActiveTabKey(tab);
+            setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete('tab');
+                return next;
+            }, { replace: true });
         }
-    }, [tabFromUrl, activeTabKey]);
+    }, [searchParams, setSearchParams]);
 
     useEffect(() => {
         if (woIdFromUrl) {

@@ -4,7 +4,9 @@ const {
     createInvoiceFromSalesOrder,
     getInvoices,
     getInvoiceById,
-    recordPayment
+    recordPayment,
+    getReceivablesSummary,
+    getCustomerOutstanding
 } = require('../controllers/invoice.controller');
 const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
 
@@ -24,6 +26,20 @@ router.post('/from-sales-order/:salesOrderId', authenticate, checkPermission('SA
  * @access  Private (SALES:READ)
  */
 router.get('/', authenticate, checkPermission('SALES', 'READ'), getInvoices);
+
+/**
+ * @route   GET /api/invoices/receivables-summary
+ * @desc    Get summary of accounts receivable
+ * @access  Private (SALES:READ)
+ */
+router.get('/receivables-summary', authenticate, checkPermission('SALES', 'READ'), getReceivablesSummary);
+
+/**
+ * @route   GET /api/invoices/customer-outstanding
+ * @desc    Get customer-wise accounts receivable balance
+ * @access  Private (SALES:READ)
+ */
+router.get('/customer-outstanding', authenticate, checkPermission('SALES', 'READ'), getCustomerOutstanding);
 
 /**
  * @route   GET /api/invoices/:id

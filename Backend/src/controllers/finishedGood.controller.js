@@ -150,7 +150,8 @@ const createFinishedGood = async (req, res) => {
             unit: selectedUnit
         } : undefined;
 
-        const gsmVal = fabricGSM !== undefined ? fabricGSM : req.body.gsm;
+        const gsmRaw = fabricGSM !== undefined ? fabricGSM : (req.body.gsm !== undefined ? req.body.gsm : req.body.fabricGsm);
+        const gsmVal = (gsmRaw !== undefined && gsmRaw !== '' && gsmRaw !== null && !isNaN(Number(gsmRaw))) ? Number(gsmRaw) : null;
         const capVal = bagCapacity !== undefined ? bagCapacity : req.body.capacity;
         const weightVal = req.body.bagWeightGms !== undefined ? req.body.bagWeightGms : (req.body.tareWeightGram !== undefined ? req.body.tareWeightGram : req.body.bagWeight);
         const numWeight = (weightVal !== undefined && weightVal !== '' && weightVal !== null && !isNaN(Number(weightVal))) ? Number(weightVal) : 0;
@@ -162,7 +163,7 @@ const createFinishedGood = async (req, res) => {
             category,
             uom,
             defaultLocation: defaultLocation || null,
-            fabricGSM: (gsmVal !== undefined && gsmVal !== '' && gsmVal !== null && !isNaN(Number(gsmVal))) ? Number(gsmVal) : undefined,
+            fabricGSM: gsmVal !== null ? gsmVal : undefined,
             bagShape,
             dimensions: formattedDimensions,
             dimensionUnit: selectedUnit,
@@ -261,10 +262,17 @@ const getFinishedGoods = async (req, res) => {
         }
 
         if (search) {
-            filter.$or = [
-                { name: { $regex: search, $options: 'i' } },
-                { code: { $regex: search, $options: 'i' } }
+            const trimmedSearch = search.trim();
+            const gsmNormalizedSearch = trimmedSearch.replace(/\b(?:GSM|GMS)\b/gi, '(?:GSM|GMS)');
+            const searchOr = [
+                { name: { $regex: gsmNormalizedSearch, $options: 'i' } },
+                { code: { $regex: trimmedSearch, $options: 'i' } }
             ];
+            const numVal = parseFloat(trimmedSearch.replace(/\b(?:GSM|GMS)\b/gi, '').trim());
+            if (!isNaN(numVal)) {
+                searchOr.push({ fabricGSM: numVal });
+            }
+            filter.$or = searchOr;
         }
 
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -296,9 +304,25 @@ const getFinishedGoods = async (req, res) => {
         });
 
         const enrichedItems = items.map((fg) => {
-            const fgObj = fg.toObject ? fg.toObject() : fg;
+            const fgObj = fg.toObject ? fg.toObject({ virtuals: true }) : { ...fg };
             const linkedBom = bomMap.get(String(fg._id));
             fgObj.materialRequirements = linkedBom ? linkedBom.items : [];
+
+            // Fallback GSM resolution if fabricGSM is missing
+            if (fgObj.fabricGSM === undefined || fgObj.fabricGSM === null) {
+                if (fgObj.gsm !== undefined && fgObj.gsm !== null) {
+                    fgObj.fabricGSM = fgObj.gsm;
+                } else if (fgObj.fabricGrammage) {
+                    const num = Number(String(fgObj.fabricGrammage).replace(/[^0-9.]/g, ''));
+                    if (!isNaN(num) && num > 0) fgObj.fabricGSM = num;
+                } else if (typeof fgObj.name === 'string') {
+                    const match = fgObj.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                    if (match) fgObj.fabricGSM = Number(match[1]);
+                }
+            }
+            fgObj.gsm = fgObj.fabricGSM;
+            fgObj.fabricGsm = fgObj.fabricGSM;
+
             return fgObj;
         });
 
@@ -349,10 +373,17 @@ const exportFinishedGoods = async (req, res) => {
             else if (status === 'Inactive' || status === 'INACTIVE') filter.isActive = false;
         } else if (isActive !== undefined) filter.isActive = isActive === 'true' || isActive === true;
         if (search) {
-            filter.$or = [
-                { name: { $regex: search, $options: 'i' } },
-                { code: { $regex: search, $options: 'i' } }
+            const trimmedSearch = search.trim();
+            const gsmNormalizedSearch = trimmedSearch.replace(/\b(?:GSM|GMS)\b/gi, '(?:GSM|GMS)');
+            const searchOr = [
+                { name: { $regex: gsmNormalizedSearch, $options: 'i' } },
+                { code: { $regex: trimmedSearch, $options: 'i' } }
             ];
+            const numVal = parseFloat(trimmedSearch.replace(/\b(?:GSM|GMS)\b/gi, '').trim());
+            if (!isNaN(numVal)) {
+                searchOr.push({ fabricGSM: numVal });
+            }
+            filter.$or = searchOr;
         }
 
         const items = await FinishedGood.find(filter)
@@ -364,7 +395,15 @@ const exportFinishedGoods = async (req, res) => {
             { label: 'Product Specification', key: 'name' },
             { label: 'Bag Type', key: (f) => (typeof f.category === 'object' ? f.category?.name : f.category) || '' },
             { label: 'Bag Shape', key: (f) => f.bagShape || 'Flat' },
-            { label: 'GSM', key: (f) => f.fabricGSM || '' },
+            { label: 'GSM', key: (f) => {
+                const g = f.fabricGSM ?? f.gsm ?? f.fabricGsm;
+                if (g !== undefined && g !== null && g !== '') return g;
+                if (typeof f.name === 'string') {
+                    const match = f.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                    if (match) return match[1];
+                }
+                return '';
+            }},
             { label: 'Dimensions', key: (f) => f.dimensions?.width && f.dimensions?.length ? `${f.dimensions.width}x${f.dimensions.length} ${f.dimensions?.unit || f.dimensionUnit || 'cm'}` : '' },
             { label: 'Bag Capacity (Kg)', key: (f) => f.bagCapacity || '' },
             { label: 'Price Per Bag (INR)', key: (f) => f.pricePerBag || 0 },
@@ -416,8 +455,23 @@ const getFinishedGoodById = async (req, res) => {
         const fallbackBom = !linkedBom ? await BOM.findOne({ finishedGood: finishedGood._id, tenant: tenantId, isActive: true })
             .populate('items.rawMaterial', 'name code uom currentStock materialGrade color pricePerUnit') : null;
 
-        const responseData = finishedGood.toObject();
+        const responseData = finishedGood.toObject ? finishedGood.toObject({ virtuals: true }) : finishedGood;
         responseData.materialRequirements = (linkedBom || fallbackBom)?.items || [];
+
+        // Fallback GSM resolution if fabricGSM is missing
+        if (responseData.fabricGSM === undefined || responseData.fabricGSM === null) {
+            if (responseData.gsm !== undefined && responseData.gsm !== null) {
+                responseData.fabricGSM = responseData.gsm;
+            } else if (responseData.fabricGrammage) {
+                const num = Number(String(responseData.fabricGrammage).replace(/[^0-9.]/g, ''));
+                if (!isNaN(num) && num > 0) responseData.fabricGSM = num;
+            } else if (typeof responseData.name === 'string') {
+                const match = responseData.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                if (match) responseData.fabricGSM = Number(match[1]);
+            }
+        }
+        responseData.gsm = responseData.fabricGSM;
+        responseData.fabricGsm = responseData.fabricGSM;
 
         return res.status(200).json({
             success: true,
@@ -548,9 +602,13 @@ const updateFinishedGood = async (req, res) => {
             }
         }
 
-        const gsmVal = fabricGSM !== undefined ? fabricGSM : req.body.gsm;
-        if (gsmVal !== undefined) {
-            finishedGood.fabricGSM = (gsmVal !== '' && gsmVal !== null && !isNaN(Number(gsmVal))) ? Number(gsmVal) : undefined;
+        const gsmRaw = fabricGSM !== undefined ? fabricGSM : (req.body.gsm !== undefined ? req.body.gsm : req.body.fabricGsm);
+        if (gsmRaw !== undefined) {
+            if (gsmRaw === '' || gsmRaw === null) {
+                finishedGood.fabricGSM = null;
+            } else if (!isNaN(Number(gsmRaw))) {
+                finishedGood.fabricGSM = Number(gsmRaw);
+            }
         }
         if (bagShape !== undefined) finishedGood.bagShape = bagShape;
         if (dimensions !== undefined) {

@@ -4,6 +4,7 @@ import OperatorWiseProductionTracker from '../production/OperatorWiseProductionT
 import axiosInstance from '../../api/axiosInstance';
 import { useAuthStore } from '../../store/authStore';
 import { formatDate, formatDateTime } from '../../utils/dateUtils';
+import { formatGsmDisplay } from '../../utils/gsmUtils';
 
 /**
  * Helper to safely extract value or nested property
@@ -996,7 +997,7 @@ const MASTER_SCHEMAS = {
                 { label: 'Material Quality-Fabric', key: 'materialQualityFabric' },
                 { label: 'Material Quality-Bags', key: 'materialQualityBags' },
                 { label: 'Lamination Type', key: 'laminationType' },
-                { label: 'Fabric Grammage', key: (r) => r.fabricGrammage ? (r.fabricGrammage.includes('GSM') ? r.fabricGrammage : `${r.fabricGrammage} GSM`) : '-' },
+                { label: 'Fabric Grammage (GSM)', key: (r) => r.fabricGrammage ? formatGsmDisplay(r.fabricGrammage) : '-' },
                 { label: 'Material Colour', key: (r) => r.materialColour || r.color || '-' },
                 { label: 'Thread Colour', key: 'threadColour' },
                 { label: 'Quality-Thread-Yarn', key: 'qualityThreadYarn' },
@@ -1046,7 +1047,20 @@ const MASTER_SCHEMAS = {
                     key: (r) => (r.dimensions?.width && r.dimensions?.length ? `${r.dimensions.width} x ${r.dimensions.length} ${r.dimensions?.unit || r.dimensionUnit || 'cm'}` : '-')
                 },
                 { label: 'Bag Capacity', key: (r) => r.bagCapacity || r.capacity ? `${r.bagCapacity || r.capacity} Kg` : '-' },
-                { label: 'Fabric GSM', key: (r) => r.fabricGSM || r.gsm ? `${r.fabricGSM || r.gsm} GSM` : '-' },
+                {
+                    label: 'GSM',
+                    key: (r) => {
+                        const g = r.fabricGSM ?? r.gsm ?? r.fabricGsm;
+                        if (g !== undefined && g !== null && g !== '' && !isNaN(Number(g))) {
+                            return `${Number(g)} GSM`;
+                        }
+                        if (typeof r.name === 'string') {
+                            const match = r.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                            if (match) return `${match[1]} GSM`;
+                        }
+                        return '-';
+                    }
+                },
                 { label: 'Color & Print Specification', key: 'colorAndPrint', span: 2 },
                 { label: 'Product Notes / Description', key: 'bagType', span: 2 }
             ]
@@ -1492,15 +1506,17 @@ const MASTER_SCHEMAS = {
                 { label: 'Supplier / Vendor', key: (r) => typeof r.supplier === 'object' ? (r.supplier?.companyName || r.supplier?.name || '-') : (r.supplier || '-'), span: 2 },
                 { label: 'PO Date', key: (r) => r.poDate || r.createdAt, type: 'date' },
                 { label: 'Expected Delivery Date', key: 'expectedDelivery', type: 'date' },
+                { label: 'Due Date', key: (r) => r.dueDate || r.expectedDelivery, type: 'date' },
                 { label: 'Status', key: 'status', type: 'status' }
             ]
         },
         {
-            title: 'Financial Summary',
+            title: 'Financial & Payment Summary',
             fields: [
                 { label: 'Total Value', key: 'totalValue', type: 'currency' },
-                { label: 'Tax Amount', key: 'taxAmount', type: 'currency' },
-                { label: 'Grand Total', key: (r) => r.grandTotal != null ? r.grandTotal : r.totalValue, type: 'currency' },
+                { label: 'Paid Amount', key: (r) => r.paidAmount || 0, type: 'currency' },
+                { label: 'Balance Outstanding', key: (r) => r.balanceAmount !== undefined ? r.balanceAmount : Math.max(0, (r.totalValue || 0) - (r.paidAmount || 0)), type: 'currency' },
+                { label: 'Payment Status', key: (r) => r.paymentStatus || 'UNPAID', type: 'status' },
                 { label: 'Payment Terms', key: (r) => r.paymentTerms || '-' }
             ]
         },
@@ -1555,6 +1571,41 @@ const MASTER_SCHEMAS = {
         {
             title: 'Receipt History (Date-wise Delivery Log)',
             renderCustom: (record) => <PoReceiptHistoryViewer record={record} />
+        },
+        {
+            title: 'Payment History',
+            renderCustom: (record) => {
+                const payments = record.payments || [];
+                if (!payments.length) return <p className="text-xs text-text-muted italic">No payment logs recorded for this purchase order yet.</p>;
+                return (
+                    <div className="overflow-x-auto border border-border rounded-lg">
+                        <table className="w-full text-xs text-left">
+                            <thead className="bg-app-bg text-text-muted uppercase text-[10px] tracking-wider border-b border-border">
+                                <tr>
+                                    <th className="px-3 py-2">#</th>
+                                    <th className="px-3 py-2">Date</th>
+                                    <th className="px-3 py-2">Mode</th>
+                                    <th className="px-3 py-2">Reference</th>
+                                    <th className="px-3 py-2">Notes</th>
+                                    <th className="px-3 py-2 text-right">Amount (₹)</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border font-sans">
+                                {payments.map((p, idx) => (
+                                    <tr key={idx} className="hover:bg-app-bg/50">
+                                        <td className="px-3 py-2 text-text-muted font-mono">{idx + 1}</td>
+                                        <td className="px-3 py-2 font-mono text-text-muted">{formatDate(p.paymentDate || p.createdAt)}</td>
+                                        <td className="px-3 py-2 font-semibold text-text-main">{p.paymentMode || 'BANK_TRANSFER'}</td>
+                                        <td className="px-3 py-2 font-mono text-text-muted">{p.reference || '-'}</td>
+                                        <td className="px-3 py-2 text-text-muted">{p.notes || '-'}</td>
+                                        <td className="px-3 py-2 text-right font-mono font-bold text-emerald-600">₹{Number(p.amount || 0).toLocaleString('en-IN')}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            }
         },
         {
             title: 'Attachments & Uploads',

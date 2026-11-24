@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Role = require('../models/role.model');
 const Permission = require('../models/permission.model');
 
@@ -8,22 +9,36 @@ const Permission = require('../models/permission.model');
  */
 const createRole = async (req, res) => {
     try {
-        const { name, permissions } = req.body;
+        const { name, description, permissions } = req.body;
         const userTenant = req.user?.tenant || null;
 
         // 1. Validation
-        if (!name) {
+        if (!name || !String(name).trim()) {
             return res.status(400).json({
                 success: false,
                 message: 'Role name is required.'
             });
         }
 
-        // 2. Check duplicate role within the same tenant
-        const existingRole = await Role.findOne({ name, tenant: userTenant });
+        const trimmedName = String(name).trim();
+
+        // 2. Check duplicate role within the same tenant (case-insensitive)
+        const duplicateQuery = {
+            name: { $regex: new RegExp(`^${trimmedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+        };
+        if (userTenant) {
+            duplicateQuery.tenant = userTenant;
+        } else {
+            duplicateQuery.$or = [{ tenant: null }, { tenant: { $exists: false } }];
+        }
+
+        const existingRole = await Role.findOne(duplicateQuery);
         if (existingRole) {
             if (!existingRole.isActive) {
                 existingRole.isActive = true;
+                if (description !== undefined) {
+                    existingRole.description = typeof description === 'string' ? description.trim() : '';
+                }
                 if (Array.isArray(permissions)) {
                     existingRole.permissions = await resolveToCanonicalPermissionIds(permissions);
                 }
@@ -31,20 +46,21 @@ const createRole = async (req, res) => {
                 await existingRole.populate('permissions');
                 return res.status(200).json({
                     success: true,
-                    message: `Role '${name}' reactivated successfully.`,
+                    message: `Role '${trimmedName}' reactivated successfully.`,
                     data: existingRole
                 });
             }
             return res.status(400).json({
                 success: false,
-                message: `An active role named '${name}' already exists in your organization.`
+                message: `An active role named '${trimmedName}' already exists in your organization.`
             });
         }
 
         // 3. Create role
         const canonicalPermIds = await resolveToCanonicalPermissionIds(permissions);
         const newRole = await Role.create({
-            name,
+            name: trimmedName,
+            description: typeof description === 'string' ? description.trim() : '',
             tenant: userTenant,
             permissions: canonicalPermIds,
             isActive: true
@@ -60,9 +76,27 @@ const createRole = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in createRole controller:', error);
+
+        if (error.code === 11000 || error.name === 'MongoServerError') {
+            return res.status(400).json({
+                success: false,
+                message: 'A role with this name already exists in your organization.',
+                error: error.message
+            });
+        }
+
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors || {}).map((e) => e.message);
+            return res.status(400).json({
+                success: false,
+                message: messages.join(', ') || 'Validation error creating role.',
+                error: error.message
+            });
+        }
+
         return res.status(500).json({
             success: false,
-            message: 'Failed to create role.',
+            message: error.message || 'Failed to create role.',
             error: error.message
         });
     }
@@ -139,7 +173,7 @@ const getRoles = async (req, res) => {
 
 const MATRIX_MODULES = [
     'INVENTORY', 'PRODUCTION', 'PROCUREMENT', 'SALES', 'MASTER_DATA',
-    'USERS', 'ROLES', 'QUALITY', 'DISPATCH', 'HR', 'ANALYTICS', 'CRM', 'COMPANY_SETTINGS'
+    'USERS', 'ROLES', 'QUALITY', 'APPROVALS', 'DISPATCH', 'HR', 'ANALYTICS', 'CRM', 'COMPANY_SETTINGS'
 ];
 const ACTIONS = ['CREATE', 'READ', 'UPDATE', 'DELETE', 'APPROVE'];
 
@@ -148,7 +182,7 @@ const ORIGINAL_8_MODULES = [
     'USERS', 'ROLES', 'QUALITY'
 ];
 
-const NEW_5_MODULES = ['DISPATCH', 'HR', 'ANALYTICS', 'CRM', 'COMPANY_SETTINGS'];
+const NEW_5_MODULES = ['APPROVALS', 'DISPATCH', 'HR', 'ANALYTICS', 'CRM', 'COMPANY_SETTINGS'];
 
 const MODULE_ALIASES = {
     'BAG INVENTORY & STOCK MASTER': 'INVENTORY',
@@ -159,6 +193,8 @@ const MODULE_ALIASES = {
     'USER ACCOUNTS & ACCESS CONTROL': 'USERS',
     'ROLES & PERMISSION MATRICES': 'ROLES',
     'QUALITY CONTROL & COA CERTIFICATES': 'QUALITY',
+    'APPROVALS & WORKFLOWS': 'APPROVALS',
+    'APPROVALS': 'APPROVALS',
     'DISPATCH & DELIVERY': 'DISPATCH',
     'ATTENDANCE & HR MANAGEMENT': 'HR',
     'ANALYTICS & REPORTS': 'ANALYTICS',
@@ -190,34 +226,21 @@ const getPermKey = (m, a) => `${normalizeModule(m)}:${normalizeAction(a)}`;
 
 // Global memory cache of canonical permissions
 let canonicalPermissionsCache = null;
-let lastReconcileTime = 0;
-const RECONCILE_THROTTLE_MS = 3000;
+let hasReconciledRolesOnBoot = false;
 
 /**
- * Idempotently ensures all permissions exist, deduplicates duplicate documents,
- * and repairs Tenant Admin, Reader, Assistant Admin, Account Executive, and Store Manager.
+ * Ensures all canonical permissions exist in the database and returns the array of permission docs.
+ * Cached in memory so repeated calls don't query MongoDB repeatedly.
  */
-const ensurePermissionsAndReconcileRoles = async (force = false) => {
-    const now = Date.now();
-    if (!force && canonicalPermissionsCache && (now - lastReconcileTime < RECONCILE_THROTTLE_MS)) {
+const ensureCanonicalPermissions = async (force = false) => {
+    if (!force && canonicalPermissionsCache && canonicalPermissionsCache.length > 0) {
         return canonicalPermissionsCache;
     }
 
     try {
-        // 1. Fetch all existing permission documents from MongoDB
         const allPermDocs = await Permission.find({});
-
-        // 2. Fetch all roles to know which permissions are already referenced
-        const allRoles = await Role.find({});
-        const referencedPermIdSet = new Set();
-        allRoles.forEach((r) => {
-            (r.permissions || []).forEach((pId) => {
-                if (pId) referencedPermIdSet.add(String(pId._id || pId));
-            });
-        });
-
-        // 3. Group permission docs by normalized module:action
         const groupedDocs = new Map();
+
         allPermDocs.forEach((doc) => {
             const key = getPermKey(doc.module, doc.action);
             if (!groupedDocs.has(key)) {
@@ -226,11 +249,9 @@ const ensurePermissionsAndReconcileRoles = async (force = false) => {
             groupedDocs.get(key).push(doc);
         });
 
-        const canonicalDocMap = new Map(); // key -> canonicalDoc
-        const idToCanonicalMap = new Map(); // anyIdStr -> canonicalDoc._id
+        const canonicalDocMap = new Map();
         const duplicateIdsToDelete = [];
 
-        // Build canonical set for all 65 permissions (13 modules x 5 actions)
         for (const moduleName of MATRIX_MODULES) {
             for (const actionName of ACTIONS) {
                 const key = `${moduleName}:${actionName}`;
@@ -238,119 +259,99 @@ const ensurePermissionsAndReconcileRoles = async (force = false) => {
 
                 let canonicalDoc = null;
                 if (docs.length > 0) {
-                    // Prefer document already referenced by roles, else oldest document
-                    canonicalDoc = docs.find((d) => referencedPermIdSet.has(String(d._id))) || docs[0];
-
-                    // Map all duplicate documents to this canonical document
-                    docs.forEach((d) => {
-                        idToCanonicalMap.set(String(d._id), canonicalDoc._id);
-                        if (String(d._id) !== String(canonicalDoc._id)) {
-                            duplicateIdsToDelete.push(d._id);
-                        }
-                    });
+                    canonicalDoc = docs[0];
+                    for (let i = 1; i < docs.length; i++) {
+                        duplicateIdsToDelete.push(docs[i]._id);
+                    }
                 } else {
-                    // Create if missing
                     canonicalDoc = await Permission.create({
                         module: moduleName,
                         action: actionName,
                         description: `Allows ${actionName} operations on ${moduleName} module`
                     });
-                    idToCanonicalMap.set(String(canonicalDoc._id), canonicalDoc._id);
                 }
-
                 canonicalDocMap.set(key, canonicalDoc);
             }
         }
 
-        // Map any leftover docs
-        allPermDocs.forEach((doc) => {
-            const key = getPermKey(doc.module, doc.action);
-            if (canonicalDocMap.has(key)) {
-                const canonicalDoc = canonicalDocMap.get(key);
-                idToCanonicalMap.set(String(doc._id), canonicalDoc._id);
-                if (String(doc._id) !== String(canonicalDoc._id) && !duplicateIdsToDelete.some((id) => String(id) === String(doc._id))) {
-                    duplicateIdsToDelete.push(doc._id);
-                }
-            }
-        });
-
-        // 4. Safely repair Tenant Admin, Reader, Assistant Admin, Account Executive, Store Manager
-        const all65Ids = Array.from(canonicalDocMap.values()).map((d) => d._id);
-        const reader40Ids = Array.from(canonicalDocMap.entries())
-            .filter(([key]) => {
-                const [mod] = key.split(':');
-                return ORIGINAL_8_MODULES.includes(mod);
-            })
-            .map(([, doc]) => doc._id);
-
-        for (const role of allRoles) {
-            const rName = (role.name || '').trim();
-            const lowerName = rName.toLowerCase();
-
-            if (lowerName === 'tenant admin' || lowerName === 'admin' || (lowerName.includes('admin') && !lowerName.includes('assistant'))) {
-                // Tenant Admin gets all 65 permissions automatically
-                role.permissions = all65Ids;
-                await role.save();
-            } else if (lowerName === 'reader') {
-                // Reader keeps EXACTLY the 40 original permissions
-                role.permissions = reader40Ids;
-                await role.save();
-            } else if (lowerName === 'assistant admin' || lowerName === 'account executive' || lowerName === 'store manager') {
-                // Map existing permissions to canonical IDs without adding new modules
-                const currentPermIds = (role.permissions || []).map((p) => String(p._id || p));
-                const mappedCanonicalIds = new Set();
-
-                currentPermIds.forEach((idStr) => {
-                    const cId = idToCanonicalMap.get(idStr);
-                    if (cId) {
-                        const foundEntry = Array.from(canonicalDocMap.entries()).find(([, d]) => String(d._id) === String(cId));
-                        if (foundEntry) {
-                            const [mod] = foundEntry[0].split(':');
-                            if (!NEW_5_MODULES.includes(mod)) {
-                                mappedCanonicalIds.add(cId);
-                            }
-                        } else {
-                            mappedCanonicalIds.add(cId);
-                        }
-                    }
-                });
-
-                role.permissions = Array.from(mappedCanonicalIds);
-                await role.save();
-            }
-        }
-
-        // 5. Delete duplicate documents now that references are canonicalized
+        // Clean up duplicate permission documents if any
         if (duplicateIdsToDelete.length > 0) {
-            await Permission.deleteMany({ _id: { $in: duplicateIdsToDelete } });
-            console.log(`[RBAC Reconciliation] Merged and deleted ${duplicateIdsToDelete.length} duplicate permission documents.`);
+            try {
+                await Permission.deleteMany({ _id: { $in: duplicateIdsToDelete } });
+            } catch (delErr) {
+                console.warn('[RBAC] Non-fatal duplicate permission delete notice:', delErr.message);
+            }
         }
 
-        // 6. Enforce unique index on { module: 1, action: 1 }
-        try {
-            await Permission.collection.createIndex({ module: 1, action: 1 }, { unique: true });
-        } catch (idxErr) {
-            console.warn('[RBAC Reconciliation] Index creation notice:', idxErr.message);
-        }
-
-        // Update cache
         canonicalPermissionsCache = Array.from(canonicalDocMap.values());
-        lastReconcileTime = Date.now();
-
         return canonicalPermissionsCache;
     } catch (err) {
-        console.error('Error in ensurePermissionsAndReconcileRoles:', err);
-        return [];
+        console.error('Error in ensureCanonicalPermissions:', err);
+        return canonicalPermissionsCache || [];
     }
 };
 
 /**
+ * Ensures permissions exist and runs one-time default role assignment on boot or when forced.
+ * Never mutates or overwrites user-customized roles during runtime.
+ */
+const ensurePermissionsAndReconcileRoles = async (force = false) => {
+    const canonicalDocs = await ensureCanonicalPermissions(force);
+
+    // Only run default role reconciliation once on boot or when force is explicitly true
+    if (!hasReconciledRolesOnBoot || force) {
+        hasReconciledRolesOnBoot = true;
+        try {
+            const allRoles = await Role.find({});
+            const canonicalDocMap = new Map();
+            canonicalDocs.forEach((d) => {
+                canonicalDocMap.set(getPermKey(d.module, d.action), d);
+            });
+
+            const allIds = Array.from(canonicalDocMap.values()).map((d) => d._id);
+            const readerIds = Array.from(canonicalDocMap.entries())
+                .filter(([key]) => {
+                    const [mod] = key.split(':');
+                    return ORIGINAL_8_MODULES.includes(mod);
+                })
+                .map(([, doc]) => doc._id);
+
+            for (const role of allRoles) {
+                try {
+                    const rName = (role.name || '').trim();
+                    const lowerName = rName.toLowerCase();
+
+                    // Only assign default permissions if the role has no permissions set yet,
+                    // preserving user-configured roles from being overwritten
+                    if (!role.permissions || role.permissions.length === 0) {
+                        if (lowerName === 'tenant admin' || lowerName === 'admin' || (lowerName.includes('admin') && !lowerName.includes('assistant'))) {
+                            role.permissions = allIds;
+                            await role.save();
+                        } else if (lowerName === 'reader') {
+                            role.permissions = readerIds;
+                            await role.save();
+                        }
+                    }
+                } catch (roleErr) {
+                    console.warn(`[RBAC] Non-fatal notice reconciling role '${role.name}':`, roleErr.message);
+                }
+            }
+        } catch (err) {
+            console.warn('[RBAC] Error during one-time role reconciliation:', err.message);
+        }
+    }
+
+    return canonicalDocs;
+};
+
+/**
  * Resolves an array of permission IDs, objects, or 'MODULE:ACTION' keys to canonical Permission ObjectIds.
+ * Does not mutate or lock any Role documents.
  */
 const resolveToCanonicalPermissionIds = async (permissionsInput) => {
     if (!Array.isArray(permissionsInput)) return [];
 
-    const canonicalDocs = await ensurePermissionsAndReconcileRoles();
+    const canonicalDocs = await ensureCanonicalPermissions();
     const keyToDocMap = new Map();
     const idToDocMap = new Map();
 
@@ -368,7 +369,7 @@ const resolveToCanonicalPermissionIds = async (permissionsInput) => {
         if (typeof item === 'string' && item.includes(':')) {
             const [m, a] = item.split(':');
             const doc = keyToDocMap.get(getPermKey(m, a));
-            if (doc) resultSet.add(doc._id);
+            if (doc) resultSet.add(String(doc._id));
             continue;
         }
 
@@ -377,27 +378,33 @@ const resolveToCanonicalPermissionIds = async (permissionsInput) => {
             if (item.module && item.action) {
                 const doc = keyToDocMap.get(getPermKey(item.module, item.action));
                 if (doc) {
-                    resultSet.add(doc._id);
+                    resultSet.add(String(doc._id));
                     continue;
                 }
             }
             if (item._id) {
-                const doc = idToDocMap.get(String(item._id));
+                const idStr = String(item._id);
+                const doc = idToDocMap.get(idStr);
                 if (doc) {
-                    resultSet.add(doc._id);
-                    continue;
+                    resultSet.add(String(doc._id));
+                } else if (mongoose.Types.ObjectId.isValid(idStr)) {
+                    resultSet.add(idStr);
                 }
+                continue;
             }
         }
 
         // If string / ObjectId
-        const doc = idToDocMap.get(String(item));
+        const idStr = String(item);
+        const doc = idToDocMap.get(idStr);
         if (doc) {
-            resultSet.add(doc._id);
+            resultSet.add(String(doc._id));
+        } else if (mongoose.Types.ObjectId.isValid(idStr)) {
+            resultSet.add(idStr);
         }
     }
 
-    return Array.from(resultSet);
+    return Array.from(resultSet).map((id) => new mongoose.Types.ObjectId(id));
 };
 
 /**
@@ -407,23 +414,15 @@ const resolveToCanonicalPermissionIds = async (permissionsInput) => {
  */
 const getAllPermissions = async (req, res) => {
     try {
-        await ensurePermissionsAndReconcileRoles();
+        const canonicalDocs = await ensureCanonicalPermissions();
 
-        const permissions = await Permission.find({ module: { $in: MATRIX_MODULES } }).sort({ module: 1, action: 1 });
-
-        // Ensure distinct by module:action
-        const seen = new Set();
-        const distinctPermissions = [];
-        permissions.forEach((p) => {
-            const key = getPermKey(p.module, p.action);
-            if (!seen.has(key)) {
-                seen.add(key);
-                distinctPermissions.push(p);
-            }
+        const sortedPermissions = [...canonicalDocs].sort((a, b) => {
+            if (a.module !== b.module) return a.module.localeCompare(b.module);
+            return a.action.localeCompare(b.action);
         });
 
         const grouped = {};
-        distinctPermissions.forEach((p) => {
+        sortedPermissions.forEach((p) => {
             if (!grouped[p.module]) {
                 grouped[p.module] = [];
             }
@@ -432,15 +431,16 @@ const getAllPermissions = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            count: distinctPermissions.length,
-            data: distinctPermissions,
+            count: sortedPermissions.length,
+            data: sortedPermissions,
             grouped
         });
     } catch (error) {
         console.error('Error in getAllPermissions:', error);
         return res.status(500).json({
             success: false,
-            message: 'Failed to retrieve permissions list.'
+            message: 'Failed to retrieve permissions list.',
+            error: error.message
         });
     }
 };
@@ -453,23 +453,89 @@ const getAllPermissions = async (req, res) => {
 const updateRole = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, description, permissions } = req.body;
+        const { name, description, permissions, isActive } = req.body;
         const userTenant = req.user?.tenant || null;
+        const isSuperAdmin = !userTenant || req.user?.email === process.env.SUPER_ADMIN_EMAIL || req.user?.role === 'SUPER_ADMIN' || req.user?.role?.name === 'SUPER_ADMIN';
 
-        const role = await Role.findOne({ _id: id, tenant: userTenant });
+        // 1. Validate ID format
+        if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid role ID format.'
+            });
+        }
+
+        // 2. Find Role (respecting tenant boundaries)
+        let role;
+        if (isSuperAdmin) {
+            role = await Role.findById(id);
+        } else {
+            role = await Role.findOne({ _id: id, tenant: userTenant });
+        }
+
         if (!role) {
+            // Check if it's a system template role belonging to no tenant
+            const systemRole = await Role.findOne({ _id: id, tenant: null });
+            if (systemRole && !isSuperAdmin) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'System default template roles cannot be modified directly. Please create a custom role.'
+                });
+            }
             return res.status(404).json({
                 success: false,
                 message: 'Role not found in your organization.'
             });
         }
 
-        if (name) role.name = name.trim();
-        if (description !== undefined) role.description = description.trim();
+        // 3. Name validation and duplicate check
+        if (name !== undefined) {
+            const trimmedName = String(name).trim();
+            if (!trimmedName) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Role name cannot be empty.'
+                });
+            }
+
+            // Check if another role with this name exists in the same tenant
+            const duplicateQuery = {
+                name: { $regex: new RegExp(`^${trimmedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+                _id: { $ne: role._id }
+            };
+            if (role.tenant) {
+                duplicateQuery.tenant = role.tenant;
+            } else {
+                duplicateQuery.$or = [{ tenant: null }, { tenant: { $exists: false } }];
+            }
+
+            const existingWithSameName = await Role.findOne(duplicateQuery);
+            if (existingWithSameName) {
+                return res.status(400).json({
+                    success: false,
+                    message: `A role named '${trimmedName}' already exists in your organization.`
+                });
+            }
+
+            role.name = trimmedName;
+        }
+
+        // 4. Update description
+        if (description !== undefined) {
+            role.description = typeof description === 'string' ? description.trim() : '';
+        }
+
+        // 5. Update isActive if provided
+        if (typeof isActive === 'boolean') {
+            role.isActive = isActive;
+        }
+
+        // 6. Update permissions
         if (Array.isArray(permissions)) {
             role.permissions = await resolveToCanonicalPermissionIds(permissions);
         }
 
+        // 7. Save role
         await role.save();
         await role.populate('permissions');
 
@@ -480,9 +546,44 @@ const updateRole = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in updateRole:', error);
+
+        if (error.name === 'CastError') {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid ID value for field '${error.path}'.`,
+                error: error.message
+            });
+        }
+
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors || {}).map((e) => e.message);
+            return res.status(400).json({
+                success: false,
+                message: messages.join(', ') || 'Validation error saving role.',
+                error: error.message
+            });
+        }
+
+        if (error.code === 11000 || error.name === 'MongoServerError') {
+            return res.status(400).json({
+                success: false,
+                message: 'A role with this name already exists in your organization.',
+                error: error.message
+            });
+        }
+
+        if (error.name === 'VersionError') {
+            return res.status(409).json({
+                success: false,
+                message: 'Role was concurrently modified by another process. Please refresh and try again.',
+                error: error.message
+            });
+        }
+
         return res.status(500).json({
             success: false,
-            message: 'Failed to update role.'
+            message: error.message || 'Failed to update role.',
+            error: error.message
         });
     }
 };
@@ -496,8 +597,22 @@ const deleteRole = async (req, res) => {
     try {
         const { id } = req.params;
         const userTenant = req.user?.tenant || null;
+        const isSuperAdmin = !userTenant || req.user?.email === process.env.SUPER_ADMIN_EMAIL || req.user?.role === 'SUPER_ADMIN' || req.user?.role?.name === 'SUPER_ADMIN';
 
-        const role = await Role.findOne({ _id: id, tenant: userTenant });
+        if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid role ID format.'
+            });
+        }
+
+        let role;
+        if (isSuperAdmin) {
+            role = await Role.findById(id);
+        } else {
+            role = await Role.findOne({ _id: id, tenant: userTenant });
+        }
+
         if (!role) {
             return res.status(404).json({
                 success: false,
@@ -525,7 +640,8 @@ const deleteRole = async (req, res) => {
         console.error('Error in deleteRole:', error);
         return res.status(500).json({
             success: false,
-            message: 'Failed to delete role.'
+            message: error.message || 'Failed to delete role.',
+            error: error.message
         });
     }
 };
@@ -539,8 +655,22 @@ const toggleRoleStatus = async (req, res) => {
     try {
         const { id } = req.params;
         const userTenant = req.user?.tenant || null;
+        const isSuperAdmin = !userTenant || req.user?.email === process.env.SUPER_ADMIN_EMAIL || req.user?.role === 'SUPER_ADMIN' || req.user?.role?.name === 'SUPER_ADMIN';
 
-        const role = await Role.findOne({ _id: id, tenant: userTenant });
+        if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid role ID format.'
+            });
+        }
+
+        let role;
+        if (isSuperAdmin) {
+            role = await Role.findById(id);
+        } else {
+            role = await Role.findOne({ _id: id, tenant: userTenant });
+        }
+
         if (!role) {
             return res.status(404).json({
                 success: false,
@@ -573,7 +703,8 @@ const toggleRoleStatus = async (req, res) => {
         console.error('Error in toggleRoleStatus:', error);
         return res.status(500).json({
             success: false,
-            message: 'Failed to toggle role status.'
+            message: error.message || 'Failed to toggle role status.',
+            error: error.message
         });
     }
 };
@@ -587,6 +718,7 @@ module.exports = {
     toggleRoleStatus,
     ensurePermissions: ensurePermissionsAndReconcileRoles,
     ensurePermissionsAndReconcileRoles,
+    ensureCanonicalPermissions,
     resolveToCanonicalPermissionIds,
     normalizeModule,
     normalizeAction,

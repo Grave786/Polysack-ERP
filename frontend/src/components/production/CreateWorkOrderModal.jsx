@@ -4,6 +4,7 @@ import axiosInstance from '../../api/axiosInstance';
 import WorkOrderShortageModal from './WorkOrderShortageModal';
 import InlineLookupSelect from '../shared/InlineLookupSelect';
 import { getTodayLocalDateString } from '../../utils/dateUtils';
+import { formatGsmDisplay } from '../../utils/gsmUtils';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../store/authStore';
 import { isTenantAdmin, checkIsSuperAdmin } from '../../utils/permissionUtils';
@@ -832,8 +833,17 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                                 const val = e.target.value;
                                 setFinishedGood(val);
                                 const selectedFg = finishedGoods.find((fg) => fg._id === val);
-                                if (selectedFg && Array.isArray(selectedFg.inks) && selectedFg.inks.length > 0) {
-                                    setInks([...selectedFg.inks]);
+                                if (selectedFg) {
+                                    if (Array.isArray(selectedFg.inks) && selectedFg.inks.length > 0) {
+                                        setInks([...selectedFg.inks]);
+                                    }
+                                    const g = selectedFg.fabricGSM ?? selectedFg.gsm ?? selectedFg.fabricGsm;
+                                    if (g !== undefined && g !== null && g !== '' && !isNaN(Number(g))) {
+                                        setFabricGrammage(String(Number(g)));
+                                    } else if (typeof selectedFg.name === 'string') {
+                                        const match = selectedFg.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                                        if (match) setFabricGrammage(match[1]);
+                                    }
                                 }
                             }}
                             disabled={isLoadingDropdowns}
@@ -1217,6 +1227,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                                 value={fabricGrammage}
                                 onChange={(val) => setFabricGrammage(val)}
                                 options={rmAttributes.fabricGrammage || []}
+                                formatOptionLabel={formatGsmDisplay}
                                 onOpenAdd={() => handleOpenAddAttributeModal('fabricGrammage', 'Fabric Grammage')}
                             />
                             <div className="flex flex-col h-full w-full">

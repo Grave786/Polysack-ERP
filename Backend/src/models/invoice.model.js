@@ -119,11 +119,31 @@ const InvoiceSchema = new mongoose.Schema({
         default: 0,
         min: [0, 'Due amount cannot be negative']
     },
+    balanceAmount: {
+        type: Number,
+        default: 0,
+        min: [0, 'Balance amount cannot be negative']
+    },
+    dueDate: {
+        type: Date,
+        default: null
+    },
+    payments: [
+        {
+            amount: { type: Number, required: true, min: [0.01, 'Payment amount must be greater than 0'] },
+            paymentDate: { type: Date, default: Date.now },
+            paymentMode: { type: String, default: 'UPI' },
+            reference: { type: String, trim: true, default: '' },
+            notes: { type: String, trim: true, default: '' },
+            recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+            recordedAt: { type: Date, default: Date.now }
+        }
+    ],
     paymentStatus: {
         type: String,
         default: 'UNPAID',
         enum: {
-            values: ['UNPAID', 'PARTIALLY_PAID', 'PAID'],
+            values: ['UNPAID', 'PARTIALLY_PAID', 'PAID', 'OVERDUE'],
             message: '{VALUE} is not a valid payment status.'
         }
     },

@@ -6,6 +6,11 @@ const RoleSchema = new mongoose.Schema({
         required: true,
         trim: true
     },
+    description: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     tenant: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Tenant',

@@ -295,7 +295,28 @@ export default function MasterDataPage() {
                 },
                 {
                     header: 'GSM',
-                    render: (row) => row.fabricGSM ? `${row.fabricGSM} GSM` : '-'
+                    exportValue: (row) => {
+                        const g = row.fabricGSM ?? row.gsm ?? row.fabricGsm;
+                        if (g !== undefined && g !== null && g !== '' && !isNaN(Number(g))) {
+                            return `${Number(g)} GSM`;
+                        }
+                        if (typeof row.name === 'string') {
+                            const match = row.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                            if (match) return `${match[1]} GSM`;
+                        }
+                        return '';
+                    },
+                    render: (row) => {
+                        const g = row.fabricGSM ?? row.gsm ?? row.fabricGsm;
+                        if (g !== undefined && g !== null && g !== '' && !isNaN(Number(g))) {
+                            return `${Number(g)} GSM`;
+                        }
+                        if (typeof row.name === 'string') {
+                            const match = row.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                            if (match) return `${match[1]} GSM`;
+                        }
+                        return '-';
+                    }
                 },
                 {
                     header: 'DIMENSIONS',

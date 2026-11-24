@@ -7,7 +7,10 @@ const {
     getPurchaseOrderById,
     updatePurchaseOrder,
     updateStatus,
-    deletePurchaseOrder
+    deletePurchaseOrder,
+    recordPoPayment,
+    getPayablesSummary,
+    getSupplierOutstanding
 } = require('../controllers/purchaseOrder.controller');
 const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
 
@@ -34,6 +37,27 @@ router.post('/', authenticate, checkPermission('PROCUREMENT', 'CREATE'), createP
  * @access  Private (PROCUREMENT:READ)
  */
 router.get('/', authenticate, checkPermission('PROCUREMENT', 'READ'), getPurchaseOrders);
+
+/**
+ * @route   GET /api/purchase-orders/payables-summary
+ * @desc    Get summary of accounts payable
+ * @access  Private (PROCUREMENT:READ)
+ */
+router.get('/payables-summary', authenticate, checkPermission('PROCUREMENT', 'READ'), getPayablesSummary);
+
+/**
+ * @route   GET /api/purchase-orders/supplier-outstanding
+ * @desc    Get supplier-wise accounts payable balance
+ * @access  Private (PROCUREMENT:READ)
+ */
+router.get('/supplier-outstanding', authenticate, checkPermission('PROCUREMENT', 'READ'), getSupplierOutstanding);
+
+/**
+ * @route   PATCH /api/purchase-orders/:id/payment
+ * @desc    Record payment against a Purchase Order
+ * @access  Private (PROCUREMENT:UPDATE)
+ */
+router.patch('/:id/payment', authenticate, checkPermission('PROCUREMENT', 'UPDATE'), recordPoPayment);
 
 /**
  * @route   PATCH /api/purchase-orders/:id/status

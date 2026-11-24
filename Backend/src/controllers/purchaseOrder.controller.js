@@ -7,6 +7,43 @@ const { createPoApprovalRequest } = require('../services/approval.service');
 const { isTenantAdmin } = require('../middlewares/rbac.middleware');
 
 /**
+ * Safely parses any date representation (Date obj, timestamp, ISO string, DD/MM/YYYY, DD-MM-YYYY)
+ */
+const parseDateValue = (val) => {
+    if (!val) return null;
+    if (val instanceof Date) {
+        return isNaN(val.getTime()) ? null : val;
+    }
+    if (typeof val === 'number') {
+        const d = new Date(val);
+        return isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof val === 'string') {
+        const trimmed = val.trim();
+        const ddmmyyyyMatch = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(.*)$/);
+        if (ddmmyyyyMatch) {
+            const day = parseInt(ddmmyyyyMatch[1], 10);
+            const month = parseInt(ddmmyyyyMatch[2], 10) - 1;
+            const year = parseInt(ddmmyyyyMatch[3], 10);
+            const d = new Date(year, month, day, 23, 59, 59, 999);
+            if (!isNaN(d.getTime())) return d;
+        }
+        const d = new Date(trimmed);
+        if (!isNaN(d.getTime())) return d;
+    }
+    return null;
+};
+
+/**
+ * Checks if a given date is strictly in the past (before today / now).
+ */
+const isDateOverdue = (dateVal, now = new Date()) => {
+    const d = parseDateValue(dateVal);
+    if (!d) return false;
+    return d.getTime() < now.getTime();
+};
+
+/**
  * Helper function to auto-generate unique PO number per tenant & year
  */
 const generatePoNumber = async (tenantId) => {
@@ -153,6 +190,11 @@ const createPurchaseOrder = async (req, res) => {
             expectedDelivery: expectedDelivery ? new Date(expectedDelivery) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
             items: cleanedItems,
             totalValue: computedTotalValue,
+            paidAmount: 0,
+            balanceAmount: computedTotalValue,
+            dueDate: req.body.dueDate || (expectedDelivery ? new Date(expectedDelivery) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
+            paymentStatus: 'UNPAID',
+            payments: [],
             status: initialStatus,
             deliveryLocation: deliveryLocation || null,
             notes,
@@ -216,6 +258,15 @@ const getPurchaseOrders = async (req, res) => {
             filter.status = status;
         }
 
+        if (req.query.paymentStatus) {
+            const ps = req.query.paymentStatus;
+            if (ps === 'OUTSTANDING' || ps === 'UNPAID') {
+                filter.paymentStatus = { $in: ['UNPAID', 'PARTIALLY_PAID', 'OVERDUE'] };
+            } else {
+                filter.paymentStatus = ps;
+            }
+        }
+
         if (supplier) {
             filter.supplier = supplier;
         }
@@ -252,16 +303,42 @@ const getPurchaseOrders = async (req, res) => {
             PurchaseOrder.countDocuments(filter)
         ]);
 
+        const now = new Date();
+        const enrichedPOs = purchaseOrders.map((po) => {
+            const poObj = po.toObject ? po.toObject() : { ...po };
+            const total = Number(poObj.totalValue !== undefined ? poObj.totalValue : (poObj.totalAmount || 0));
+            const paid = Number(poObj.paidAmount || 0);
+            const balance = Math.max(0, total - paid);
+
+            poObj.paidAmount = paid;
+            poObj.balanceAmount = balance;
+            poObj.dueDate = poObj.dueDate || poObj.expectedDelivery || poObj.poDate || poObj.createdAt;
+
+            const isOverdue = isDateOverdue(poObj.dueDate, now);
+
+            if (balance <= 0.0001 && (paid > 0 || total > 0)) {
+                poObj.paymentStatus = 'PAID';
+            } else if (isOverdue || poObj.paymentStatus === 'OVERDUE') {
+                poObj.paymentStatus = 'OVERDUE';
+            } else if (paid > 0) {
+                poObj.paymentStatus = 'PARTIALLY_PAID';
+            } else {
+                poObj.paymentStatus = 'UNPAID';
+            }
+
+            return poObj;
+        });
+
         return res.status(200).json({
             success: true,
-            count: purchaseOrders.length,
+            count: enrichedPOs.length,
             pagination: {
                 total,
                 page: pageNum,
                 limit: limitNum,
                 pages: Math.ceil(total / limitNum) || 1
             },
-            data: purchaseOrders
+            data: enrichedPOs
         });
     } catch (error) {
         console.error('Error in getPurchaseOrders:', error);
@@ -867,6 +944,256 @@ const getPurchaseRegister = async (req, res) => {
 
 const exportPurchaseRegisterCsv = getPurchaseRegister;
 
+/**
+ * @desc    Record payment against a Purchase Order
+ * @route   PATCH /api/purchase-orders/:id/payment
+ * @access  Private (PROCUREMENT:UPDATE permission)
+ */
+const recordPoPayment = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
+        }
+
+        const rawAmt = req.body.amount !== undefined ? req.body.amount : (req.body.paymentAmount !== undefined ? req.body.paymentAmount : req.body.paidAmount);
+        const numAmount = Number(rawAmt);
+
+        if (rawAmt === undefined || rawAmt === null || isNaN(numAmount) || numAmount <= 0) {
+            return res.status(400).json({ success: false, message: 'Please provide a valid payment amount greater than 0.' });
+        }
+
+        const po = await PurchaseOrder.findOne({ _id: req.params.id, tenant: tenantId });
+        if (!po) {
+            return res.status(404).json({ success: false, message: 'Purchase Order not found.' });
+        }
+
+        const totalValue = Number(po.totalValue !== undefined ? po.totalValue : (po.totalAmount || 0));
+        const currentPaid = Number(po.paidAmount || 0);
+        const currentBalance = Math.max(0, totalValue - currentPaid);
+
+        if (currentBalance <= 0 || po.paymentStatus === 'PAID') {
+            return res.status(400).json({ success: false, message: 'Purchase Order is already fully paid.' });
+        }
+
+        if (numAmount > currentBalance + 0.001) {
+            return res.status(400).json({
+                success: false,
+                message: `Payment amount (₹${numAmount}) exceeds remaining balance (₹${currentBalance.toFixed(2)}).`
+            });
+        }
+
+        const newPaidAmount = currentPaid + numAmount;
+        po.paidAmount = newPaidAmount;
+        po.balanceAmount = Math.max(0, totalValue - newPaidAmount);
+
+        const dueD = po.dueDate || po.expectedDelivery || po.poDate || po.createdAt;
+        const now = new Date();
+
+        if (po.balanceAmount <= 0.0001) {
+            po.paymentStatus = 'PAID';
+        } else if (isDateOverdue(dueD, now) || po.paymentStatus === 'OVERDUE') {
+            po.paymentStatus = 'OVERDUE';
+        } else if (po.paidAmount > 0) {
+            po.paymentStatus = 'PARTIALLY_PAID';
+        } else {
+            po.paymentStatus = 'UNPAID';
+        }
+
+        if (!Array.isArray(po.payments)) po.payments = [];
+        po.payments.push({
+            amount: numAmount,
+            paymentDate: req.body.paymentDate ? new Date(req.body.paymentDate) : new Date(),
+            paymentMode: req.body.paymentMode || 'UPI',
+            reference: req.body.reference || '',
+            notes: req.body.notes || '',
+            recordedBy: req.user?._id || req.user?.id || null,
+            recordedAt: new Date()
+        });
+
+        await po.save();
+
+        await po.populate([
+            { path: 'supplier', select: 'name code contactPerson phone email' },
+            { path: 'deliveryLocation', select: 'name code' }
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: `Payment of ₹${numAmount} recorded successfully. Remaining balance: ₹${po.balanceAmount.toFixed(2)}.`,
+            data: po
+        });
+    } catch (error) {
+        console.error('Error in recordPoPayment:', error);
+        return res.status(500).json({ success: false, message: 'Failed to record payment on Purchase Order.', error: error.message });
+    }
+};
+
+/**
+ * @desc    Get Accounts Payable Summary (Total payable, overdue, supplier count)
+ * @route   GET /api/purchase-orders/payables-summary
+ * @access  Private (PROCUREMENT:READ permission)
+ */
+const getPayablesSummary = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
+        }
+
+        const pos = await PurchaseOrder.find({
+            tenant: tenantId,
+            isActive: true,
+            status: { $nin: ['CANCELLED', 'REJECTED'] }
+        })
+            .select('totalValue paidAmount balanceAmount dueDate expectedDelivery paymentStatus supplier')
+            .lean();
+
+        let totalPayable = 0;
+        let overdueAmount = 0;
+        const suppliersWithDues = new Set();
+        const now = new Date();
+
+        pos.forEach((po) => {
+            const total = Number(po.totalValue !== undefined ? po.totalValue : (po.totalAmount || 0));
+            const paid = Number(po.paidAmount || 0);
+            const balance = Math.max(0, total - paid);
+
+            if (balance > 0.0001) {
+                totalPayable += balance;
+                if (po.supplier) {
+                    suppliersWithDues.add(String(po.supplier));
+                }
+                const dueD = po.dueDate || po.expectedDelivery || po.poDate || po.createdAt;
+                if (po.paymentStatus === 'OVERDUE' || isDateOverdue(dueD, now)) {
+                    overdueAmount += balance;
+                }
+            }
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                totalPayable: Math.round(totalPayable * 100) / 100,
+                overduePayable: Math.round(overdueAmount * 100) / 100,
+                overdueAmount: Math.round(overdueAmount * 100) / 100,
+                suppliersWithDues: suppliersWithDues.size
+            }
+        });
+    } catch (error) {
+        console.error('Error in getPayablesSummary:', error);
+        return res.status(500).json({ success: false, message: 'Failed to fetch payables summary.', error: error.message });
+    }
+};
+
+/**
+ * @desc    Get Supplier-Wise Outstanding Accounts Payable
+ * @route   GET /api/purchase-orders/supplier-outstanding
+ * @access  Private (PROCUREMENT:READ permission)
+ */
+const getSupplierOutstanding = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
+        }
+
+        const pos = await PurchaseOrder.find({
+            tenant: tenantId,
+            isActive: true,
+            status: { $nin: ['CANCELLED', 'REJECTED'] }
+        })
+            .populate('supplier', 'name code contactPerson phone email')
+            .sort({ poDate: -1, createdAt: -1 })
+            .lean();
+
+        const supplierMap = {};
+        const now = new Date();
+
+        pos.forEach((po) => {
+            const suppId = po.supplier ? String(po.supplier._id || po.supplier) : 'Unknown';
+            const suppName = po.supplier?.name || po.supplier?.companyName || 'Unknown Supplier';
+            const suppCode = po.supplier?.code || '-';
+            const phone = po.supplier?.phone || '-';
+
+            if (!supplierMap[suppId]) {
+                supplierMap[suppId] = {
+                    supplierId: po.supplier?._id || suppId,
+                    supplierName: suppName,
+                    supplierCode: suppCode,
+                    phone: phone,
+                    totalPurchased: 0,
+                    totalPaid: 0,
+                    balance: 0,
+                    overdueAmount: 0,
+                    poCount: 0,
+                    unpaidPoCount: 0
+                };
+            }
+
+            const total = Number(po.totalValue !== undefined ? po.totalValue : (po.totalAmount || 0));
+            const paid = Number(po.paidAmount || 0);
+            const balance = Math.max(0, total - paid);
+
+            supplierMap[suppId].totalPurchased += total;
+            supplierMap[suppId].totalPaid += paid;
+            supplierMap[suppId].balance += balance;
+            supplierMap[suppId].poCount += 1;
+
+            if (balance > 0.0001) {
+                supplierMap[suppId].unpaidPoCount += 1;
+                const dueD = po.dueDate || po.expectedDelivery || po.poDate || po.createdAt;
+                if (po.paymentStatus === 'OVERDUE' || isDateOverdue(dueD, now)) {
+                    supplierMap[suppId].overdueAmount += balance;
+                }
+            }
+        });
+
+        let list = Object.values(supplierMap).map((s) => ({
+            ...s,
+            totalPurchased: Math.round(s.totalPurchased * 100) / 100,
+            totalPaid: Math.round(s.totalPaid * 100) / 100,
+            balance: Math.round(s.balance * 100) / 100,
+            overdueAmount: Math.round(s.overdueAmount * 100) / 100
+        })).sort((a, b) => b.balance - a.balance);
+
+        const searchQ = (req.query.search || '').trim().toLowerCase();
+        if (searchQ) {
+            list = list.filter((item) =>
+                (item.supplierName && item.supplierName.toLowerCase().includes(searchQ)) ||
+                (item.supplierCode && item.supplierCode.toLowerCase().includes(searchQ)) ||
+                (item.phone && item.phone.toLowerCase().includes(searchQ))
+            );
+        }
+
+        const statusQ = (req.query.status || '').trim().toUpperCase();
+        if (statusQ && statusQ !== 'ALL' && statusQ !== 'ALL STATUSES') {
+            if (statusQ === 'OVERDUE') {
+                list = list.filter((item) => (item.overdueAmount || 0) > 0);
+            } else if (statusQ === 'OUTSTANDING' || statusQ === 'UNPAID') {
+                list = list.filter((item) => (item.balance || 0) > 0.0001);
+            } else if (statusQ === 'PAID') {
+                list = list.filter((item) => (item.balance || 0) <= 0.0001);
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            count: list.length,
+            pagination: {
+                total: list.length,
+                page: 1,
+                limit: Math.max(list.length, 10),
+                pages: 1
+            },
+            data: list
+        });
+    } catch (error) {
+        console.error('Error in getSupplierOutstanding:', error);
+        return res.status(500).json({ success: false, message: 'Failed to fetch supplier outstanding.', error: error.message });
+    }
+};
+
 module.exports = {
     createPurchaseOrder,
     getPurchaseOrders,
@@ -875,5 +1202,8 @@ module.exports = {
     getPurchaseOrderById,
     updatePurchaseOrder,
     updateStatus,
-    deletePurchaseOrder
+    deletePurchaseOrder,
+    recordPoPayment,
+    getPayablesSummary,
+    getSupplierOutstanding
 };
