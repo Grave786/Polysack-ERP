@@ -349,7 +349,7 @@ const createDispatch = async (req, res) => {
     let useTransaction = true;
 
     try {
-        const tenantId = req.user?.tenant;
+        const tenantId = req.user?.tenant; 
         if (!tenantId) {
             return res.status(403).json({
                 success: false,
