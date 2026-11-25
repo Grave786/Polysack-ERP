@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { ShieldCheck, RefreshCw, AlertCircle, CheckCircle2, PackageCheck, Pencil } from 'lucide-react';
 import SlideOverPanel from '../shared/SlideOverPanel';
+import SearchableSelect from '../shared/SearchableSelect';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
@@ -301,11 +302,10 @@ export default function CreateQCInspectionModal({
                                             {pendingInbound.length} pending line item(s)
                                         </span>
                                     </div>
-                                    <select
+                                    <SearchableSelect
                                         required
                                         value={selectedInboundKey}
-                                        onChange={(e) => {
-                                            const val = e.target.value;
+                                        onChange={(val) => {
                                             setSelectedInboundKey(val);
                                             const match = pendingInbound.find((item) => `${item.grnId}_${item.rawMaterial._id}` === val);
                                             if (match) {
@@ -316,18 +316,27 @@ export default function CreateQCInspectionModal({
                                                 }));
                                             }
                                         }}
-                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans font-medium"
-                                    >
-                                        {pendingInbound.map((item) => (
-                                            <option
-                                                key={`${item.grnId}_${item.rawMaterial._id}`}
-                                                value={`${item.grnId}_${item.rawMaterial._id}`}
-                                            >
-                                                {item.grnNumber} — {item.rawMaterial.code ? `${item.rawMaterial.code} - ` : ''}{item.rawMaterial.name} ({item.remainingQuantity} {item.rawMaterial.uom || 'KG'} remaining of {item.receivedQuantity})
-                                            </option>
-                                        ))}
-                                        <option value="DIRECT">-- Direct Inward / No GRN --</option>
-                                    </select>
+                                        placeholder="-- Select Pending GRN Line Item --"
+                                        searchPlaceholder="Search by GRN#, RM code, or material name..."
+                                        emptyMessage="No pending line items"
+                                        options={[
+                                            ...pendingInbound.map((item) => ({
+                                                value: `${item.grnId}_${item.rawMaterial._id}`,
+                                                code: item.grnNumber,
+                                                label: `${item.rawMaterial.code ? `${item.rawMaterial.code} - ` : ''}${item.rawMaterial.name}`,
+                                                subLabel: `${item.remainingQuantity} ${item.rawMaterial.uom || 'KG'} remaining of ${item.receivedQuantity}`,
+                                                badge: `Rem: ${item.remainingQuantity}`,
+                                                badgeTone: 'amber',
+                                                searchText: `${item.grnNumber || ''} ${item.poNumber || ''} ${item.rawMaterial.code || ''} ${item.rawMaterial.name || ''}`
+                                            })),
+                                            {
+                                                value: 'DIRECT',
+                                                label: '-- Direct Inward / No GRN --',
+                                                subLabel: 'Inspect a raw material received without a GRN',
+                                                searchText: 'Direct Inward No GRN'
+                                            }
+                                        ]}
+                                    />
                                 </div>
 
                                 {selectedInboundKey === 'DIRECT' && (
@@ -335,19 +344,21 @@ export default function CreateQCInspectionModal({
                                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                                             Select Raw Material *
                                         </label>
-                                        <select
+                                        <SearchableSelect
                                             required
                                             value={selectedDirectRmId}
-                                            onChange={(e) => setSelectedDirectRmId(e.target.value)}
-                                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
-                                        >
-                                            <option value="">-- Select Raw Material --</option>
-                                            {rawMaterials.map((rm) => (
-                                                <option key={rm._id} value={rm._id}>
-                                                    {rm.code ? `${rm.code} - ` : ''}{rm.name} ({rm.uom?.name || rm.uom?.symbol || 'KG'})
-                                                </option>
-                                            ))}
-                                        </select>
+                                            onChange={(val) => setSelectedDirectRmId(val)}
+                                            placeholder="-- Select Raw Material --"
+                                            searchPlaceholder="Search raw material by code or name..."
+                                            emptyMessage="No raw materials found"
+                                            options={rawMaterials.map((rm) => ({
+                                                value: rm._id,
+                                                code: rm.code || 'RM',
+                                                label: rm.name,
+                                                subLabel: `UOM: ${rm.uom?.name || rm.uom?.symbol || 'KG'}`,
+                                                searchText: `${rm.code || ''} ${rm.name || ''}`
+                                            }))}
+                                        />
                                     </div>
                                 )}
 
@@ -396,11 +407,10 @@ export default function CreateQCInspectionModal({
                                             {pendingOutbound.length} pending Work Order(s)
                                         </span>
                                     </div>
-                                    <select
+                                    <SearchableSelect
                                         required
                                         value={selectedWorkOrderId}
-                                        onChange={(e) => {
-                                            const val = e.target.value;
+                                        onChange={(val) => {
                                             setSelectedWorkOrderId(val);
                                             const match = pendingOutbound.find((wo) => String(wo.workOrderId) === String(val));
                                             if (match) {
@@ -411,15 +421,19 @@ export default function CreateQCInspectionModal({
                                                 }));
                                             }
                                         }}
-                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans font-medium"
-                                    >
-                                        <option value="">-- Select Pending Work Order --</option>
-                                        {pendingOutbound.map((wo) => (
-                                            <option key={wo.workOrderId} value={wo.workOrderId}>
-                                                {wo.workOrderNumber} — {wo.finishedGood?.code ? `${wo.finishedGood.code} - ` : ''}{wo.finishedGood?.name} ({wo.remainingQuantity} remaining of {wo.totalProduced})
-                                            </option>
-                                        ))}
-                                    </select>
+                                        placeholder="-- Select Pending Work Order --"
+                                        searchPlaceholder="Search by WO#, FG code, or product name..."
+                                        emptyMessage="No pending work orders"
+                                        options={pendingOutbound.map((wo) => ({
+                                            value: wo.workOrderId,
+                                            code: wo.workOrderNumber,
+                                            label: `${wo.finishedGood?.code ? `${wo.finishedGood.code} - ` : ''}${wo.finishedGood?.name || 'Finished Good'}`,
+                                            subLabel: `${wo.remainingQuantity} remaining of ${wo.totalProduced}${wo.customerName ? ` • ${wo.customerName}` : ''}`,
+                                            badge: `Rem: ${wo.remainingQuantity}`,
+                                            badgeTone: 'amber',
+                                            searchText: `${wo.workOrderNumber || ''} ${wo.finishedGood?.code || ''} ${wo.finishedGood?.name || ''} ${wo.customerName || ''}`
+                                        }))}
+                                    />
                                 </div>
 
                                 {activeOutboundItem && (

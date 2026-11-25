@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, ShoppingBag, RefreshCw, Send } from 'lucide-react';
 import SlideOverPanel from '../shared/SlideOverPanel';
+import SearchableSelect from '../shared/SearchableSelect';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { getTodayLocalDateString, getFutureLocalDateString } from '../../utils/dateUtils';
@@ -273,19 +274,21 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                             <span>Loading suppliers & raw materials...</span>
                         </div>
                     ) : (
-                        <select
+                        <SearchableSelect
                             required
                             value={supplier}
-                            onChange={(e) => setSupplier(e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main font-semibold focus:outline-none focus:border-primary cursor-pointer"
-                        >
-                            <option value="">-- Select Supplier --</option>
-                            {suppliers.map((s) => (
-                                <option key={s._id} value={s._id}>
-                                    {s.code || s.supplierCode || 'SUPP'} - {s.companyName || s.name}
-                                </option>
-                            ))}
-                        </select>
+                            onChange={(val) => setSupplier(val)}
+                            placeholder="-- Select Supplier --"
+                            searchPlaceholder="Search supplier by code, name, or GSTIN..."
+                            emptyMessage="No suppliers found"
+                            options={suppliers.map((s) => ({
+                                value: s._id,
+                                code: s.code || s.supplierCode || 'SUPP',
+                                label: s.companyName || s.name,
+                                subLabel: [s.gstin ? `GSTIN: ${s.gstin}` : null, s.city].filter(Boolean).join(' • '),
+                                searchText: `${s.code || s.supplierCode || ''} ${s.companyName || ''} ${s.name || ''} ${s.gstin || ''} ${s.city || ''}`
+                            }))}
+                        />
                     )}
                 </div>
 
@@ -323,18 +326,20 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                     <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                         Delivery Location
                     </label>
-                    <select
+                    <SearchableSelect
                         value={deliveryLocation}
-                        onChange={(e) => setDeliveryLocation(e.target.value)}
-                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main font-semibold focus:outline-none focus:border-primary cursor-pointer"
-                    >
-                        <option value="">-- Select Location --</option>
-                        {locations.map((loc) => (
-                            <option key={loc._id} value={loc._id}>
-                                {loc.code ? `${loc.code} - ` : ''}{loc.name}
-                            </option>
-                        ))}
-                    </select>
+                        onChange={(val) => setDeliveryLocation(val)}
+                        placeholder="-- Select Location --"
+                        searchPlaceholder="Search delivery location..."
+                        emptyMessage="No locations found"
+                        options={locations.map((loc) => ({
+                            value: loc._id,
+                            code: loc.code || '',
+                            label: loc.name,
+                            subLabel: loc.type || '',
+                            searchText: `${loc.code || ''} ${loc.name || ''} ${loc.type || ''}`
+                        }))}
+                    />
                 </div>
 
                 {/* Repeatable Items Section */}
@@ -373,19 +378,24 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                                     <label className="block text-[10px] font-bold text-text-muted mb-0.5">
                                         Raw Material *
                                     </label>
-                                    <select
+                                    <SearchableSelect
                                         required
                                         value={item.rawMaterial}
-                                        onChange={(e) => handleItemChange(idx, 'rawMaterial', e.target.value)}
-                                        className="w-full border border-border rounded p-1.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer"
-                                    >
-                                        <option value="">-- Select Material --</option>
-                                        {rawMaterials.map((rm) => (
-                                            <option key={rm._id} value={rm._id}>
-                                                {rm.code} - {rm.name}
-                                            </option>
-                                        ))}
-                                    </select>
+                                        onChange={(val) => handleItemChange(idx, 'rawMaterial', val)}
+                                        placeholder="-- Select Material --"
+                                        searchPlaceholder="Search by RM code or material name..."
+                                        emptyMessage="No raw materials found"
+                                        options={rawMaterials.map((rm) => {
+                                            const uomLabel = typeof rm.uom === 'object' ? (rm.uom?.symbol || rm.uom?.name || 'Kg') : (rm.uom || 'Kg');
+                                            return {
+                                                value: rm._id,
+                                                code: rm.code || 'RM',
+                                                label: rm.name,
+                                                subLabel: `Stock: ${Number(rm.currentStock || 0).toLocaleString('en-IN')} ${uomLabel}`,
+                                                searchText: `${rm.code || ''} ${rm.name || ''} ${rm.materialGrade || ''}`
+                                            };
+                                        })}
+                                    />
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-2">

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Truck, RefreshCw, CheckCircle2 } from 'lucide-react';
 import SlideOverPanel from '../shared/SlideOverPanel';
+import SearchableSelect from '../shared/SearchableSelect';
 import PackingSlipRollsSection, { createEmptyRoll } from '../shared/PackingSlipRollsSection';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
@@ -417,19 +418,21 @@ export default function CreateGRNPanel({ isOpen, onClose, po, editGrn = null, on
                                 <span>Loading locations...</span>
                             </div>
                         ) : (
-                            <select
+                            <SearchableSelect
                                 required
                                 value={receivingLocation}
-                                onChange={(e) => setReceivingLocation(e.target.value)}
-                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main font-semibold focus:outline-none focus:border-primary cursor-pointer"
-                            >
-                                <option value="">-- Select Receiving Location --</option>
-                                {locations.map((loc) => (
-                                    <option key={loc._id} value={loc._id}>
-                                        {loc.code ? `${loc.code} - ` : ''}{loc.name} ({loc.type || 'Warehouse'})
-                                    </option>
-                                ))}
-                            </select>
+                                onChange={(val) => setReceivingLocation(val)}
+                                placeholder="-- Select Receiving Location --"
+                                searchPlaceholder="Search warehouse or factory location..."
+                                emptyMessage="No locations found"
+                                options={locations.map((loc) => ({
+                                    value: loc._id,
+                                    code: loc.code || '',
+                                    label: loc.name,
+                                    subLabel: loc.type || 'Warehouse',
+                                    searchText: `${loc.code || ''} ${loc.name || ''} ${loc.type || ''}`
+                                }))}
+                            />
                         )}
                     </div>
                 </div>

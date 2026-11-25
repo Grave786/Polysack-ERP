@@ -6,6 +6,7 @@ import {
     Upload, X as XIcon, FileText, Package, ShoppingCart, Clock
 } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
+import SearchableSelect from '../components/shared/SearchableSelect';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
 import CreateSalesOrderModal from '../components/sales/CreateSalesOrderModal';
 import CreateCustomerModal from '../components/shared/CreateCustomerModal';
@@ -1670,17 +1671,21 @@ export default function CustomerCrmPage() {
                                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                             <div>
                                                 <label className={lbl}>Customer *</label>
-                                                <select
+                                                <SearchableSelect
                                                     required
                                                     value={enquiryForm.customer || enquiryForm.customerRef || ''}
-                                                    onChange={(e) => handleEnquiryCustomerChange(e.target.value)}
-                                                    className={sel}
-                                                >
-                                                    <option value="">— Select Customer —</option>
-                                                    {customers.map((c) => (
-                                                        <option key={c._id} value={c._id}>{c.code || 'CUST'} — {c.companyName || c.name}</option>
-                                                    ))}
-                                                </select>
+                                                    onChange={(val) => handleEnquiryCustomerChange(val)}
+                                                    placeholder="— Select Customer —"
+                                                    searchPlaceholder="Search customer by code, name, or GSTIN..."
+                                                    emptyMessage="No customers found"
+                                                    options={customers.map((c) => ({
+                                                        value: c._id,
+                                                        code: c.code || c.customerCode || 'CUST',
+                                                        label: c.companyName || c.name,
+                                                        subLabel: [c.gstin ? `GSTIN: ${c.gstin}` : null, c.phone].filter(Boolean).join(' • '),
+                                                        searchText: `${c.code || c.customerCode || ''} ${c.companyName || ''} ${c.name || ''} ${c.gstin || ''} ${c.contactPerson || ''}`
+                                                    }))}
+                                                />
                                             </div>
                                             <div>
                                                 <label className={lbl}>Enquiry Date</label>

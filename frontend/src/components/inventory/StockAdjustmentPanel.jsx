@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Sliders, RefreshCw, CheckCircle2 } from 'lucide-react';
 import SlideOverPanel from '../shared/SlideOverPanel';
+import SearchableSelect from '../shared/SearchableSelect';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
@@ -127,19 +128,23 @@ export default function StockAdjustmentPanel({ isOpen, onClose, onSuccess }) {
                             <span>Loading {itemType === 'RAW_MATERIAL' ? 'Raw Materials' : 'Finished Goods'}...</span>
                         </div>
                     ) : (
-                        <select
+                        <SearchableSelect
                             required
                             value={selectedItem}
-                            onChange={(e) => setSelectedItem(e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main font-semibold focus:outline-none focus:border-primary cursor-pointer"
-                        >
-                            <option value="">-- Select Item --</option>
-                            {itemsList.map((item) => (
-                                <option key={item._id} value={item._id}>
-                                    {item.code || 'ITEM'} - {item.name} ({item.currentStock || 0} in stock)
-                                </option>
-                            ))}
-                        </select>
+                            onChange={(val) => setSelectedItem(val)}
+                            placeholder="-- Select Item --"
+                            searchPlaceholder={`Search ${itemType === 'RAW_MATERIAL' ? 'raw material' : 'finished bag'} by code or name...`}
+                            emptyMessage="No inventory items found"
+                            options={itemsList.map((item) => ({
+                                value: item._id,
+                                code: item.code || 'ITEM',
+                                label: item.name,
+                                subLabel: `In stock: ${Number(item.currentStock || 0).toLocaleString('en-IN')}`,
+                                badge: `Stock: ${Number(item.currentStock || 0).toLocaleString('en-IN')}`,
+                                badgeTone: Number(item.currentStock || 0) > 0 ? 'emerald' : 'rose',
+                                searchText: `${item.code || ''} ${item.name || ''}`
+                            }))}
+                        />
                     )}
                 </div>
 

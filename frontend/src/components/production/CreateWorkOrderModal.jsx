@@ -3,6 +3,7 @@ import SlideOverPanel from '../shared/SlideOverPanel';
 import axiosInstance from '../../api/axiosInstance';
 import WorkOrderShortageModal from './WorkOrderShortageModal';
 import InlineLookupSelect from '../shared/InlineLookupSelect';
+import SearchableSelect from '../shared/SearchableSelect';
 import { getTodayLocalDateString } from '../../utils/dateUtils';
 import { formatGsmDisplay } from '../../utils/gsmUtils';
 import toast from 'react-hot-toast';
@@ -804,33 +805,33 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
                             Select Customer / Client *
                         </label>
-                        <select
+                        <SearchableSelect
                             required
                             value={customer}
-                            onChange={(e) => handleCustomerChange(e.target.value)}
+                            onChange={(val) => handleCustomerChange(val)}
                             disabled={isLoadingDropdowns}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50"
-                        >
-                            <option value="" disabled>
-                                {isLoadingDropdowns ? 'Loading Customers...' : '-- Select Customer --'}
-                            </option>
-                            {customers.map((c) => (
-                                <option key={c._id} value={c._id}>
-                                    {c.customerCode || c.code || 'CUST'} - {c.companyName || c.name}
-                                </option>
-                            ))}
-                        </select>
+                            loading={isLoadingDropdowns}
+                            placeholder={isLoadingDropdowns ? 'Loading Customers...' : '-- Select Customer --'}
+                            searchPlaceholder="Search customer by code, name, or GSTIN..."
+                            emptyMessage="No customers found"
+                            options={customers.map((c) => ({
+                                value: c._id,
+                                code: c.customerCode || c.code || 'CUST',
+                                label: c.companyName || c.name,
+                                subLabel: [c.gstin ? `GSTIN: ${c.gstin}` : null, c.contactPerson].filter(Boolean).join(' • '),
+                                searchText: `${c.customerCode || c.code || ''} ${c.companyName || ''} ${c.name || ''} ${c.gstin || ''} ${c.contactPerson || ''}`
+                            }))}
+                        />
                     </div>
 
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
                             Select Finished Bag Specification *
                         </label>
-                        <select
+                        <SearchableSelect
                             required
                             value={finishedGood}
-                            onChange={(e) => {
-                                const val = e.target.value;
+                            onChange={(val) => {
                                 setFinishedGood(val);
                                 const selectedFg = finishedGoods.find((fg) => fg._id === val);
                                 if (selectedFg) {
@@ -847,17 +848,27 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                                 }
                             }}
                             disabled={isLoadingDropdowns}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50"
-                        >
-                            <option value="" disabled>
-                                {isLoadingDropdowns ? 'Loading Specifications...' : '-- Select Finished Good Spec --'}
-                            </option>
-                            {finishedGoods.map((fg) => (
-                                <option key={fg._id} value={fg._id}>
-                                    {fg.code || 'FG'} - {fg.name}
-                                </option>
-                            ))}
-                        </select>
+                            loading={isLoadingDropdowns}
+                            placeholder={isLoadingDropdowns ? 'Loading Specifications...' : '-- Select Finished Good Spec --'}
+                            searchPlaceholder="Search by code, name, GSM, size, laminated..."
+                            emptyMessage="No finished bag specifications found"
+                            options={finishedGoods.map((fg) => {
+                                const gsmVal = fg.fabricGSM ?? fg.gsm ?? fg.fabricGsm;
+                                const dimStr = fg.dimensions?.width && fg.dimensions?.length
+                                    ? `${fg.dimensions.width}x${fg.dimensions.length}${fg.dimensions.unit || 'cm'}`
+                                    : '';
+                                const stockVal = Number(fg.currentStock ?? 0);
+                                return {
+                                    value: fg._id,
+                                    code: fg.code || 'FG',
+                                    label: fg.name,
+                                    subLabel: [gsmVal ? `${gsmVal} GSM` : '', dimStr, `Stock: ${stockVal.toLocaleString('en-IN')}`].filter(Boolean).join(' • '),
+                                    badge: `Stock: ${stockVal.toLocaleString('en-IN')}`,
+                                    badgeTone: stockVal > 0 ? 'emerald' : 'rose',
+                                    searchText: `${fg.code || ''} ${fg.name || ''} ${gsmVal || ''} ${dimStr} ${fg.description || ''}`
+                                };
+                            })}
+                        />
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

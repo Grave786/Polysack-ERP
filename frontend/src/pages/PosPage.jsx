@@ -4,6 +4,7 @@ import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import PrintInvoiceModal from '../components/pos/PrintInvoiceModal';
 import FinishedGoodSpecCard from '../components/inventory/FinishedGoodSpecCard';
+import SearchableSelect from '../components/shared/SearchableSelect';
 
 export default function PosPage() {
     const [finishedGoods, setFinishedGoods] = useState([]);
@@ -528,21 +529,20 @@ export default function PosPage() {
                                 <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                                     Select Registered Customer *
                                 </label>
-                                <select
+                                <SearchableSelect
                                     value={selectedCustomerRef}
-                                    onChange={(e) => setSelectedCustomerRef(e.target.value)}
-                                    className="w-full border border-border rounded-md p-2 bg-app-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
-                                >
-                                    {customers.length === 0 ? (
-                                        <option value="">No registered customers found</option>
-                                    ) : (
-                                        customers.map((c) => (
-                                            <option key={c._id} value={c._id}>
-                                                {c.code || c.customerCode || 'CUST'} - {c.companyName || c.contactPersonName}{c.gstin ? ` (${c.gstin})` : ''}
-                                            </option>
-                                        ))
-                                    )}
-                                </select>
+                                    onChange={(val) => setSelectedCustomerRef(val)}
+                                    placeholder="-- Select Registered Customer --"
+                                    searchPlaceholder="Search by code, name, or GSTIN..."
+                                    emptyMessage="No registered customers found"
+                                    options={customers.map((c) => ({
+                                        value: c._id,
+                                        code: c.code || c.customerCode || 'CUST',
+                                        label: c.companyName || c.contactPersonName || c.name,
+                                        subLabel: c.gstin ? `GSTIN: ${c.gstin}` : (c.phone || 'Unregistered'),
+                                        searchText: `${c.code || c.customerCode || ''} ${c.companyName || ''} ${c.contactPersonName || ''} ${c.gstin || ''}`
+                                    }))}
+                                />
                             </div>
                         ) : (
                             <div className="space-y-2.5 bg-app-bg p-3 rounded-lg border border-border">

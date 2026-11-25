@@ -3,6 +3,7 @@ import { FileText, CheckCircle2, Receipt, AlertCircle, ShoppingCart } from 'luci
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { formatDate } from '../../utils/dateUtils';
+import SearchableSelect from '../shared/SearchableSelect';
 
 export default function GenerateInvoiceModal({ isOpen, onClose, onSuccess }) {
     const [salesOrders, setSalesOrders] = useState([]);
@@ -97,28 +98,29 @@ export default function GenerateInvoiceModal({ isOpen, onClose, onSuccess }) {
                         <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
                             Select Confirmed Sales Order *
                         </label>
-                        <select
+                        <SearchableSelect
                             required
                             value={selectedSoId}
-                            onChange={(e) => setSelectedSoId(e.target.value)}
+                            onChange={(val) => setSelectedSoId(val)}
                             disabled={isLoading}
-                            className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50 font-sans"
-                        >
-                            {isLoading ? (
-                                <option value="">Loading eligible Sales Orders...</option>
-                            ) : salesOrders.length === 0 ? (
-                                <option value="">No confirmed Sales Orders available</option>
-                            ) : (
-                                salesOrders.map((so) => {
-                                    const cName = so.customer?.companyName || 'Customer';
-                                    return (
-                                        <option key={so._id} value={so._id}>
-                                            {so.soNumber} — {cName} (Status: {so.status} &middot; ₹{(so.totalAmount || so.totalValue || 0).toLocaleString()})
-                                        </option>
-                                    );
-                                })
-                            )}
-                        </select>
+                            loading={isLoading}
+                            placeholder={isLoading ? 'Loading eligible Sales Orders...' : '-- Select Confirmed Sales Order --'}
+                            searchPlaceholder="Search by SO#, customer name, or status..."
+                            emptyMessage="No confirmed Sales Orders available"
+                            options={salesOrders.map((so) => {
+                                const cName = so.customer?.companyName || 'Customer';
+                                const total = Number(so.totalAmount || so.totalValue || 0);
+                                return {
+                                    value: so._id,
+                                    code: so.soNumber,
+                                    label: cName,
+                                    subLabel: `Total: ₹${total.toLocaleString('en-IN')}${so.orderDate ? ` • ${formatDate(so.orderDate)}` : ''}`,
+                                    badge: so.status,
+                                    badgeTone: so.status === 'CONFIRMED' ? 'emerald' : 'amber',
+                                    searchText: `${so.soNumber || ''} ${cName} ${so.status || ''}`
+                                };
+                            })}
+                        />
                     </div>
 
                     {selectedSO && (

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Truck, Plus, RefreshCw, CheckCircle2, Eye, PackageCheck, AlertCircle, UploadCloud, ShieldCheck, Calendar, X, Download, FileText, Pencil } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
+import SearchableSelect from '../components/shared/SearchableSelect';
 import ViewDispatchModal from '../components/dispatch/ViewDispatchModal';
 import UploadPodModal from '../components/dispatch/UploadPodModal';
 import axiosInstance from '../api/axiosInstance';
@@ -1211,45 +1212,43 @@ export default function DispatchPage() {
                                 <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1 flex items-center justify-between">
                                     <span>Select Order / Invoice Reference *</span>
                                     <span className="text-[10px] text-text-muted font-normal">
-                                        {editDispatch ? 'Linked Order / Invoice' : `${filteredSources.length} of ${dispatchableSources.length} available to dispatch`}
+                                        {editDispatch ? 'Linked Order / Invoice' : `${dispatchableSources.length} of ${dispatchableSources.length} available to dispatch`}
                                     </span>
                                 </label>
-                                {!editDispatch && (
-                                    <input 
-                                        type="text" 
-                                        placeholder="🔍 Search SO#, INV# or Customer Name..." 
-                                        value={orderSearch}
-                                        onChange={(e) => setOrderSearch(e.target.value)}
-                                        className="w-full mb-2 border border-border rounded-md p-2 text-xs bg-card-bg text-text-main focus:outline-none focus:border-primary"
-                                    />
-                                )}
-                                <select
+                                <SearchableSelect
                                     required
                                     disabled={Boolean(editDispatch)}
                                     value={selectedSource?.id || ''}
-                                    onChange={(e) => handleSelectSource(e.target.value)}
-                                    className={`w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary font-sans ${
-                                        editDispatch ? 'opacity-85 cursor-not-allowed bg-border/20' : 'cursor-pointer'
-                                    }`}
-                                >
-                                    {editDispatch ? (
-                                        <option value={selectedSource?.id || ''}>
-                                            {selectedSource?.label || 'Linked Order / Invoice'}
-                                        </option>
-                                    ) : filteredSources.length === 0 ? (
-                                        <option value="">
-                                            {dispatchableSources.length === 0
-                                                ? 'No pending Sales Orders or POS Invoices available'
-                                                : 'No matching orders found'}
-                                        </option>
-                                    ) : (
-                                        filteredSources.map((src) => (
-                                            <option key={`${src.sourceType}_${src.id}`} value={src.id}>
-                                                {src.label}
-                                            </option>
-                                        ))
-                                    )}
-                                </select>
+                                    onChange={(val) => handleSelectSource(val)}
+                                    placeholder={
+                                        dispatchableSources.length === 0 && !editDispatch
+                                            ? 'No pending Sales Orders or POS Invoices available'
+                                            : '-- Select Sales Order or POS Invoice --'
+                                    }
+                                    searchPlaceholder="Search SO#, INV#, or Customer Name..."
+                                    emptyMessage="No pending Sales Orders or POS Invoices available"
+                                    footerText={editDispatch ? 'Linked Order / Invoice' : `${dispatchableSources.length} of ${dispatchableSources.length} available to dispatch`}
+                                    options={
+                                        editDispatch && selectedSource
+                                            ? [{
+                                                value: selectedSource.id,
+                                                code: selectedSource.referenceNumber || '',
+                                                label: selectedSource.customerName || selectedSource.label,
+                                                subLabel: selectedSource.label,
+                                                group: selectedSource.sourceType === 'POS_INVOICE' ? 'POS Sales' : 'Sales Orders'
+                                            }]
+                                            : dispatchableSources.map((src) => ({
+                                                value: src.id,
+                                                code: src.referenceNumber || '',
+                                                label: src.customerName || src.label,
+                                                subLabel: src.remainingLabel || `Remaining: ${(src.remainingQuantity || 0).toLocaleString('en-IN')} ${src.items?.[0]?.uom || 'Bags'}`,
+                                                badge: src.sourceType === 'POS_INVOICE' ? 'POS Sale' : 'Sales Order',
+                                                badgeTone: src.sourceType === 'POS_INVOICE' ? 'purple' : 'blue',
+                                                group: src.sourceType === 'POS_INVOICE' ? 'POS Sales' : 'Sales Orders',
+                                                searchText: `${src.referenceNumber || ''} ${src.customerName || ''} ${src.label || ''}`
+                                            }))
+                                    }
+                                />
                             </div>
 
                             {selectedSource && (
@@ -1360,18 +1359,21 @@ export default function DispatchPage() {
                                     <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                                         Dispatch Location Dock *
                                     </label>
-                                    <select
+                                    <SearchableSelect
                                         required
                                         value={formData.dispatchLocation}
-                                        onChange={(e) => setFormData({ ...formData, dispatchLocation: e.target.value })}
-                                        className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer font-sans"
-                                    >
-                                        {locations.map((loc) => (
-                                            <option key={loc._id} value={loc._id}>
-                                                {loc.code ? `${loc.code} - ` : ''}{loc.name}
-                                            </option>
-                                        ))}
-                                    </select>
+                                        onChange={(val) => setFormData({ ...formData, dispatchLocation: val })}
+                                        placeholder="-- Select Dispatch Dock --"
+                                        searchPlaceholder="Search dispatch location..."
+                                        emptyMessage="No locations found"
+                                        options={locations.map((loc) => ({
+                                            value: loc._id,
+                                            code: loc.code || '',
+                                            label: loc.name,
+                                            subLabel: loc.type || '',
+                                            searchText: `${loc.code || ''} ${loc.name || ''} ${loc.type || ''}`
+                                        }))}
+                                    />
                                 </div>
                             </div>
 

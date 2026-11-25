@@ -6,6 +6,7 @@ import { Construction, Plus, X, Clock, Sparkles, Pencil, Trash2, MapPin } from '
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import InlineLookupSelect from './InlineLookupSelect';
+import SearchableSelect from './SearchableSelect';
 import DetailViewModal from './DetailViewModal';
 import { formatGsmDisplay } from '../../utils/gsmUtils';
 
@@ -3759,20 +3760,21 @@ export default function TabbedResourcePage({
                                 )}
                             </div>
                         </div>
-                        <select
+                        <SearchableSelect
                             name="category"
                             required
                             value={typeof formData.category === 'object' ? formData.category?._id : (formData.category || (categoriesList[0]?._id || ''))}
-                            onChange={(e) => handleInputChange('category', e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
-                        >
-                            <option value="">-- Select Bag Category --</option>
-                            {categoriesList.map((cat) => (
-                                <option key={cat._id} value={cat._id}>
-                                    {cat.code ? `${cat.code} - ` : ''}{cat.name}
-                                </option>
-                            ))}
-                        </select>
+                            onChange={(val) => handleInputChange('category', val)}
+                            placeholder="-- Select Bag Category --"
+                            searchPlaceholder="Search bag category..."
+                            emptyMessage="No bag categories found"
+                            options={categoriesList.map((cat) => ({
+                                value: cat._id,
+                                code: cat.code || '',
+                                label: cat.name,
+                                searchText: `${cat.code || ''} ${cat.name || ''}`
+                            }))}
+                        />
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -3789,20 +3791,21 @@ export default function TabbedResourcePage({
                                     + Add New
                                 </button>
                             </div>
-                            <select
+                            <SearchableSelect
                                 name="uom"
                                 required
                                 value={typeof formData.uom === 'object' ? formData.uom?._id : (formData.uom || (uomsList[0]?._id || ''))}
-                                onChange={(e) => handleInputChange('uom', e.target.value)}
-                                className="h-10 w-full border border-border rounded-md px-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer"
-                            >
-                                <option value="">-- Select UOM --</option>
-                                {uomsList.map((u) => (
-                                    <option key={u._id} value={u._id}>
-                                        {u.abbreviation || u.symbol || u.code || 'UOM'} - {u.name}
-                                    </option>
-                                ))}
-                            </select>
+                                onChange={(val) => handleInputChange('uom', val)}
+                                placeholder="-- Select UOM --"
+                                searchPlaceholder="Search UOM..."
+                                emptyMessage="No units found"
+                                options={uomsList.map((u) => ({
+                                    value: u._id,
+                                    code: u.abbreviation || u.symbol || u.code || 'UOM',
+                                    label: u.name,
+                                    searchText: `${u.abbreviation || ''} ${u.symbol || ''} ${u.code || ''} ${u.name || ''}`
+                                }))}
+                            />
                         </div>
 
                         <div>
@@ -4216,24 +4219,31 @@ export default function TabbedResourcePage({
                                 return (
                                     <div key={idx} className="flex items-center gap-2 bg-app-bg p-2 rounded-lg border border-border">
                                         <div className="flex-1 min-w-0">
-                                            <select
+                                            <SearchableSelect
                                                 required
                                                 value={selectedRmId || ''}
-                                                onChange={(e) => {
-                                                    const val = e.target.value;
+                                                onChange={(val) => {
                                                     setBomIngredients((prev) =>
                                                         prev.map((ing, i) => (i === idx ? { ...ing, rawMaterial: val } : ing))
                                                     );
                                                 }}
-                                                className="h-9 w-full border border-border rounded-md px-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans cursor-pointer truncate"
-                                            >
-                                                <option value="">-- Select Raw Material --</option>
-                                                {(rawMaterialsList || []).map((rm) => (
-                                                    <option key={rm._id} value={rm._id}>
-                                                        {rm.code || 'RM'} - {rm.name} (Stock: {rm.currentStock || 0} {typeof rm.uom === 'object' ? rm.uom?.symbol : (rm.uom || 'kg')})
-                                                    </option>
-                                                ))}
-                                            </select>
+                                                placeholder="-- Select Raw Material --"
+                                                searchPlaceholder="Search raw material by code or name..."
+                                                emptyMessage="No raw materials found"
+                                                options={(rawMaterialsList || []).map((rm) => {
+                                                    const rmUom = typeof rm.uom === 'object' ? rm.uom?.symbol : (rm.uom || 'kg');
+                                                    const rmStock = Number(rm.currentStock || 0);
+                                                    return {
+                                                        value: rm._id,
+                                                        code: rm.code || 'RM',
+                                                        label: rm.name,
+                                                        subLabel: `Stock: ${rmStock.toLocaleString('en-IN')} ${rmUom}`,
+                                                        badge: `Stock: ${rmStock.toLocaleString('en-IN')}`,
+                                                        badgeTone: rmStock > 0 ? 'emerald' : 'rose',
+                                                        searchText: `${rm.code || ''} ${rm.name || ''}`
+                                                    };
+                                                })}
+                                            />
                                         </div>
 
                                         <div className="w-28 relative">

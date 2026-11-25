@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, ShoppingCart, Calculator, Calendar, User, MapPin, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
 import SlideOverPanel from '../shared/SlideOverPanel';
+import SearchableSelect from '../shared/SearchableSelect';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { getTodayLocalDateString, getFutureLocalDateString, formatToLocalDateString } from '../../utils/dateUtils';
@@ -501,22 +502,27 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                             </button>
                         </div>
 
-                        <select
+                        <SearchableSelect
                             required
                             value={customerId}
-                            onChange={(e) => setCustomerId(e.target.value)}
+                            onChange={(val) => setCustomerId(val)}
                             disabled={isLoadingDropdowns}
-                            className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-50"
-                        >
-                            <option value="" disabled>
-                                {isLoadingDropdowns ? 'Loading Customers catalog...' : '-- Select Customer / Buyer --'}
-                            </option>
-                            {customers.map((c) => (
-                                <option key={c._id} value={c._id}>
-                                    {c.code || c.customerCode || 'CUST'} - {c.companyName || c.name}{c.gstin ? ` — GSTIN: ${c.gstin}` : ''}
-                                </option>
-                            ))}
-                        </select>
+                            loading={isLoadingDropdowns}
+                            placeholder={isLoadingDropdowns ? 'Loading Customers catalog...' : '-- Select Customer / Buyer --'}
+                            searchPlaceholder="Search customer by code, name, or GSTIN..."
+                            emptyMessage="No customers found"
+                            footerAction={{
+                                label: '+ New Customer',
+                                onClick: () => setIsQuickCustomerOpen(true)
+                            }}
+                            options={customers.map((c) => ({
+                                value: c._id,
+                                code: c.code || c.customerCode || 'CUST',
+                                label: c.companyName || c.name,
+                                subLabel: [c.gstin ? `GSTIN: ${c.gstin}` : 'Unregistered', c.city || c.state].filter(Boolean).join(' • '),
+                                searchText: `${c.code || c.customerCode || ''} ${c.companyName || ''} ${c.name || ''} ${c.gstin || ''} ${c.contactPerson || ''}`
+                            }))}
+                        />
 
                         {selectedCustomerObj && (
                             <div className="bg-app-bg/80 border border-border/70 rounded-lg p-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-text-muted">
@@ -571,18 +577,20 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                 <MapPin size={12} className="text-text-muted" />
                                 <span>Dispatch Dock</span>
                             </label>
-                            <select
+                            <SearchableSelect
                                 value={dispatchLocation}
-                                onChange={(e) => setDispatchLocation(e.target.value)}
-                                className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary cursor-pointer"
-                            >
-                                <option value="">-- Optional Location --</option>
-                                {locations.map((loc) => (
-                                    <option key={loc._id} value={loc._id}>
-                                        {loc.name} ({loc.code})
-                                    </option>
-                                ))}
-                            </select>
+                                onChange={(val) => setDispatchLocation(val)}
+                                placeholder="-- Optional Location --"
+                                searchPlaceholder="Search dispatch dock..."
+                                emptyMessage="No locations found"
+                                options={locations.map((loc) => ({
+                                    value: loc._id,
+                                    code: loc.code || '',
+                                    label: loc.name,
+                                    subLabel: loc.type || '',
+                                    searchText: `${loc.code || ''} ${loc.name || ''} ${loc.type || ''}`
+                                }))}
+                            />
                         </div>
                     </div>
 
@@ -615,25 +623,33 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                             <label className="block text-[10px] font-bold uppercase tracking-wider text-text-muted mb-0.5">
                                                 Finished Bag Specification *
                                             </label>
-                                            <select
+                                            <SearchableSelect
                                                 required
                                                 value={item.finishedGood}
-                                                onChange={(e) => handleItemChange(index, 'finishedGood', e.target.value)}
-                                                className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
-                                            >
-                                                <option value="" disabled>-- Select Bag Product --</option>
-                                                {finishedGoods.map((fg) => {
+                                                onChange={(val) => handleItemChange(index, 'finishedGood', val)}
+                                                placeholder="-- Select Bag Product --"
+                                                searchPlaceholder="Search by code, name, GSM, size, laminated..."
+                                                emptyMessage="No finished bag specifications found"
+                                                options={finishedGoods.map((fg) => {
                                                     const fgUom = (fg.uom && typeof fg.uom === 'object' && (fg.uom.symbol || fg.uom.name || fg.uom.abbreviation))
                                                         ? (fg.uom.symbol || fg.uom.name || fg.uom.abbreviation)
                                                         : (typeof fg.uom === 'string' && !/^[0-9a-fA-F]{24}$/.test(fg.uom) ? fg.uom : (fg.unit || 'Pcs'));
                                                     const stockVal = Number(fg.currentStock !== undefined && fg.currentStock !== null ? fg.currentStock : 0);
-                                                    return (
-                                                        <option key={fg._id} value={fg._id}>
-                                                            {fg.code || 'FG'} - {fg.name} (Stock: {stockVal.toLocaleString('en-IN')} {fgUom})
-                                                        </option>
-                                                    );
+                                                    const gsmVal = fg.fabricGSM ?? fg.gsm ?? fg.fabricGsm;
+                                                    const dimStr = fg.dimensions?.width && fg.dimensions?.length
+                                                        ? `${fg.dimensions.width}x${fg.dimensions.length}${fg.dimensions.unit || 'cm'}`
+                                                        : '';
+                                                    return {
+                                                        value: fg._id,
+                                                        code: fg.code || 'FG',
+                                                        label: fg.name,
+                                                        subLabel: [gsmVal ? `${gsmVal} GSM` : '', dimStr, `Stock: ${stockVal.toLocaleString('en-IN')} ${fgUom}`].filter(Boolean).join(' • '),
+                                                        badge: `Stock: ${stockVal.toLocaleString('en-IN')}`,
+                                                        badgeTone: stockVal > 0 ? 'emerald' : 'rose',
+                                                        searchText: `${fg.code || ''} ${fg.name || ''} ${gsmVal || ''} ${dimStr} ${fg.description || ''}`
+                                                    };
                                                 })}
-                                            </select>
+                                            />
                                         </div>
 
                                         <div className="col-span-6 sm:col-span-4">
