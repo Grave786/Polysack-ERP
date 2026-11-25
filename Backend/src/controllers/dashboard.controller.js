@@ -41,6 +41,29 @@ const getDashboardSummary = async (req, res) => {
         const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
         const now = new Date();
 
+        // Optional query parameters for date filtering
+        const { from, to, date, startDate, endDate } = req.query;
+        let queryStart = null;
+        let queryEnd = null;
+
+        if (date) {
+            queryStart = new Date(date);
+            queryStart.setHours(0, 0, 0, 0);
+            queryEnd = new Date(date);
+            queryEnd.setHours(23, 59, 59, 999);
+        } else if (from || to || startDate || endDate) {
+            const s = from || startDate;
+            const e = to || endDate || s;
+            if (s) {
+                queryStart = new Date(s);
+                queryStart.setHours(0, 0, 0, 0);
+            }
+            if (e) {
+                queryEnd = new Date(e);
+                queryEnd.setHours(23, 59, 59, 999);
+            }
+        }
+
         // 1. Date Windows: Today
         const todayStart = new Date(now);
         todayStart.setHours(0, 0, 0, 0);
@@ -58,6 +81,14 @@ const getDashboardSummary = async (req, res) => {
 
         const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
         const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+
+        // Effective Date Windows based on presence of query filters
+        const effectiveProdStart = queryStart || todayStart;
+        const effectiveProdEnd = queryEnd || todayEnd;
+        const effectiveSOStart = queryStart || currentMonthStart;
+        const effectiveSOEnd = queryEnd || currentMonthEnd;
+        const effectiveRevStart = queryStart || currentMonthStart;
+        const effectiveRevEnd = queryEnd || currentMonthEnd;
 
         // Parallel Execution of Dashboard Aggregations
         const [
@@ -95,12 +126,12 @@ const getDashboardSummary = async (req, res) => {
             receivablesResult
         ] = await Promise.all([
             // SO Counts
-            SalesOrder.countDocuments({ tenant: tenantObjectId, isActive: true, createdAt: { $gte: currentMonthStart, $lte: currentMonthEnd } }),
+            SalesOrder.countDocuments({ tenant: tenantObjectId, isActive: true, createdAt: { $gte: effectiveSOStart, $lte: effectiveSOEnd } }),
             SalesOrder.countDocuments({ tenant: tenantObjectId, isActive: true, createdAt: { $gte: prevMonthStart, $lte: prevMonthEnd } }),
 
-            // Today's & Yesterday's Production (Bags) from COMPLETED WOs
+            // Production (Bags) from COMPLETED WOs
             WorkOrder.aggregate([
-                { $match: { tenant: tenantObjectId, isActive: true, status: 'COMPLETED', updatedAt: { $gte: todayStart, $lte: todayEnd } } },
+                { $match: { tenant: tenantObjectId, isActive: true, status: 'COMPLETED', updatedAt: { $gte: effectiveProdStart, $lte: effectiveProdEnd } } },
                 { $group: { _id: null, totalBags: { $sum: "$completedQuantity" } } }
             ]),
             WorkOrder.aggregate([
@@ -110,7 +141,7 @@ const getDashboardSummary = async (req, res) => {
 
             // Monthly Revenue (Current vs Prev Month from Invoice)
             Invoice.aggregate([
-                { $match: { tenant: tenantObjectId, isActive: true, invoiceDate: { $gte: currentMonthStart, $lte: currentMonthEnd } } },
+                { $match: { tenant: tenantObjectId, isActive: true, invoiceDate: { $gte: effectiveRevStart, $lte: effectiveRevEnd } } },
                 { $group: { _id: null, taxableRevenue: { $sum: { $subtract: ["$grandTotal", { $ifNull: ["$gstAmount", 0] }] } } } }
             ]),
             Invoice.aggregate([
@@ -129,9 +160,9 @@ const getDashboardSummary = async (req, res) => {
             Machine.countDocuments({ tenant: tenantObjectId, isActive: true }),
             WorkOrder.distinct('assignedMachine', { tenant: tenantObjectId, isActive: true, status: 'IN_PROGRESS', assignedMachine: { $ne: null } }),
 
-            // Efficiency / Yield % (Current Month COMPLETED WOs)
+            // Efficiency / Yield % (COMPLETED WOs in window)
             WorkOrder.aggregate([
-                { $match: { tenant: tenantObjectId, isActive: true, status: 'COMPLETED', createdAt: { $gte: currentMonthStart, $lte: currentMonthEnd } } },
+                { $match: { tenant: tenantObjectId, isActive: true, status: 'COMPLETED', createdAt: { $gte: effectiveProdStart, $lte: effectiveProdEnd } } },
                 { $group: { _id: null, totalPlanned: { $sum: "$targetQuantity" }, totalActual: { $sum: "$completedQuantity" } } }
             ]),
 

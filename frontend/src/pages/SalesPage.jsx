@@ -89,9 +89,19 @@ export default function SalesPage() {
         },
         {
             header: 'CUSTOMER / BUYER',
-            exportValue: (row) => row.customer?.companyName || row.customer?.name || row.customerName || '',
+            exportValue: (row) => row.customer?.companyName || row.customer?.name || row.customerName || (typeof row.sourceEnquiry === 'object' ? (row.sourceEnquiry?.customer?.companyName || row.sourceEnquiry?.customerRef?.companyName || row.sourceEnquiry?.newCustomerDetails?.company || row.sourceEnquiry?.newCustomerDetails?.name) : '') || '-',
             render: (row) => {
-                const custName = row.customer?.companyName || row.customerName || '-';
+                const se = typeof row.sourceEnquiry === 'object' ? row.sourceEnquiry : null;
+                const seCust = se?.customer || se?.customerRef;
+                const custName = 
+                    row.customer?.companyName || 
+                    row.customer?.name || 
+                    row.customerName || 
+                    seCust?.companyName || 
+                    seCust?.name || 
+                    se?.newCustomerDetails?.company || 
+                    se?.newCustomerDetails?.name || 
+                    '-';
                 return (
                     <div className="font-extrabold text-text-main text-xs">
                         {custName}
@@ -132,7 +142,7 @@ export default function SalesPage() {
                 }, {});
                 const entries = Object.entries(totals);
                 return entries.length > 0
-                    ? entries.map(([u, q]) => `${q % 1 === 0 ? q.toLocaleString('en-IN') : Number(q.toFixed(3)).toLocaleString('en-IN')} ${u}`).join(', ')
+                    ? entries.map(([u, q]) => `${q % 1 === 0 ? q.toLocaleString('en-IN') : Number(q.toFixed(3)).toLocaleString('en-IN')} ${u}`).join(' + ')
                     : (row.totalQuantity ? `${row.totalQuantity}` : '-');
             },
             render: (row) => {
@@ -147,7 +157,7 @@ export default function SalesPage() {
                 }, {});
                 const entries = Object.entries(totals);
                 const text = entries.length > 0
-                    ? entries.map(([u, q]) => `${q % 1 === 0 ? q.toLocaleString('en-IN') : Number(q.toFixed(3)).toLocaleString('en-IN')} ${u}`).join(', ')
+                    ? entries.map(([u, q]) => `${q % 1 === 0 ? q.toLocaleString('en-IN') : Number(q.toFixed(3)).toLocaleString('en-IN')} ${u}`).join(' + ')
                     : (row.totalQuantity ? `${row.totalQuantity}` : '-');
 
                 return (

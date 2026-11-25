@@ -51,6 +51,7 @@ const dashboardRoutes = require('./src/routes/dashboard.routes');
 const notificationRoutes = require('./src/routes/notification.routes');
 const materialReceiptRoutes = require('./src/routes/materialReceipt.routes');
 const approvalRoutes = require('./src/routes/approval.routes');
+const publicEnquiryRoutes = require('./src/routes/publicEnquiry.routes');
 const { startApprovalReminderScheduler } = require('./src/services/approval.service');
 
 const app = express();
@@ -163,6 +164,15 @@ const initializeSystem = async () => {
     }
     // Start central approval reminder scheduler
     startApprovalReminderScheduler();
+
+    // Validate configured public enquiry tenant on boot
+    try {
+      const { resolveConfiguredPublicTenant } = require('./src/controllers/publicEnquiry.controller');
+      const configuredTenantId = await resolveConfiguredPublicTenant();
+      console.log(`✅ Public Enquiry Target Tenant verified: ${configuredTenantId}`);
+    } catch (pubTenantErr) {
+      console.error(`❌ [Public Enquiry Config] ${pubTenantErr.message} Public Contact Sales submissions will return 503 until PUBLIC_ENQUIRY_TENANT_ID is set to an active tenant ObjectId.`);
+    }
   } catch (err) {
     console.warn('⚠️ Could not verify permission count on boot:', err.message);
   }
@@ -221,6 +231,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/material-receipts', materialReceiptRoutes);
 app.use('/api/approvals', approvalRoutes);
+app.use('/api/public', publicEnquiryRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

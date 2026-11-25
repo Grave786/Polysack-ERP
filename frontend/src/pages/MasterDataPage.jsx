@@ -294,7 +294,7 @@ export default function MasterDataPage() {
                     render: (row) => typeof row.category === 'object' ? row.category?.name : (row.category || '-')
                 },
                 {
-                    header: 'GSM',
+                    header: 'GSM (Bag Weight)',
                     exportValue: (row) => {
                         const g = row.fabricGSM ?? row.gsm ?? row.fabricGsm;
                         if (g !== undefined && g !== null && g !== '' && !isNaN(Number(g))) {

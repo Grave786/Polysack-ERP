@@ -127,24 +127,37 @@ export default function ApprovalsPage() {
         }
     };
 
-    // If an id param was in the URL, open its details once data loads
+    // If an id param was in the URL, open its details once and clear id from URL
     useEffect(() => {
-        if (highlightId && approvals.length > 0) {
+        if (!highlightId) return;
+
+        const clearHighlightParam = () => {
+            const nextParams = new URLSearchParams(searchParams);
+            nextParams.delete('id');
+            setSearchParams(nextParams, { replace: true });
+        };
+
+        if (approvals.length > 0) {
             const matched = approvals.find((a) => a._id === highlightId);
             if (matched) {
                 handleOpenView(matched);
-            } else {
-                // Fetch directly by ID if not in current tab list
-                axiosInstance.get(`/approvals/${highlightId}`)
-                    .then((res) => {
-                        if (res.data?.data) {
-                            setViewRecord(res.data.data);
-                        }
-                    })
-                    .catch(() => {});
+                clearHighlightParam();
+                return;
             }
         }
-    }, [highlightId, approvals]);
+
+        // Fetch directly by ID if not in current tab list (or while list is empty)
+        axiosInstance.get(`/approvals/${highlightId}`)
+            .then((res) => {
+                if (res.data?.data) {
+                    setViewRecord(res.data.data);
+                }
+            })
+            .catch(() => {})
+            .finally(() => {
+                clearHighlightParam();
+            });
+    }, [highlightId, approvals, searchParams, setSearchParams]);
 
     // ── Decision Handlers ───────────────────────────────────────────────────
     const triggerGlobalCountSync = () => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useResourceApi } from '../../hooks/useResourceApi';
 import DataTable from './DataTable';
@@ -140,6 +140,10 @@ export const composeFinishedBagTitle = (data = {}, categoriesList = [], bagShape
     const bagShapeRaw = data.bagShape || '';
     const bagShape = isPresent(bagShapeRaw) ? bagShapeRaw.trim() : '';
 
+    // Description / Notes (e.g. "Laminated PP Woven Sack", "Heavy-duty Laminated")
+    const rawDesc = data.bagType || data.description || '';
+    const bagDesc = isPresent(rawDesc) ? String(rawDesc).trim() : '';
+
     // Resolve category name (Bag Type/Category)
     const catId = typeof data.category === 'object' ? data.category?._id : data.category;
     const catObj = categoriesList.find((c) => c._id === catId);
@@ -155,9 +159,12 @@ export const composeFinishedBagTitle = (data = {}, categoriesList = [], bagShape
         : (data.capacity !== undefined && data.capacity !== '' && data.capacity !== null ? Number(data.capacity) : null);
     const capacityStr = (cap !== null && !isNaN(cap) && cap > 0) ? `${cap}Kg` : '';
 
-    // Build main title: [Shape] [Category/Type] [baseLabel] [Capacity]
+    // Build main title: [Shape] [Description] [Category/Type] [baseLabel] [Capacity]
     const mainParts = [];
     if (bagShape) mainParts.push(bagShape);
+    if (bagDesc && !mainParts.some((p) => p.toLowerCase().includes(bagDesc.toLowerCase()))) {
+        mainParts.push(bagDesc);
+    }
     if (bagTypeCat && !mainParts.some((p) => p.toLowerCase().includes(bagTypeCat.toLowerCase()))) {
         mainParts.push(bagTypeCat);
     }
@@ -383,11 +390,14 @@ export default function TabbedResourcePage({
     extraParams = null,
     extraFilterParams = null,
     activeTabKey: controlledActiveTabKey,
-    onTabChange
+    onTabChange,
+    externalViewRecord = null,
+    onClearExternalViewRecord = null
 }) {
-    const [searchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
     const deepLinkId = searchParams.get('id');
     const deepLinkRoll = searchParams.get('roll');
+    const handledDeepLinkRef = useRef('');
 
     const [internalActiveTabKey, setInternalActiveTabKey] = useState(tabs[0]?.key || '');
 
@@ -652,11 +662,25 @@ export default function TabbedResourcePage({
         mergedExtraParams
     );
 
-    // Deep-link modal opener: open record detail when URL has &id=... or &roll=...
+    // Sync external view record trigger (e.g. custom row eye icon in CustomerCrmPage)
+    useEffect(() => {
+        if (externalViewRecord) {
+            setDetailModal({
+                isOpen: true,
+                record: externalViewRecord,
+                tabKey: activeTabKey
+            });
+        }
+    }, [externalViewRecord, activeTabKey]);
+
+    // Deep-link modal opener: open record detail once when URL has &id=... or &roll=...
     useEffect(() => {
         if (!activeTab || isTabPlaceholder) return;
+        const deepKey = deepLinkId ? `id:${activeTabKey}:${deepLinkId}` : (deepLinkRoll ? `roll:${activeTabKey}:${deepLinkRoll}` : '');
+        if (!deepKey || handledDeepLinkRef.current === deepKey) return;
 
         if (deepLinkId && activeTab.resourcePath) {
+            handledDeepLinkRef.current = deepKey;
             axiosInstance.get(`${activeTab.resourcePath}/${deepLinkId}`)
                 .then((res) => {
                     if (res.data?.success && res.data?.data) {
@@ -669,8 +693,15 @@ export default function TabbedResourcePage({
                 })
                 .catch((err) => {
                     console.warn('Failed to load deep-linked record:', err?.message);
+                })
+                .finally(() => {
+                    const nextParams = new URLSearchParams(searchParams);
+                    nextParams.delete('id');
+                    nextParams.delete('tab');
+                    setSearchParams(nextParams, { replace: true });
                 });
         } else if (deepLinkRoll && activeTabKey === 'fabric-rolls') {
+            handledDeepLinkRef.current = deepKey;
             axiosInstance.get('/work-orders/rolls-traceability', { params: { search: deepLinkRoll } })
                 .then((res) => {
                     const list = res.data?.data || res.data?.rolls || [];
@@ -687,9 +718,15 @@ export default function TabbedResourcePage({
                 })
                 .catch((err) => {
                     console.warn('Failed to load deep-linked roll:', err?.message);
+                })
+                .finally(() => {
+                    const nextParams = new URLSearchParams(searchParams);
+                    nextParams.delete('roll');
+                    nextParams.delete('tab');
+                    setSearchParams(nextParams, { replace: true });
                 });
         }
-    }, [deepLinkId, deepLinkRoll, activeTabKey, activeTab?.resourcePath, isTabPlaceholder]);
+    }, [deepLinkId, deepLinkRoll, activeTabKey, activeTab?.resourcePath, isTabPlaceholder, searchParams, setSearchParams]);
 
     // When the user switches tabs, reset the status filter to that tab's defaultStatus.
     // setStatusFilter is now a stable useCallback reference so it is safe to omit from deps.
@@ -1899,7 +1936,10 @@ export default function TabbedResourcePage({
             payload.colorAndPrint = formData.colorAndPrint || '';
 
             const fullFGTitle = composeFinishedBagTitle({ ...formData, ...payload }, categoriesList, bagShapesList);
-            payload.name = fullFGTitle || (formData.baseName !== undefined ? formData.baseName : formData.name) || 'Finished Good';
+            const resolvedTitle = (formData.titleManuallyEdited && formData.productTitle && formData.productTitle.trim())
+                ? formData.productTitle.trim()
+                : (fullFGTitle || formData.productTitle?.trim() || formData.name?.trim() || formData.baseName || 'Finished Good');
+            payload.name = resolvedTitle;
             payload.baseName = formData.baseName !== undefined ? formData.baseName : (formData.name || '');
 
             payload.materialRequirements = validIngredients;
@@ -2023,6 +2063,8 @@ export default function TabbedResourcePage({
             bagWeight: '',
             dimensionUnit: 'cm',
             dimensions: { width: '', length: '', unit: 'cm' },
+            productTitle: '',
+            titleManuallyEdited: false,
             status: activeTabKey === 'customers' ? 'ACTIVE_CUSTOMER' : (activeTabKey === 'machines' ? 'AVAILABLE' : 'Active')
         });
 
@@ -2132,8 +2174,46 @@ export default function TabbedResourcePage({
                 ? row.tareWeightGram
                 : (row.bagWeight !== undefined && row.bagWeight !== null ? row.bagWeight : ''));
 
+        const isFgTab = (activeTabKey === 'finished-goods' || activeTabKey === 'finishedbags' || activeTabKey === 'finishedproducts');
+        let initialFgTitle = row.name || '';
+        let initialTitleManuallyEdited = false;
+
+        if (isFgTab && row.name) {
+            const computedForRecord = composeFinishedBagTitle({
+                ...row,
+                baseName: row.baseName || '',
+                bagType: row.bagType || '',
+                dimensions: {
+                    width: widthValue,
+                    length: lengthValue,
+                    unit: editDimUnit
+                },
+                dimensionUnit: editDimUnit,
+                fabricGSM: gsmValue,
+                gsm: gsmValue,
+                fabricGsm: gsmValue,
+                bagCapacity: capValue,
+                capacity: capValue,
+                bagShape: row.bagShape || '',
+                category: row.category,
+                colorAndPrint: row.colorAndPrint,
+                printSides: row.printSides || row.printSpec?.printSides || 'NONE',
+                frontColours: row.frontColours !== undefined ? row.frontColours : (row.printSpec?.frontColours || 0),
+                backColours: row.backColours !== undefined ? row.backColours : (row.printSpec?.backColours || 0)
+            }, categoriesList, bagShapesList);
+
+            if (computedForRecord && row.name.trim() !== computedForRecord.trim()) {
+                initialTitleManuallyEdited = true;
+            } else {
+                initialTitleManuallyEdited = false;
+            }
+            initialFgTitle = row.name;
+        }
+
         setFormData({
             ...row,
+            productTitle: initialFgTitle,
+            titleManuallyEdited: initialTitleManuallyEdited,
             // IMPORTANT: never fall back to row.name here — row.name is the full auto-composed
             // title, not a short label. Doing so would inject the compiled title back into
             // composeFinishedBagTitle as the baseName segment, causing recursive duplication on edit.
@@ -3555,20 +3635,21 @@ export default function TabbedResourcePage({
                         />
                     </div>
 
-                    {/* Live Descriptive Title Preview */}
-                    <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-0.5">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-primary/70">
-                            Auto-Generated Product Title Preview
-                        </p>
-                        <p className="text-sm font-bold text-text-main leading-snug break-words">
-                            {composedFGTitle || <span className="text-text-muted font-normal italic">Fill in fields below to generate title…</span>}
-                        </p>
-                        <p className="text-[10px] text-text-muted mt-1">
-                            This title is auto-composed from the classification fields and saved as the product name.
-                        </p>
+                    {/* 2. Product Description / Notes: FULL width, the FIRST input of the form */}
+                    <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
+                            Product Description / Notes
+                        </label>
+                        <input
+                            type="text"
+                            placeholder="e.g. Heavy-duty Laminated PP Woven Sack with liner"
+                            value={formData.bagType || ''}
+                            onChange={(e) => handleInputChange('bagType', e.target.value)}
+                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
+                        />
                     </div>
 
-                    {/* Product Base Label (short internal name) */}
+                    {/* 3. Product Base Label: FULL width, directly below the description */}
                     <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
                             Product Base Label
@@ -3581,6 +3662,62 @@ export default function TabbedResourcePage({
                             className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
                         />
                         <p className="text-[10px] text-text-muted mt-1">Optional short label (appended to the auto-composed title).</p>
+                    </div>
+
+                    {/* 4. Auto-Generated Product Title Preview (Editable) */}
+                    <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-primary/70 block">
+                                Auto-Generated Product Title Preview
+                            </label>
+                            {formData.titleManuallyEdited && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setFormData((prev) => ({
+                                            ...prev,
+                                            productTitle: composedFGTitle,
+                                            titleManuallyEdited: false
+                                        }));
+                                    }}
+                                    className="text-[11px] font-bold text-primary hover:underline cursor-pointer flex items-center gap-1"
+                                    title="Restore auto-composed title"
+                                >
+                                    Reset to auto
+                                </button>
+                            )}
+                        </div>
+                        <input
+                            type="text"
+                            placeholder="Fill in fields below to generate title, or type manually..."
+                            value={
+                                formData.titleManuallyEdited
+                                    ? (formData.productTitle !== undefined ? formData.productTitle : '')
+                                    : (composedFGTitle || formData.productTitle || '')
+                            }
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                if (!val || val.trim() === '') {
+                                    // If user clears the input fully, treat it as reset to auto
+                                    setFormData((prev) => ({
+                                        ...prev,
+                                        productTitle: '',
+                                        titleManuallyEdited: false
+                                    }));
+                                } else {
+                                    // Mark it as manually edited and stop auto-overwriting it
+                                    setFormData((prev) => ({
+                                        ...prev,
+                                        productTitle: val,
+                                        titleManuallyEdited: true
+                                    }));
+                                }
+                            }}
+                            className="w-full border border-primary/30 rounded-md p-2 bg-card-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 font-sans"
+                        />
+                        <p className="text-[10px] text-text-muted">
+                            Auto-composed from the fields above. You can edit it manually; use Reset to auto to restore.
+                        </p>
                     </div>
 
 
@@ -3795,19 +3932,6 @@ export default function TabbedResourcePage({
                         </div>
                     </div>
 
-                    <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                            Product Description / Notes
-                        </label>
-                        <input
-                            type="text"
-                            placeholder="e.g. Heavy-duty Laminated PP Woven Sack with liner"
-                            value={formData.bagType || ''}
-                            onChange={(e) => handleInputChange('bagType', e.target.value)}
-                            className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-sans"
-                        />
-                    </div>
-
                     {/* Capacity (Kg) and GSM in one 2-column row */}
                     <div className="grid grid-cols-2 gap-4">
                         <div>
@@ -3830,7 +3954,7 @@ export default function TabbedResourcePage({
 
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
-                                GSM
+                                GSM (Bag Weight)
                             </label>
                             <input
                                 type="number"
@@ -5265,7 +5389,10 @@ export default function TabbedResourcePage({
             {/* Reusable Master Data Read-Only Detail View Modal (Eye icon) */}
             <DetailViewModal
                 isOpen={detailModal.isOpen}
-                onClose={() => setDetailModal({ isOpen: false, record: null, tabKey: '' })}
+                onClose={() => {
+                    setDetailModal({ isOpen: false, record: null, tabKey: '' });
+                    if (onClearExternalViewRecord) onClearExternalViewRecord();
+                }}
                 record={detailModal.record}
                 tabKey={detailModal.tabKey}
                 tabLabel={activeTabLabel}

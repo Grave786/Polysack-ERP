@@ -5,7 +5,17 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
     if (!isOpen || !salesOrder) return null;
 
     const customer = typeof salesOrder.customer === 'object' ? salesOrder.customer : null;
-    const customerName = customer?.companyName || salesOrder.customerName || 'Registered Customer';
+    const se = typeof salesOrder.sourceEnquiry === 'object' ? salesOrder.sourceEnquiry : null;
+    const seCust = se?.customer || se?.customerRef;
+    const customerName = 
+        customer?.companyName || 
+        customer?.name || 
+        salesOrder.customerName || 
+        seCust?.companyName || 
+        seCust?.name || 
+        se?.newCustomerDetails?.company || 
+        se?.newCustomerDetails?.name || 
+        'Registered Customer';
     const items = salesOrder.items || [];
     const qtyByUnit = items.reduce((acc, it) => {
         const qty = Number(it.quantity || 0);
@@ -18,7 +28,7 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
     const formattedTotalQty = Object.entries(qtyByUnit).length > 0
         ? Object.entries(qtyByUnit)
             .map(([unit, qty]) => `${qty % 1 === 0 ? qty.toLocaleString('en-IN') : Number(qty.toFixed(3)).toLocaleString('en-IN')} ${unit}`)
-            .join(', ')
+            .join(' + ')
         : '0 Pcs';
     const subtotal = salesOrder.totalValue || salesOrder.totalAmount || 0;
     const gstRate = 18;

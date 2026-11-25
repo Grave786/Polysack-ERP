@@ -18,7 +18,18 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
     const invObj = typeof dispatch.invoice === 'object' ? dispatch.invoice : null;
     const soNum = isPos ? (invObj?.invoiceNumber || 'POS Invoice') : (soObj?.soNumber || dispatch.soNumber || '-');
     const custObj = typeof soObj?.customer === 'object' ? soObj.customer : (typeof invObj?.customer === 'object' ? invObj.customer : null);
-    const customerName = custObj?.companyName || invObj?.walkInCustomer?.name || dispatch.customerName || '-';
+    const seObj = typeof soObj?.sourceEnquiry === 'object' ? soObj.sourceEnquiry : null;
+    const seCust = seObj?.customer || seObj?.customerRef;
+    const customerName = 
+        custObj?.companyName || 
+        custObj?.name || 
+        seCust?.companyName || 
+        seCust?.name || 
+        seObj?.newCustomerDetails?.company || 
+        seObj?.newCustomerDetails?.name || 
+        invObj?.walkInCustomer?.name || 
+        dispatch.customerName || 
+        '-';
 
     const status = (dispatch.deliveryStatus || 'IN_TRANSIT').toUpperCase();
     const isDelivered = status === 'DELIVERED';
@@ -26,7 +37,14 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
     const isInTransit = status === 'IN_TRANSIT';
 
     const items = dispatch.items || [];
-    const totalBags = items.reduce((acc, i) => acc + Number(i.dispatchedQuantity || i.quantity || 0), 0);
+    const totalsByUnit = items.reduce((acc, i) => {
+        const u = i.unit || 'Pcs';
+        acc[u] = (acc[u] || 0) + Number(i.dispatchedQuantity || i.quantity || 0);
+        return acc;
+    }, {});
+    const totalQtyString = Object.entries(totalsByUnit)
+        .map(([unit, qty]) => `${qty.toLocaleString()} ${unit}`)
+        .join(' + ') || '0 Pcs';
     const totalBales = items.reduce((acc, i) => acc + Number(i.dispatchedBales !== undefined && i.dispatchedBales !== null ? i.dispatchedBales : (i.dispatchedQuantity ? Math.ceil(i.dispatchedQuantity / 300) : 0)), 0);
 
     // Linked Invoice & Payment Check
@@ -189,18 +207,18 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
                         </div>
                     )}
 
-                    {/* Shipped Bag Items */}
+                    {/* Shipped Items */}
                     <div className="border border-border rounded-xl overflow-hidden">
                         <div className="bg-table-header-bg p-2.5 font-bold uppercase text-[10px] tracking-wider text-table-header-text flex justify-between">
-                            <span>Bags Shipped in Load</span>
-                            <span className="font-mono">{totalBags.toLocaleString()} Bags ({totalBales} Bales)</span>
+                            <span>Quantity Shipped in Load</span>
+                            <span className="font-mono">{totalQtyString} {totalBales > 0 ? `(${totalBales} Bales)` : ''}</span>
                         </div>
                         <table className="w-full text-left text-xs border-collapse">
                             <thead>
                                 <tr className="border-b border-border/60 bg-app-bg text-[10px] font-bold uppercase text-text-muted">
                                     <th className="p-2.5">#</th>
                                     <th className="p-2.5">Finished Bag Product</th>
-                                    <th className="p-2.5 text-right">Shipped Bags</th>
+                                    <th className="p-2.5 text-right">Qty Shipped</th>
                                     <th className="p-2.5 text-right">Bales</th>
                                 </tr>
                             </thead>
@@ -209,13 +227,14 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
                                     const fg = typeof it.finishedGood === 'object' ? it.finishedGood : null;
                                     const fgName = fg?.name || it.finishedGoodName || 'Finished Poly Bag';
                                     const qty = Number(it.dispatchedQuantity || it.quantity || 0);
+                                    const unit = it.unit || 'Pcs';
                                     const bales = it.dispatchedBales !== undefined && it.dispatchedBales !== null ? Number(it.dispatchedBales) : (qty > 0 ? Math.ceil(qty / 300) : 0);
 
                                     return (
                                         <tr key={idx} className="hover:bg-app-bg/50">
                                             <td className="p-2.5 text-text-muted font-mono">{idx + 1}</td>
                                             <td className="p-2.5 font-semibold text-text-main">{fgName}</td>
-                                            <td className="p-2.5 text-right font-mono font-bold text-text-main">{qty.toLocaleString()}</td>
+                                            <td className="p-2.5 text-right font-mono font-bold text-text-main">{qty.toLocaleString()} {unit}</td>
                                             <td className="p-2.5 text-right font-mono text-text-muted">{bales}</td>
                                         </tr>
                                     );

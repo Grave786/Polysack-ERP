@@ -11,6 +11,11 @@ const DispatchItemSchema = new mongoose.Schema({
         required: [true, 'Dispatched quantity is required'],
         min: [0.0001, 'Dispatched quantity must be greater than 0']
     },
+    unit: {
+        type: String,
+        default: 'Pcs',
+        trim: true
+    },
     dispatchedKg: {
         type: Number,
         default: null

@@ -25,14 +25,21 @@ import ProfilePage from './pages/ProfilePage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import Forbidden403Page from './pages/Forbidden403Page';
 import LandingPage from './pages/LandingPage';
+import NotFoundPage from './pages/NotFoundPage';
 
-function DefaultRouteRedirect() {
+function NotFoundRoute() {
+    const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
     const user = useAuthStore((state) => state.user);
-    const targetRoute = getFirstPermittedRoute(user);
-    if (targetRoute === '/403') {
-        return <Navigate to="/403" state={{ message: 'No modules assigned — contact your administrator.' }} replace />;
+
+    if (isAuthenticated && user) {
+        return (
+            <DashboardLayout>
+                <NotFoundPage isEmbedded={true} />
+            </DashboardLayout>
+        );
     }
-    return <Navigate to={targetRoute} replace />;
+
+    return <NotFoundPage isEmbedded={false} />;
 }
 
 function RootRoute() {
@@ -161,14 +168,11 @@ export default function App() {
                         <Route path="/administration/roles" element={<TenantRolesRoute />} />
                         <Route path="/roles" element={<TenantRolesRoute />} />
                     </Route>
-
-                    {/* Fallback inside dashboard layout */}
-                    <Route path="*" element={<DefaultRouteRedirect />} />
                 </Route>
             </Route>
 
-            {/* Global Fallback */}
-            <Route path="*" element={<RootRoute />} />
+            {/* Global 404 Catch-All Route */}
+            <Route path="*" element={<NotFoundRoute />} />
         </Routes>
         </FacilityProvider>
     );

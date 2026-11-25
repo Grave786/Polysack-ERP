@@ -26,6 +26,16 @@ const OrderEnquirySchema = new mongoose.Schema({
         unique: true,
         sparse: true
     },
+    enquiryNumber: {
+        type: String,
+        trim: true,
+        index: true
+    },
+    source: {
+        type: String,
+        trim: true,
+        default: 'Manual'
+    },
     customerType: {
         type: String,
         enum: ['Existing', 'New'],
@@ -184,32 +194,55 @@ const OrderEnquirySchema = new mongoose.Schema({
     // ── Description & Remarks ──────────────────────────────────────────────────
     description: { type: String, trim: true, default: '' },
     remarks:     { type: String, trim: true, default: '' },
+    city:        { type: String, trim: true, default: '' },
+    state:       { type: String, trim: true, default: '' },
+    deliveryLocation: { type: String, trim: true, default: '' },
+    bagDetails:  { type: mongoose.Schema.Types.Mixed, default: {} },
+    repeatEnquiryCount: { type: Number, default: 0 },
 
     // ── Soft Delete ────────────────────────────────────────────────────────────
     isActive: { type: Boolean, default: true }
 
 }, { timestamps: true });
 
-OrderEnquirySchema.pre('save', async function (next) {
-    if (!this.nslNumber) {
-        const year = new Date().getFullYear();
-        const prefix = `NSL-${year}-`;
-        const lastDoc = await this.constructor.findOne({
-            nslNumber: { $regex: `^${prefix}\\d{4,}$` }
-        }).sort({ nslNumber: -1 });
+OrderEnquirySchema.statics.generateNextNslNumber = async function (tenantId) {
+    const year = new Date().getFullYear();
+    const prefix = `NSL-${year}-`;
 
-        let nextNumber = 1;
-        if (lastDoc && lastDoc.nslNumber) {
-            const parts = lastDoc.nslNumber.split('-');
-            if (parts.length === 3) {
-                const lastSeq = parseInt(parts[2], 10);
-                if (!isNaN(lastSeq)) {
-                    nextNumber = lastSeq + 1;
-                }
+    const query = { nslNumber: { $regex: `^${prefix}\\d{4,}$` } };
+    if (tenantId) {
+        query.tenant = tenantId;
+    }
+
+    const lastDoc = await this.findOne(query)
+        .sort({ nslNumber: -1 })
+        .select('nslNumber')
+        .lean();
+
+    let nextNumber = 1;
+    if (lastDoc && lastDoc.nslNumber) {
+        const parts = lastDoc.nslNumber.split('-');
+        if (parts.length === 3) {
+            const lastSeq = parseInt(parts[2], 10);
+            if (!isNaN(lastSeq)) {
+                nextNumber = lastSeq + 1;
             }
         }
-        const paddedSeq = String(nextNumber).padStart(4, '0');
-        this.nslNumber = `${prefix}${paddedSeq}`;
+    }
+
+    // Ensure global uniqueness in case nslNumber unique index spans tenants
+    let candidate = `${prefix}${String(nextNumber).padStart(4, '0')}`;
+    while (await this.exists({ nslNumber: candidate })) {
+        nextNumber += 1;
+        candidate = `${prefix}${String(nextNumber).padStart(4, '0')}`;
+    }
+
+    return candidate;
+};
+
+OrderEnquirySchema.pre('save', async function (next) {
+    if (!this.nslNumber) {
+        this.nslNumber = await this.constructor.generateNextNslNumber(this.tenant);
     }
 
     // Sync customer and customerRef for backwards compatibility

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
     ResponsiveContainer,
@@ -27,11 +27,182 @@ import {
     Users,
     ShieldCheck,
     Plus,
-    Wrench
+    Wrench,
+    Sun,
+    SunMedium,
+    Sunset,
+    Moon,
+    Clock,
+    Calendar
 } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
+import { formatDate, getTodayLocalDateString, formatToLocalDateString } from '../utils/dateUtils';
+
+/**
+ * Helper to check if a date value falls within [startYMD, endYMD]
+ */
+const isDateInRange = (dateVal, startYMD, endYMD) => {
+    if (!dateVal) return false;
+    let dStr = '';
+    if (typeof dateVal === 'string' && dateVal.length >= 10) {
+        dStr = dateVal.slice(0, 10);
+    } else {
+        const d = new Date(dateVal);
+        if (isNaN(d.getTime())) return false;
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        dStr = `${y}-${m}-${day}`;
+    }
+    return dStr >= startYMD && dStr <= endYMD;
+};
+
+/**
+ * Isolated component that ticks every second for the live clock & time-based greeting.
+ * Keeping its state local prevents the whole DashboardPage and its heavy charts
+ * from re-rendering on every clock tick.
+ */
+function LiveHeaderClockAndGreeting({ user }) {
+    const [currentTime, setCurrentTime] = useState(() => new Date());
+
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setCurrentTime(new Date());
+        }, 1000);
+        return () => clearInterval(timer);
+    }, []);
+
+    // 1. Time-based greeting calculation
+    const hours = currentTime.getHours();
+    let greetingText = 'Good Morning';
+    let GreetingIcon = Sun;
+    let iconColorClass = 'text-amber-500 bg-amber-500/10 border-amber-500/30';
+
+    if (hours >= 5 && hours < 12) {
+        greetingText = 'Good Morning';
+        GreetingIcon = Sun;
+        iconColorClass = 'text-amber-500 bg-amber-500/10 border-amber-500/30';
+    } else if (hours >= 12 && hours < 17) {
+        greetingText = 'Good Afternoon';
+        GreetingIcon = SunMedium;
+        iconColorClass = 'text-amber-600 bg-amber-600/10 border-amber-600/30';
+    } else if (hours >= 17 && hours < 21) {
+        greetingText = 'Good Evening';
+        GreetingIcon = Sunset;
+        iconColorClass = 'text-orange-500 bg-orange-500/10 border-orange-500/30';
+    } else {
+        greetingText = 'Good Night';
+        GreetingIcon = Moon;
+        iconColorClass = 'text-indigo-400 bg-indigo-500/10 border-indigo-500/30';
+    }
+
+    const displayName = (user?.name || user?.fullName || user?.firstName || (user?.email ? user.email.split('@')[0] : '')).trim();
+    const fullGreeting = displayName ? `${greetingText}, ${displayName}` : greetingText;
+
+    // 2. Format 12-hour time hh:mm:ss AM/PM
+    let h = currentTime.getHours();
+    const m = String(currentTime.getMinutes()).padStart(2, '0');
+    const s = String(currentTime.getSeconds()).padStart(2, '0');
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    h = h ? h : 12;
+    const strH = String(h).padStart(2, '0');
+    const timeFormatted = `${strH}:${m}:${s} ${ampm}`;
+
+    // 3. Format weekday + dd/mm/yyyy
+    const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const weekdayName = weekdays[currentTime.getDay()];
+    const dateFormatted = formatDate(currentTime);
+    const fullDateString = `${weekdayName}, ${dateFormatted}`;
+
+    return (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full pb-3 border-b border-border/50">
+            {/* Left: Time-based Greeting */}
+            <div className="flex items-center gap-2.5 min-w-0">
+                <div className={`w-10 h-10 rounded-lg border flex items-center justify-center shrink-0 ${iconColorClass}`}>
+                    <GreetingIcon size={20} className="stroke-[2.2]" />
+                </div>
+                <div className="min-w-0">
+                    <span className="text-lg font-black text-text-main tracking-tight truncate block">
+                        {fullGreeting}!
+                    </span>
+                    <span className="text-[13px] text-text-muted font-medium block">
+                        Welcome to your operational overview
+                    </span>
+                </div>
+            </div>
+
+            {/* Right: Live Clock & Date */}
+            <div className="flex items-start sm:items-end flex-col shrink-0">
+                <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-600 text-[10px] font-bold tracking-wider">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse inline-block" />
+                        <span>LIVE</span>
+                    </div>
+                    <div className="font-mono tabular-nums text-sm md:text-base font-black text-text-main tracking-tight">
+                        {timeFormatted}
+                    </div>
+                </div>
+                <div className="text-[10.5px] font-medium text-text-muted mt-0.5 flex items-center gap-1">
+                    <Calendar size={11} className="text-text-muted shrink-0" />
+                    <span>{fullDateString}</span>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/**
+ * Smooth count-up animation for KPI cards on initial load only.
+ * Will not trigger on subsequent clock ticks.
+ */
+function AnimatedNumber({ value, prefix = '', suffix = '', decimals = 0, duration = 800 }) {
+    const [displayVal, setDisplayVal] = useState(() => (typeof value === 'number' ? 0 : value));
+    const hasAnimated = useRef(false);
+
+    useEffect(() => {
+        if (typeof value !== 'number' || isNaN(value)) {
+            setDisplayVal(value);
+            return;
+        }
+
+        if (hasAnimated.current) {
+            setDisplayVal(value);
+            return;
+        }
+
+        let startTimestamp = null;
+        const targetValue = value;
+
+        const step = (timestamp) => {
+            if (!startTimestamp) startTimestamp = timestamp;
+            const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+            const easeOut = 1 - Math.pow(1 - progress, 3);
+            const current = targetValue * easeOut;
+            setDisplayVal(current);
+            if (progress < 1) {
+                window.requestAnimationFrame(step);
+            } else {
+                setDisplayVal(targetValue);
+                hasAnimated.current = true;
+            }
+        };
+
+        window.requestAnimationFrame(step);
+    }, [value, duration]);
+
+    if (typeof displayVal !== 'number' || isNaN(displayVal)) {
+        return <span>{prefix}{displayVal}{suffix}</span>;
+    }
+
+    const formatted = decimals > 0 
+        ? displayVal.toFixed(decimals) 
+        : Math.round(displayVal).toLocaleString('en-IN');
+
+    return <span>{prefix}{formatted}{suffix}</span>;
+}
 
 export default function DashboardPage() {
     const navigate = useNavigate();
@@ -108,60 +279,137 @@ export default function DashboardPage() {
     }, [isSuperAdmin]);
 
     // -------------------------------------------------------------
-    // REAL COMPUTED DERIVED METRICS FOR TENANT USERS
+    // DATE FILTER & REAL COMPUTED DERIVED METRICS FOR TENANT USERS
     // -------------------------------------------------------------
+    const [dateFilterMode, setDateFilterMode] = useState('today');
+    const [customFrom, setCustomFrom] = useState(() => getTodayLocalDateString());
+    const [customTo, setCustomTo] = useState(() => getTodayLocalDateString());
+
+    const activeDateRange = useMemo(() => {
+        const todayStr = getTodayLocalDateString();
+        if (dateFilterMode === 'today') {
+            return {
+                startDate: todayStr,
+                endDate: todayStr,
+                productionLabel: "TODAY'S PRODUCTION",
+                revenueLabel: "TODAY'S REVENUE",
+                displayLabel: `Today (${formatDate(todayStr)})`
+            };
+        }
+        if (dateFilterMode === 'yesterday') {
+            const y = new Date();
+            y.setDate(y.getDate() - 1);
+            const yStr = formatToLocalDateString(y);
+            return {
+                startDate: yStr,
+                endDate: yStr,
+                productionLabel: "YESTERDAY'S PRODUCTION",
+                revenueLabel: "YESTERDAY'S REVENUE",
+                displayLabel: `Yesterday (${formatDate(yStr)})`
+            };
+        }
+        if (dateFilterMode === 'week') {
+            const now = new Date();
+            const day = now.getDay();
+            const diffToMonday = (day + 6) % 7;
+            const monday = new Date(now);
+            monday.setDate(now.getDate() - diffToMonday);
+            const sunday = new Date(monday);
+            sunday.setDate(monday.getDate() + 6);
+
+            const mStr = formatToLocalDateString(monday);
+            const sStr = formatToLocalDateString(sunday);
+            return {
+                startDate: mStr,
+                endDate: sStr,
+                productionLabel: "PRODUCTION THIS WEEK",
+                revenueLabel: "WEEKLY REVENUE",
+                displayLabel: `This Week (${formatDate(mStr)} - ${formatDate(sStr)})`
+            };
+        }
+        if (dateFilterMode === 'month') {
+            const now = new Date();
+            const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+            const fStr = formatToLocalDateString(firstDay);
+            const lStr = formatToLocalDateString(lastDay);
+            return {
+                startDate: fStr,
+                endDate: lStr,
+                productionLabel: "PRODUCTION THIS MONTH",
+                revenueLabel: "MONTHLY REVENUE",
+                displayLabel: `This Month (${formatDate(fStr)} - ${formatDate(lStr)})`
+            };
+        }
+        // custom
+        const fStr = customFrom || todayStr;
+        const tStr = customTo || fStr;
+        const isSingle = fStr === tStr;
+        return {
+            startDate: fStr,
+            endDate: tStr,
+            productionLabel: isSingle ? `PRODUCTION ON ${formatDate(fStr)}` : `PRODUCTION (${formatDate(fStr)} - ${formatDate(tStr)})`,
+            revenueLabel: isSingle ? `REVENUE ON ${formatDate(fStr)}` : "PERIOD REVENUE",
+            displayLabel: isSingle ? formatDate(fStr) : `${formatDate(fStr)} - ${formatDate(tStr)}`
+        };
+    }, [dateFilterMode, customFrom, customTo]);
 
     // 1. Total Sales Orders & Active Production Count
     const totalSOCount = salesOrders.length;
+    const filteredSOCount = useMemo(() => {
+        return salesOrders.filter((so) => {
+            const d = so.orderDate || so.createdAt;
+            return isDateInRange(d, activeDateRange.startDate, activeDateRange.endDate);
+        }).length;
+    }, [salesOrders, activeDateRange]);
+
     const activeProductionSOCount = useMemo(() => {
         return salesOrders.filter(
             (so) => so.status === 'CONFIRMED' || so.status === 'READY_FOR_DISPATCH' || so.status === 'IN_PRODUCTION'
         ).length;
     }, [salesOrders]);
 
-    // 2. Today's Production Bags & Distinct Machine Count
-    const { todayProductionBags, todayDistinctMachinesCount } = useMemo(() => {
-        const todayStr = new Date().toISOString().split('T')[0];
+    // 2. Production Bags & Distinct Machine Count
+    const { filteredProductionBags, filteredDistinctMachinesCount } = useMemo(() => {
         let totalBags = 0;
         const machineSet = new Set();
 
         workOrders.forEach((wo) => {
-            if (Array.isArray(wo.stages)) {
+            if (Array.isArray(wo.stages) && wo.stages.length > 0) {
                 wo.stages.forEach((stg) => {
-                    if (stg.completedAt) {
-                        const dateStr = new Date(stg.completedAt).toISOString().split('T')[0];
-                        if (dateStr === todayStr) {
-                            totalBags += Number(stg.goodOutputQty || 0);
-                            if (stg.assignedMachine) {
-                                const mId = typeof stg.assignedMachine === 'object' ? stg.assignedMachine._id : stg.assignedMachine;
-                                machineSet.add(mId);
-                            }
+                    const stgDate = stg.completedAt || stg.updatedAt || stg.date;
+                    if (stgDate && isDateInRange(stgDate, activeDateRange.startDate, activeDateRange.endDate)) {
+                        totalBags += Number(stg.goodOutputQty || 0);
+                        if (stg.assignedMachine) {
+                            const mId = typeof stg.assignedMachine === 'object' ? stg.assignedMachine._id : stg.assignedMachine;
+                            machineSet.add(mId);
                         }
                     }
                 });
+            } else if (wo.status === 'COMPLETED') {
+                const woDate = wo.updatedAt || wo.createdAt;
+                if (woDate && isDateInRange(woDate, activeDateRange.startDate, activeDateRange.endDate)) {
+                    totalBags += Number(wo.completedQuantity || 0);
+                }
             }
         });
 
         return {
-            todayProductionBags: totalBags,
-            todayDistinctMachinesCount: machineSet.size
+            filteredProductionBags: totalBags,
+            filteredDistinctMachinesCount: machineSet.size
         };
-    }, [workOrders]);
+    }, [workOrders, activeDateRange]);
 
-    // 3. Monthly Revenue from Invoices
-    const monthlyRevenue = useMemo(() => {
-        const now = new Date();
-        const curMonth = now.getMonth();
-        const curYear = now.getFullYear();
-
+    // 3. Revenue from Invoices
+    const filteredRevenue = useMemo(() => {
         return invoices.reduce((acc, inv) => {
-            const dateVal = inv.invoiceDate ? new Date(inv.invoiceDate) : null;
-            if (dateVal && dateVal.getMonth() === curMonth && dateVal.getFullYear() === curYear) {
+            const d = inv.invoiceDate || inv.createdAt;
+            if (d && isDateInRange(d, activeDateRange.startDate, activeDateRange.endDate)) {
                 return acc + Number(inv.grandTotal || 0);
             }
             return acc;
         }, 0);
-    }, [invoices]);
+    }, [invoices, activeDateRange]);
 
     // 4. Inventory Valuation & Low Stock Count (RawMaterials + FinishedGoods)
     const { totalValuationAmount, lowStockCount } = useMemo(() => {
@@ -178,24 +426,30 @@ export default function DashboardPage() {
     }, [rawMaterials, finishedGoods]);
 
     // 5. Second Row Metrics
-    const pendingDispatchOrdersCount = useMemo(() => {
-        return salesOrders.filter((so) => so.status === 'CONFIRMED' || so.status === 'READY_FOR_DISPATCH').length;
-    }, [salesOrders]);
+    const filteredPendingDispatchOrdersCount = useMemo(() => {
+        return salesOrders.filter((so) => {
+            if (so.status !== 'CONFIRMED' && so.status !== 'READY_FOR_DISPATCH') return false;
+            const d = so.orderDate || so.createdAt;
+            return isDateInRange(d, '1970-01-01', activeDateRange.endDate);
+        }).length;
+    }, [salesOrders, activeDateRange]);
 
-    const runningMachinesCount = useMemo(() => {
-        return machines.filter((m) => m.status === 'RUNNING').length;
-    }, [machines]);
-
-    const machineUtilizationPct = useMemo(() => {
-        if (machines.length === 0) return 0;
-        return Math.round((runningMachinesCount / machines.length) * 100);
-    }, [machines, runningMachinesCount]);
-
-    const avgProductionEfficiencyPct = useMemo(() => {
-        if (machines.length === 0) return 0;
+    const { filteredRunningMachinesCount, filteredMachineUtilizationPct, filteredAvgProductionEfficiencyPct } = useMemo(() => {
+        if (machines.length === 0) {
+            return { filteredRunningMachinesCount: 0, filteredMachineUtilizationPct: 0, filteredAvgProductionEfficiencyPct: 0 };
+        }
+        const activeCount = filteredDistinctMachinesCount > 0 
+            ? filteredDistinctMachinesCount 
+            : machines.filter((m) => m.status === 'RUNNING').length;
+        const utilPct = Math.round((activeCount / machines.length) * 100);
         const totalEff = machines.reduce((acc, m) => acc + Number(m.efficiency || 0), 0);
-        return Math.round(totalEff / machines.length);
-    }, [machines]);
+        const avgEff = Math.round(totalEff / machines.length);
+        return {
+            filteredRunningMachinesCount: activeCount,
+            filteredMachineUtilizationPct: Math.min(100, utilPct),
+            filteredAvgProductionEfficiencyPct: avgEff
+        };
+    }, [machines, filteredDistinctMachinesCount]);
 
     const totalReceivablesLakhs = useMemo(() => {
         const totalDue = invoices.reduce((acc, inv) => {
@@ -323,48 +577,52 @@ export default function DashboardPage() {
         return (
             <div className="space-y-6 font-sans">
                 {/* Banner */}
-                <div className="bg-card-bg border border-border rounded-xl p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div className="space-y-1">
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-extrabold uppercase tracking-wider">
-                            <Sparkles size={12} className="text-amber-600" />
-                            <span>SUPER ADMIN PLATFORM CONTROL CENTER</span>
+                <div className="bg-gradient-to-br from-card-bg via-card-bg to-amber-500/[0.04] border border-border rounded-xl p-5 shadow-xs flex flex-col gap-4 relative overflow-hidden animate-in fade-in duration-300">
+                    <div className="absolute -top-16 -right-16 w-48 h-48 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+                    <LiveHeaderClockAndGreeting user={user} />
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div className="space-y-1">
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-extrabold uppercase tracking-wider">
+                                <Sparkles size={12} className="text-amber-600" />
+                                <span>SUPER ADMIN PLATFORM CONTROL CENTER</span>
+                            </div>
+                            <h1 className="text-2xl font-black text-text-main tracking-tight">
+                                Global Platform Overview
+                            </h1>
+                            <p className="text-xs text-text-muted">
+                                Multi-tenant architecture management, global role permissions & system provisioning.
+                            </p>
                         </div>
-                        <h1 className="text-2xl font-black text-text-main tracking-tight">
-                            Global Platform Overview
-                        </h1>
-                        <p className="text-xs text-text-muted">
-                            Multi-tenant architecture management, global role permissions & system provisioning.
-                        </p>
-                    </div>
 
-                    <div className="flex items-center gap-3 shrink-0">
-                        <button
-                            type="button"
-                            onClick={() => navigate('/administration')}
-                            className="flex items-center gap-1.5 px-4 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
-                        >
-                            <Plus size={16} />
-                            <span>+ Register New Tenant</span>
-                        </button>
+                        <div className="flex items-center gap-3 shrink-0">
+                            <button
+                                type="button"
+                                onClick={() => navigate('/administration')}
+                                className="flex items-center gap-1.5 px-4 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
+                            >
+                                <Plus size={16} />
+                                <span>+ Register New Tenant</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
 
                 {/* Stat Cards Row */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <div className="bg-card-bg border border-border p-4.5 rounded-xl shadow-2xs space-y-2">
+                    <div className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 p-4.5 rounded-xl shadow-2xs space-y-2">
                         <div className="flex items-center justify-between text-text-muted">
                             <span className="text-[11px] font-bold uppercase tracking-wider">REGISTERED TENANTS</span>
                             <Building2 size={18} className="text-amber-500" />
                         </div>
                         <div className="text-2xl font-black text-text-main font-mono">
-                            {tenantsList.length}
+                            <AnimatedNumber value={tenantsList.length} />
                         </div>
                         <div className="text-[11px] text-emerald-600 font-extrabold">
                             Active Multi-Tenant Orgs
                         </div>
                     </div>
 
-                    <div className="bg-card-bg border border-border p-4.5 rounded-xl shadow-2xs space-y-2">
+                    <div className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 p-4.5 rounded-xl shadow-2xs space-y-2">
                         <div className="flex items-center justify-between text-text-muted">
                             <span className="text-[11px] font-bold uppercase tracking-wider">PLATFORM USERS</span>
                             <Users size={18} className="text-blue-500" />
@@ -377,7 +635,7 @@ export default function DashboardPage() {
                         </div>
                     </div>
 
-                    <div className="bg-card-bg border border-border p-4.5 rounded-xl shadow-2xs space-y-2">
+                    <div className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 p-4.5 rounded-xl shadow-2xs space-y-2">
                         <div className="flex items-center justify-between text-text-muted">
                             <span className="text-[11px] font-bold uppercase tracking-wider">PERMISSIONS REGISTRY</span>
                             <ShieldCheck size={18} className="text-emerald-500" />
@@ -390,7 +648,7 @@ export default function DashboardPage() {
                         </div>
                     </div>
 
-                    <div className="bg-card-bg border border-border p-4.5 rounded-xl shadow-2xs space-y-2">
+                    <div className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 p-4.5 rounded-xl shadow-2xs space-y-2">
                         <div className="flex items-center justify-between text-text-muted">
                             <span className="text-[11px] font-bold uppercase tracking-wider">SYSTEM HEALTH</span>
                             <CheckCircle2 size={18} className="text-primary" />
@@ -466,40 +724,105 @@ export default function DashboardPage() {
     return (
         <div className="space-y-6 font-sans">
             {/* 1. TOP BANNER */}
-            <div className="bg-card-bg border border-border rounded-xl p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="space-y-1">
-                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-extrabold uppercase tracking-wider">
-                        <Sparkles size={12} className="text-amber-600" />
-                        <span>INDUSTRIAL EXECUTIVE CONTROL CENTER</span>
+            <div className="relative overflow-hidden bg-gradient-to-br from-card-bg via-card-bg to-amber-500/[0.04] border border-border/80 rounded-xl p-5 md:p-6 shadow-xs flex flex-col gap-4 animate-in fade-in duration-300">
+                <div className="absolute -top-16 -right-16 w-56 h-56 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+                <div className="absolute -bottom-16 -left-16 w-48 h-48 bg-primary/5 rounded-full blur-2xl pointer-events-none" />
+
+                {/* Top Section: Live Clock & Greeting */}
+                <LiveHeaderClockAndGreeting user={user} />
+
+                {/* Middle Section: Main Title & Quick Actions */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pt-1">
+                    <div className="space-y-1">
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-extrabold uppercase tracking-wider">
+                            <Sparkles size={12} className="text-amber-600" />
+                            <span>INDUSTRIAL EXECUTIVE CONTROL CENTER</span>
+                        </div>
+                        <h1 className="text-[23px] font-black text-text-main tracking-tight">
+                            {(user?.tenant?.companyName || user?.tenant?.name || user?.companyName || 'PP Poly & Paper Products')} <span className="text-primary font-normal text-[16px]">Enterprise ERP</span>
+                        </h1>
+                        <p className="text-xs text-text-muted">
+                            Real-time shop floor metrics, inventory valuation & order dispatches.
+                        </p>
                     </div>
-                    <h1 className="text-2xl font-black text-text-main tracking-tight">
-                        {(user?.tenant?.companyName || user?.tenant?.name || user?.companyName || 'PP Poly & Paper Products')} <span className="text-primary font-normal text-lg">Enterprise ERP</span>
-                    </h1>
-                    <p className="text-xs text-text-muted">
-                        Real-time shop floor metrics, inventory valuation & order dispatches.
-                    </p>
+
+                    <div className="flex items-center gap-3 shrink-0 flex-wrap">
+                        <button
+                            type="button"
+                            onClick={() => navigate('/production')}
+                            className="flex items-center gap-1.5 px-4 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md hover:shadow-lg cursor-pointer active:scale-95"
+                        >
+                            <Factory size={16} />
+                            <span>Launch Production Line</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => {
+                                window.print();
+                            }}
+                            className="flex items-center gap-1.5 px-4 py-2.5 bg-app-bg hover:bg-border/40 border border-border text-text-main font-bold rounded-lg text-xs transition-all cursor-pointer active:scale-95"
+                        >
+                            <span>Export ERP Audit Report</span>
+                        </button>
+                    </div>
                 </div>
 
-                <div className="flex items-center gap-3 shrink-0 flex-wrap">
-                    <button
-                        type="button"
-                        onClick={() => navigate('/production')}
-                        className="flex items-center gap-1.5 px-4 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md cursor-pointer"
-                    >
-                        <Factory size={16} />
-                        <span>Launch Production Line</span>
-                    </button>
+                {/* Bottom Section: Compact Date Filter */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-border/50 text-xs">
+                    <div className="flex items-center flex-wrap gap-2">
+                        <div className="flex items-center gap-1.5 text-text-muted font-bold text-[11px] uppercase tracking-wider mr-1">
+                            <Calendar size={13} className="text-primary" />
+                            <span>Filter Period:</span>
+                        </div>
+                        {[
+                            { key: 'today', label: 'Today' },
+                            { key: 'yesterday', label: 'Yesterday' },
+                            { key: 'week', label: 'This Week' },
+                            { key: 'month', label: 'This Month' },
+                            { key: 'custom', label: 'Custom' }
+                        ].map((chip) => {
+                            const isActive = dateFilterMode === chip.key;
+                            return (
+                                <button
+                                    key={chip.key}
+                                    type="button"
+                                    onClick={() => setDateFilterMode(chip.key)}
+                                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                        isActive
+                                            ? 'bg-primary text-sidebar-bg shadow-xs border border-primary'
+                                            : 'bg-app-bg text-text-muted hover:text-text-main hover:bg-border/40 border border-border/70'
+                                    }`}
+                                >
+                                    {chip.label}
+                                </button>
+                            );
+                        })}
 
-                    <button
-                        type="button"
-                        onClick={() => {
-                            // TODO: Export ERP Audit Report logic
-                            window.print();
-                        }}
-                        className="flex items-center gap-1.5 px-4 py-2.5 bg-app-bg hover:bg-border/40 border border-border text-text-main font-bold rounded-lg text-xs transition-all cursor-pointer"
-                    >
-                        <span>Export ERP Audit Report</span>
-                    </button>
+                        {dateFilterMode === 'custom' && (
+                            <div className="flex items-center gap-1.5 ml-1 bg-app-bg/60 p-1 rounded-lg border border-border/60">
+                                <input
+                                    type="date"
+                                    value={customFrom}
+                                    onChange={(e) => setCustomFrom(e.target.value)}
+                                    className="px-2 py-0.5 text-xs bg-card-bg border border-border rounded text-text-main font-mono focus:outline-hidden focus:border-primary"
+                                />
+                                <span className="text-text-muted text-[11px] font-medium">to</span>
+                                <input
+                                    type="date"
+                                    value={customTo}
+                                    onChange={(e) => setCustomTo(e.target.value)}
+                                    className="px-2 py-0.5 text-xs bg-card-bg border border-border rounded text-text-main font-mono focus:outline-hidden focus:border-primary"
+                                />
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="text-[11px] font-semibold text-text-muted bg-app-bg/70 border border-border/60 px-2.5 py-1 rounded-md flex items-center gap-1.5 self-start sm:self-auto">
+                        <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                        <span>Active Range:</span>
+                        <span className="font-mono text-text-main font-bold">{activeDateRange.displayLabel}</span>
+                    </div>
                 </div>
             </div>
 
@@ -507,77 +830,77 @@ export default function DashboardPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div
                     onClick={() => navigate('/sales')}
-                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
                 >
                     <div className="flex items-center justify-between text-text-muted">
                         <span className="text-[11px] font-bold uppercase tracking-wider">TOTAL SALES ORDERS</span>
                         <Truck size={18} className="text-amber-500" />
                     </div>
                     <div className="text-2xl font-black text-text-main font-mono">
-                        {totalSOCount}
+                        <AnimatedNumber value={totalSOCount} />
                     </div>
                     <div className="text-[11px] text-text-muted font-medium">
                         {activeProductionSOCount} in active production
                     </div>
                     <div className="text-[10px] text-text-muted font-mono pt-1 border-t border-border/40">
-                        MoM Trend: — (Historical Snapshot Needed)
+                        Orders in selected range: <span className="font-bold text-text-main">{filteredSOCount}</span>
                     </div>
                 </div>
 
                 <div
                     onClick={() => navigate('/production')}
-                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
                 >
                     <div className="flex items-center justify-between text-text-muted">
-                        <span className="text-[11px] font-bold uppercase tracking-wider">TODAY'S PRODUCTION</span>
+                        <span className="text-[11px] font-bold uppercase tracking-wider">{activeDateRange.productionLabel}</span>
                         <Factory size={18} className="text-emerald-500" />
                     </div>
                     <div className="text-2xl font-black text-emerald-700 font-mono">
-                        {todayProductionBags.toLocaleString()} Bags
+                        <AnimatedNumber value={filteredProductionBags} suffix=" Bags" />
                     </div>
                     <div className="text-[11px] text-text-muted font-medium">
-                        Across {todayDistinctMachinesCount > 0 ? todayDistinctMachinesCount : machines.length} machine plants
+                        Across {filteredDistinctMachinesCount > 0 ? filteredDistinctMachinesCount : machines.length} machine plants
                     </div>
                     <div className="text-[10px] text-text-muted font-mono pt-1 border-t border-border/40">
-                        MoM Trend: — (Historical Snapshot Needed)
+                        {dateFilterMode === 'today' ? "Today's output across stages" : `Output for ${activeDateRange.displayLabel}`}
                     </div>
                 </div>
 
                 <div
                     onClick={() => navigate('/analytics?tab=pnl')}
-                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
                 >
                     <div className="flex items-center justify-between text-text-muted">
-                        <span className="text-[11px] font-bold uppercase tracking-wider">MONTHLY REVENUE</span>
+                        <span className="text-[11px] font-bold uppercase tracking-wider">{activeDateRange.revenueLabel}</span>
                         <DollarSign size={18} className="text-primary" />
                     </div>
                     <div className="text-2xl font-black text-text-main font-mono">
-                        ₹{(monthlyRevenue / 100000).toFixed(2)}L
+                        ₹<AnimatedNumber value={filteredRevenue / 100000} decimals={2} suffix="L" />
                     </div>
                     <div className="text-[11px] text-text-muted font-medium">
                         Payables: ₹{((payablesSummary?.totalPayable || 0) / 100000).toFixed(2)}L
                     </div>
                     <div className="text-[10px] text-text-muted font-mono pt-1 border-t border-border/40">
-                        MoM Trend: — (Historical Snapshot Needed)
+                        Invoiced in selected range
                     </div>
                 </div>
 
                 <div
                     onClick={() => navigate('/analytics?tab=valuation')}
-                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
                 >
                     <div className="flex items-center justify-between text-text-muted">
                         <span className="text-[11px] font-bold uppercase tracking-wider">INVENTORY VALUATION</span>
                         <Package size={18} className="text-blue-500" />
                     </div>
                     <div className="text-2xl font-black text-text-main font-mono">
-                        ₹{(totalValuationAmount / 10000000).toFixed(2)}Cr
+                        ₹<AnimatedNumber value={totalValuationAmount / 10000000} decimals={2} suffix="Cr" />
                     </div>
                     <div className="text-[11px] text-amber-700 font-extrabold">
                         {lowStockCount} items low stock
                     </div>
                     <div className="text-[10px] text-text-muted font-mono pt-1 border-t border-border/40">
-                        MoM Trend: — (Historical Snapshot Needed)
+                        RM + FG live warehouse stock
                     </div>
                 </div>
             </div>
@@ -586,42 +909,42 @@ export default function DashboardPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                 <div
                     onClick={() => navigate('/dispatch')}
-                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
                 >
                     <span className="text-[10px] font-bold uppercase text-text-muted block">PENDING DISPATCH</span>
                     <span className="text-lg font-black text-text-main font-mono block">
-                        {pendingDispatchOrdersCount} Orders
+                        <AnimatedNumber value={filteredPendingDispatchOrdersCount} suffix=" Orders" />
                     </span>
                     <span className="text-[10px] text-text-muted block">Ready for gate pass</span>
                 </div>
 
                 <div
                     onClick={() => navigate('/production')}
-                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
                 >
                     <span className="text-[10px] font-bold uppercase text-text-muted block">MACHINE UTILIZATION</span>
                     <span className="text-lg font-black text-emerald-700 font-mono block">
-                        {machineUtilizationPct}%
+                        <AnimatedNumber value={filteredMachineUtilizationPct} suffix="%" />
                     </span>
                     <span className="text-[10px] text-text-muted block">
-                        {runningMachinesCount}/{machines.length} Lines Running
+                        {filteredRunningMachinesCount}/{machines.length} Lines Running
                     </span>
                 </div>
 
                 <div
                     onClick={() => navigate('/analytics?tab=yield')}
-                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
                 >
                     <span className="text-[10px] font-bold uppercase text-text-muted block">PROD. EFFICIENCY</span>
                     <span className="text-lg font-black text-text-main font-mono block">
-                        {avgProductionEfficiencyPct}%
+                        <AnimatedNumber value={filteredAvgProductionEfficiencyPct} suffix="%" />
                     </span>
                     <span className="text-[10px] text-emerald-600 font-bold block">Target: &gt;90%</span>
                 </div>
 
                 <div
                     onClick={() => navigate('/attendance')}
-                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
                 >
                     <div className="flex items-center justify-between">
                         <span className="text-[10px] font-bold uppercase text-text-muted">ATTENDANCE</span>
@@ -635,18 +958,18 @@ export default function DashboardPage() {
 
                 <div
                     onClick={() => navigate('/sales?tab=invoices&filter=outstanding')}
-                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
                 >
                     <span className="text-[10px] font-bold uppercase text-text-muted block">RECEIVABLES</span>
                     <span className="text-lg font-black text-text-main font-mono block">
-                        ₹{(totalReceivablesLakhs / 100000).toFixed(2)}L
+                        ₹<AnimatedNumber value={totalReceivablesLakhs / 100000} decimals={2} suffix="L" />
                     </span>
                     <span className="text-[10px] text-text-muted block">Outstanding Invoices</span>
                 </div>
 
                 <div
                     onClick={() => navigate('/procurement?tab=purchase-orders&filter=outstanding')}
-                    className="bg-card-bg border border-border hover:border-primary/60 hover:shadow-xs transition-all cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
                 >
                     <div className="flex items-center justify-between">
                         <span className="text-[10px] font-bold uppercase text-text-muted">PAYABLES</span>
@@ -657,7 +980,7 @@ export default function DashboardPage() {
                         )}
                     </div>
                     <span className="text-lg font-black text-text-main font-mono block">
-                        ₹{((payablesSummary?.totalPayable || 0) / 100000).toFixed(2)}L
+                        ₹<AnimatedNumber value={(payablesSummary?.totalPayable || 0) / 100000} decimals={2} suffix="L" />
                     </span>
                     <span className="text-[10px] text-text-muted block">
                         {payablesSummary?.suppliersWithDues || 0} Suppliers with dues

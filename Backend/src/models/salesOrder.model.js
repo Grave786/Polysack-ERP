@@ -13,8 +13,8 @@ const SoItemSchema = new mongoose.Schema({
     },
     unit: {
         type: String,
-        enum: ['Pcs', 'Kg', 'Roll', 'Bags'],
-        default: 'Pcs'
+        default: 'Pcs',
+        trim: true
     },
     ratePerUnit: {
         type: Number,

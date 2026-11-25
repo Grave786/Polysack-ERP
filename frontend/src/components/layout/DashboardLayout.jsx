@@ -4,7 +4,7 @@ import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import Footer from './Footer';
 
-export default function DashboardLayout() {
+export default function DashboardLayout({ children }) {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
     return (
@@ -14,7 +14,7 @@ export default function DashboardLayout() {
                 <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
                 <div className="flex flex-1 min-w-0 min-h-0 flex-col overflow-hidden">
                     <main className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-3 sm:p-6 lg:p-8 box-border max-w-full">
-                        <Outlet />
+                        {children || <Outlet />}
                     </main>
                     <Footer />
                 </div>

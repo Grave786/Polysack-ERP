@@ -187,7 +187,7 @@ const createSalesOrder = async (req, res) => {
             cleanedItems.push({
                 finishedGood: item.finishedGood,
                 quantity: qty,
-                unit: item.unit || 'Pcs',
+                unit: item.unit || item.uom || '',
                 dispatchedQuantity: 0, // Always 0 on creation
                 ratePerUnit: rate
             });
@@ -197,13 +197,21 @@ const createSalesOrder = async (req, res) => {
         const foundFGs = await FinishedGood.find({
             _id: { $in: Array.from(finishedGoodIds) },
             tenant: tenantId
-        });
+        }).populate('uom');
 
         if (foundFGs.length !== finishedGoodIds.size) {
             return res.status(400).json({
                 success: false,
                 message: 'One or more specified Finished Goods do not exist or do not belong to your organization.'
             });
+        }
+
+        for (const it of cleanedItems) {
+            if (!it.unit) {
+                const fgDoc = foundFGs.find(f => String(f._id) === String(it.finishedGood));
+                const fgUom = (fgDoc?.uom && typeof fgDoc.uom === 'object') ? (fgDoc.uom.symbol || fgDoc.uom.name) : (fgDoc?.uom || 'Pcs');
+                it.unit = fgUom || 'Pcs';
+            }
         }
 
         let claimedEnquiryId = null;
@@ -344,16 +352,22 @@ const getSalesOrders = async (req, res) => {
 
         const [salesOrders, total] = await Promise.all([
             SalesOrder.find(filter)
-                .populate('customer', 'companyName code contactPerson phone')
+                .populate('customer', 'companyName name code contactPerson phone city state address gstin')
                 .populate('dispatchLocation', 'name code type')
                 .populate({
                     path: 'items.finishedGood',
-                    select: 'name code uom currentStock pricePerBag title productName bagName specification'
+                    select: 'name code uom currentStock pricePerBag title productName bagName specification dimensions dimensionUnit fabricGSM',
+                    populate: { path: 'uom', select: 'name symbol abbreviation' }
                 })
                 .populate({
                     path: 'items.product',
                     select: 'title productName name bagName specification',
                     strictPopulate: false
+                })
+                .populate({
+                    path: 'sourceEnquiry',
+                    select: 'customer customerRef newCustomerDetails nslNumber',
+                    populate: { path: 'customer customerRef', select: 'companyName name code contactPerson phone city state address gstin' }
                 })
                 .sort({ createdAt: -1 })
                 .skip(skip)
@@ -361,16 +375,72 @@ const getSalesOrders = async (req, res) => {
             SalesOrder.countDocuments(filter)
         ]);
 
+        // Find any unpopulated customer references to guarantee real customer names
+        const unpopulatedCustomerIds = [];
+        for (const so of salesOrders) {
+            const cId = so.customer?._id || so.customer;
+            if (cId && (!so.customer || typeof so.customer !== 'object' || !so.customer.companyName)) {
+                if (mongoose.isValidObjectId(cId)) {
+                    unpopulatedCustomerIds.push(cId);
+                }
+            }
+        }
+        const fallbackCustomerMap = new Map();
+        if (unpopulatedCustomerIds.length > 0) {
+            const foundCustomers = await Customer.find({ _id: { $in: unpopulatedCustomerIds } })
+                .select('companyName name code contactPerson phone city state address gstin')
+                .lean();
+            foundCustomers.forEach((c) => fallbackCustomerMap.set(String(c._id), c));
+        }
+
+        const enrichedSalesOrders = salesOrders.map((so) => {
+            const soObj = so.toObject ? so.toObject() : so;
+            const cId = String(soObj.customer?._id || soObj.customer || '');
+            const fallbackCust = fallbackCustomerMap.get(cId);
+            const se = soObj.sourceEnquiry;
+            const seCust = se?.customer || se?.customerRef;
+            const resolvedCust = (soObj.customer && typeof soObj.customer === 'object' && (soObj.customer.companyName || soObj.customer.name))
+                ? soObj.customer
+                : (fallbackCust || seCust || null);
+
+            const resolvedCustName =
+                resolvedCust?.companyName ||
+                resolvedCust?.name ||
+                se?.newCustomerDetails?.company ||
+                se?.newCustomerDetails?.name ||
+                soObj.customerName ||
+                '-';
+
+            soObj.customerName = resolvedCustName;
+            if (!soObj.customer || typeof soObj.customer !== 'object') {
+                soObj.customer = resolvedCust || { companyName: resolvedCustName, name: resolvedCustName };
+            } else if (!soObj.customer.companyName) {
+                soObj.customer.companyName = resolvedCustName;
+            }
+
+            if (Array.isArray(soObj.items)) {
+                soObj.items.forEach((it) => {
+                    if (!it.unit && it.finishedGood) {
+                        const fg = it.finishedGood;
+                        it.unit = (fg.uom && typeof fg.uom === 'object')
+                            ? (fg.uom.symbol || fg.uom.name)
+                            : (fg.uom || 'Pcs');
+                    }
+                });
+            }
+            return soObj;
+        });
+
         return res.status(200).json({
             success: true,
-            count: salesOrders.length,
+            count: enrichedSalesOrders.length,
             pagination: {
                 total,
                 page: pageNum,
                 limit: limitNum,
                 pages: Math.ceil(total / limitNum) || 1
             },
-            data: salesOrders
+            data: enrichedSalesOrders
         });
     } catch (error) {
         console.error('Error in getSalesOrders:', error);
@@ -406,12 +476,17 @@ const getSalesOrderById = async (req, res) => {
         }
 
         const salesOrder = await SalesOrder.findOne({ _id: req.params.id, tenant: tenantId })
-            .populate('customer', 'companyName code contactPerson phone email address city gstin creditLimit')
+            .populate('customer', 'companyName name code contactPerson phone email address city gstin creditLimit')
+            .populate({
+                path: 'sourceEnquiry',
+                select: 'customer customerRef newCustomerDetails nslNumber',
+                populate: { path: 'customer customerRef', select: 'companyName name code contactPerson phone email address city gstin creditLimit' }
+            })
             .populate('dispatchLocation', 'name code type')
             .populate({
                 path: 'items.finishedGood',
-                select: 'name code uom currentStock pricePerBag title productName bagName specification',
-                populate: { path: 'uom', select: 'name symbol' }
+                select: 'name code uom currentStock pricePerBag title productName bagName specification dimensions dimensionUnit fabricGSM',
+                populate: { path: 'uom', select: 'name symbol abbreviation' }
             })
             .populate({
                 path: 'items.product',
@@ -426,9 +501,50 @@ const getSalesOrderById = async (req, res) => {
             });
         }
 
+        const responseData = salesOrder.toObject ? salesOrder.toObject() : salesOrder;
+
+        let resolvedCust = (responseData.customer && typeof responseData.customer === 'object' && (responseData.customer.companyName || responseData.customer.name))
+            ? responseData.customer
+            : null;
+
+        if (!resolvedCust) {
+            const cId = responseData.customer?._id || responseData.customer;
+            if (cId && mongoose.isValidObjectId(cId)) {
+                resolvedCust = await Customer.findById(cId).select('companyName name code contactPerson phone email address city gstin creditLimit').lean();
+            }
+        }
+
+        const se = responseData.sourceEnquiry;
+        const seCust = se?.customer || se?.customerRef;
+        const finalCust = resolvedCust || seCust;
+        const resolvedCustName =
+            finalCust?.companyName ||
+            finalCust?.name ||
+            se?.newCustomerDetails?.company ||
+            se?.newCustomerDetails?.name ||
+            responseData.customerName ||
+            '-';
+
+        responseData.customerName = resolvedCustName;
+        if (!responseData.customer || typeof responseData.customer !== 'object') {
+            responseData.customer = finalCust || { companyName: resolvedCustName, name: resolvedCustName };
+        } else if (!responseData.customer.companyName) {
+            responseData.customer.companyName = resolvedCustName;
+        }
+        if (Array.isArray(responseData.items)) {
+            responseData.items.forEach((it) => {
+                if (!it.unit && it.finishedGood) {
+                    const fg = it.finishedGood;
+                    it.unit = (fg.uom && typeof fg.uom === 'object')
+                        ? (fg.uom.symbol || fg.uom.name)
+                        : (fg.uom || 'Pcs');
+                }
+            });
+        }
+
         return res.status(200).json({
             success: true,
-            data: salesOrder
+            data: responseData
         });
     } catch (error) {
         console.error('Error in getSalesOrderById:', error);
@@ -561,7 +677,7 @@ const updateSalesOrder = async (req, res) => {
                 cleanedItems.push({
                     finishedGood: item.finishedGood,
                     quantity: qty,
-                    unit: item.unit || existingItem?.unit || 'Pcs',
+                    unit: item.unit || item.uom || existingItem?.unit || '',
                     dispatchedQuantity: existingDispatched,
                     ratePerUnit: rate
                 });
@@ -570,13 +686,21 @@ const updateSalesOrder = async (req, res) => {
             const foundFGs = await FinishedGood.find({
                 _id: { $in: Array.from(finishedGoodIds) },
                 tenant: tenantId
-            });
+            }).populate('uom');
 
             if (foundFGs.length !== finishedGoodIds.size) {
                 return res.status(400).json({
                     success: false,
                     message: 'One or more specified Finished Goods do not exist or do not belong to your organization.'
                 });
+            }
+
+            for (const it of cleanedItems) {
+                if (!it.unit) {
+                    const fgDoc = foundFGs.find(f => String(f._id) === String(it.finishedGood));
+                    const fgUom = (fgDoc?.uom && typeof fgDoc.uom === 'object') ? (fgDoc.uom.symbol || fgDoc.uom.name) : (fgDoc?.uom || 'Pcs');
+                    it.unit = fgUom || 'Pcs';
+                }
             }
 
             salesOrder.items = cleanedItems;

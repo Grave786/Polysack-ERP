@@ -16,6 +16,11 @@ const InvoiceItemSchema = new mongoose.Schema({
         required: [true, 'Quantity is required'],
         min: [0.0001, 'Quantity must be greater than 0']
     },
+    unit: {
+        type: String,
+        default: 'Pcs',
+        trim: true
+    },
     ratePerUnit: {
         type: Number,
         required: [true, 'Rate per unit is required'],

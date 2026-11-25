@@ -224,7 +224,10 @@ export default function DispatchPage() {
                 const orderedQty = item.orderedQuantity || item.quantity || 0;
                 const alreadyDispatched = item.alreadyDispatched || 0;
                 const remainingQty = Math.max(0, orderedQty - alreadyDispatched);
-                const initialPcs = remainingQty > 0 ? remainingQty : orderedQty;
+                const currentStock = item.currentStock !== undefined && item.currentStock !== null ? Number(item.currentStock) : null;
+                const isOutOfStock = currentStock !== null && currentStock <= 0;
+                const maxAllowed = currentStock !== null ? Math.min(remainingQty, Math.max(0, currentStock)) : remainingQty;
+                const initialPcs = isOutOfStock ? 0 : (maxAllowed > 0 ? maxAllowed : (remainingQty > 0 ? remainingQty : orderedQty));
 
                 const avgBagWeightKg = item.avgBagWeightKg ?? null;
                 const pcsPerBale = item.pcsPerBale ?? null;
@@ -237,16 +240,21 @@ export default function DispatchPage() {
                     ? String(Math.ceil(initialPcs / pcsPerBale))
                     : '';
 
+                const uom = item.uom || item.unit || 'Pcs';
+
                 return {
                     finishedGood: fgId,
                     finishedGoodName: fgName,
                     orderedQuantity: orderedQty,
                     remainingQuantity: remainingQty,
+                    currentStock,
                     dispatchedQuantity: initialPcs,
                     dispatchedKg: initialKg,
                     dispatchedBales: initialBales,
                     avgBagWeightKg,
                     pcsPerBale,
+                    uom,
+                    unit: uom,
                     isKgModified: false,
                     isBalesModified: false
                 };
@@ -339,15 +347,22 @@ export default function DispatchPage() {
             return;
         }
 
-        // Validate quantities do not exceed remaining
+        // Validate quantities do not exceed remaining or available physical stock
         for (const it of dispatchItems) {
             const numQty = Number(it.dispatchedQuantity || 0);
             if (numQty <= 0) {
                 toast.error(`Please enter a valid quantity > 0 for '${it.finishedGoodName}'`);
                 return;
             }
-            if (!isTenantAdminUser && it.remainingQuantity && numQty > it.remainingQuantity + 0.0001) {
-                toast.error(`Cannot dispatch ${numQty} bags for '${it.finishedGoodName}' — only ${it.remainingQuantity} bags available`);
+            if (it.currentStock !== null && it.currentStock !== undefined && it.currentStock <= 0) {
+                toast.error(`Cannot dispatch '${it.finishedGoodName}': Item is out of stock (0 available).`);
+                return;
+            }
+            const maxAllowed = it.currentStock !== null && it.currentStock !== undefined
+                ? Math.min(it.remainingQuantity, it.currentStock)
+                : it.remainingQuantity;
+            if (!isTenantAdminUser && numQty > maxAllowed + 0.0001) {
+                toast.error(`Cannot dispatch ${numQty} ${it.uom} for '${it.finishedGoodName}' — maximum allowed is ${maxAllowed} ${it.uom}${it.currentStock !== null ? ` (Stock: ${it.currentStock})` : ''}`);
                 return;
             }
         }
@@ -501,24 +516,36 @@ export default function DispatchPage() {
             )
         },
         {
-            header: 'BAGS SHIPPED',
+            header: 'QTY SHIPPED',
             exportValue: (row) => {
                 const itemsList = row.items || [];
-                return itemsList.reduce((acc, i) => acc + Number(i.dispatchedQuantity || i.quantity || 0), 0);
+                const totals = itemsList.reduce((acc, i) => {
+                    const u = i.unit || 'Pcs';
+                    acc[u] = (acc[u] || 0) + Number(i.dispatchedQuantity || i.quantity || 0);
+                    return acc;
+                }, {});
+                return Object.entries(totals).map(([unit, qty]) => `${qty.toLocaleString()} ${unit}`).join(' + ') || '0';
             },
             render: (row) => {
                 const itemsList = row.items || [];
-                const totalBags = itemsList.reduce((acc, i) => acc + Number(i.dispatchedQuantity || i.quantity || 0), 0);
-                const totalBales = totalBags > 0 ? Math.ceil(totalBags / 300) : 0;
+                const totals = itemsList.reduce((acc, i) => {
+                    const u = i.unit || 'Pcs';
+                    acc[u] = (acc[u] || 0) + Number(i.dispatchedQuantity || i.quantity || 0);
+                    return acc;
+                }, {});
+                const totalEntries = Object.entries(totals);
+                const totalBalesRecorded = itemsList.reduce((acc, i) => acc + (i.dispatchedBales ? Number(i.dispatchedBales) : 0), 0);
 
                 return (
                     <div className="font-sans leading-tight">
                         <div className="font-extrabold text-text-main text-xs">
-                            {totalBags > 0 ? `${totalBags.toLocaleString()} Bags` : '-'}
+                            {totalEntries.length > 0 
+                                ? totalEntries.map(([unit, qty]) => `${qty.toLocaleString()} ${unit}`).join(' + ')
+                                : '-'}
                         </div>
-                        {totalBags > 0 && (
+                        {totalBalesRecorded > 0 && (
                             <div className="text-[10px] text-text-muted font-mono font-medium">
-                                ({totalBales} Bales)
+                                ({totalBalesRecorded} Bales)
                             </div>
                         )}
                     </div>
@@ -1022,18 +1049,25 @@ export default function DispatchPage() {
             const res = await axiosInstance.get(`/dispatches/delivery-register?${params.toString()}`);
             if (res.data?.success && Array.isArray(res.data.data) && res.data.data.length > 0) {
                 const list = res.data.data;
-                const totalBags = list.reduce((sum, r) => sum + Number(r.dispatchedQuantity || 0), 0);
+                const unitsMap = list.reduce((acc, r) => {
+                    const u = r.unit || 'Pcs';
+                    acc[u] = (acc[u] || 0) + Number(r.dispatchedQuantity || 0);
+                    return acc;
+                }, {});
+                const totalQtyFormatted = Object.entries(unitsMap)
+                    .map(([unit, qty]) => `${qty.toLocaleString('en-IN')} ${unit}`)
+                    .join(' + ') || '0 Pcs';
                 const deliveredCount = list.filter((r) => r.deliveryStatus === 'DELIVERED').length;
                 const inTransitCount = list.filter((r) => r.deliveryStatus === 'IN_TRANSIT').length;
 
                 const summaryCards = [
                     { label: 'Total Dispatch Line Items', value: list.length.toLocaleString('en-IN'), notes: 'Granular dispatch items' },
-                    { label: 'Total Bags Dispatched', value: `${totalBags.toLocaleString('en-IN')} Bags`, notes: `Approx ${(Math.ceil(totalBags / 300)).toLocaleString('en-IN')} Bales` },
+                    { label: 'Total Quantity Dispatched', value: totalQtyFormatted, notes: 'Across all outward dispatches' },
                     { label: 'Delivered / Closed', value: deliveredCount.toLocaleString('en-IN'), notes: 'POD verified & completed' },
                     { label: 'Active In-Transit', value: inTransitCount.toLocaleString('en-IN'), notes: 'Vehicles currently on route' }
                 ];
 
-                const headers = ['Dispatch #', 'Date', 'Ref / SO #', 'Customer', 'Product / Specs', 'Qty (Bags)', 'Transporter & Vehicle', 'Status', 'POD Confirmed'];
+                const headers = ['Dispatch #', 'Date', 'Ref / SO #', 'Customer', 'Product / Specs', 'Qty & Unit', 'Transporter & Vehicle', 'Status', 'POD Confirmed'];
                 const rows = list.map((r) => [
                     r.dispatchNumber || '-',
                     formatDate(r.dispatchDate),
@@ -1243,7 +1277,7 @@ export default function DispatchPage() {
                                     <div className="flex justify-between items-center text-[11px] pt-1 border-t border-border/60">
                                         <span className="text-text-muted font-medium">Remaining to Ship:</span>
                                         <span className="font-mono font-extrabold text-primary">
-                                            {selectedSource.remainingQuantity?.toLocaleString()} Bags
+                                            {selectedSource.remainingLabel || `${selectedSource.remainingQuantity?.toLocaleString()} ${selectedSource.items?.[0]?.uom || 'Bags'}`}
                                         </span>
                                     </div>
                                 </div>
@@ -1354,129 +1388,156 @@ export default function DispatchPage() {
                                     )}
                                 </div>
 
-                                {dispatchItems.map((item, idx) => (
-                                    <div key={idx} className="bg-card-bg border border-border p-3 rounded-lg space-y-2.5 shadow-sm">
-                                        <div className="flex flex-wrap items-center justify-between gap-1.5 pb-1 border-b border-border/50">
-                                            <div className="font-bold text-xs text-text-main">
-                                                {item.finishedGoodName}
-                                            </div>
-                                            <div className="flex items-center gap-1.5 text-[10px]">
-                                                {item.avgBagWeightKg ? (
-                                                    <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono font-medium">
-                                                        Avg: {(item.avgBagWeightKg * 1000).toFixed(0)}g / bag
-                                                    </span>
-                                                ) : (
-                                                    <span className="px-1.5 py-0.5 rounded bg-border/40 text-text-muted font-mono font-medium">
-                                                        Kg: Manual
-                                                    </span>
-                                                )}
-                                                {item.pcsPerBale ? (
-                                                    <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono font-medium">
-                                                        Bale: ~{item.pcsPerBale} pcs/bale
-                                                    </span>
-                                                ) : (
-                                                    <span className="px-1.5 py-0.5 rounded bg-border/40 text-text-muted font-mono font-medium">
-                                                        Bales: Manual
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </div>
+                                {dispatchItems.map((item, idx) => {
+                                    const isOutOfStock = item.currentStock !== null && item.currentStock !== undefined && item.currentStock <= 0;
+                                    const maxAllowed = item.currentStock !== null && item.currentStock !== undefined
+                                        ? Math.min(item.remainingQuantity, Math.max(0, item.currentStock))
+                                        : item.remainingQuantity;
 
-                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                                            {/* Column 1: Quantity (Pcs) */}
-                                            <div>
-                                                <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
-                                                    <span className="font-semibold text-text-main">Quantity (Pcs) *</span>
-                                                    <span className="font-bold text-primary">
-                                                        Max: {item.remainingQuantity}
-                                                    </span>
+                                    return (
+                                        <div key={idx} className={`shadow-sm space-y-2.5 ${isOutOfStock ? 'bg-red-50/40 border border-red-200 rounded-xl p-4' : 'bg-card-bg border border-border rounded-lg p-3'}`}>
+                                            <div className="flex flex-wrap items-center justify-between gap-1.5 pb-1 border-b border-border/50">
+                                                <div className="font-bold text-xs text-text-main flex items-center gap-2">
+                                                    <span>{item.finishedGoodName}</span>
+                                                    {isOutOfStock ? (
+                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold bg-red-100 text-red-700 border border-red-200 tracking-wide">
+                                                            Out of Stock (0 Available)
+                                                        </span>
+                                                    ) : item.currentStock !== null && item.currentStock !== undefined ? (
+                                                        <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[10px] font-mono">
+                                                            Stock: {item.currentStock.toLocaleString('en-IN')} {item.uom || item.unit || 'Pcs'}
+                                                        </span>
+                                                    ) : null}
                                                 </div>
-                                                <input
-                                                    type="number"
-                                                    required
-                                                    disabled={!isTenantAdminUser}
-                                                    step="any"
-                                                    min="0"
-                                                    max={isTenantAdminUser ? undefined : (item.remainingQuantity || item.orderedQuantity)}
-                                                    value={item.dispatchedQuantity}
-                                                    onChange={(e) => handlePcsChange(idx, e.target.value)}
-                                                    placeholder="Enter Pcs"
-                                                    className={`w-full border border-border rounded p-2 text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary ${
-                                                        !isTenantAdminUser ? 'bg-border/20 cursor-not-allowed opacity-80' : 'bg-app-bg'
-                                                    }`}
-                                                />
-                                            </div>
-
-                                            {/* Column 2: Quantity (Kg) */}
-                                            <div>
-                                                <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
-                                                    <span className="font-semibold text-text-main">Quantity (Kg)</span>
-                                                    {item.avgBagWeightKg && item.isKgModified ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleResetKgToAuto(idx)}
-                                                            disabled={!isTenantAdminUser}
-                                                            className="text-[9px] text-primary hover:underline cursor-pointer"
-                                                            title="Reset to ratio-based auto suggestion"
-                                                        >
-                                                            Reset Auto
-                                                        </button>
-                                                    ) : item.avgBagWeightKg ? (
-                                                        <span className="text-[9px] text-primary/80 font-medium">Auto</span>
+                                                <div className="flex items-center gap-1.5">
+                                                    {item.avgBagWeightKg ? (
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 font-mono">
+                                                            Avg: {(item.avgBagWeightKg * 1000).toFixed(0)}g / bag
+                                                        </span>
                                                     ) : (
-                                                        <span className="text-[9px] text-text-muted">Manual</span>
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 font-mono">
+                                                            Avg: -
+                                                        </span>
+                                                    )}
+                                                    {item.pcsPerBale ? (
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 font-mono">
+                                                            Bale: ~{item.pcsPerBale} pcs/bale
+                                                        </span>
+                                                    ) : (
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 font-mono">
+                                                            Bales: -
+                                                        </span>
                                                     )}
                                                 </div>
-                                                <input
-                                                    type="number"
-                                                    disabled={!isTenantAdminUser}
-                                                    step="any"
-                                                    min="0"
-                                                    value={item.dispatchedKg}
-                                                    onChange={(e) => handleKgChange(idx, e.target.value)}
-                                                    placeholder={item.avgBagWeightKg ? 'Net weight Kg' : 'Enter Kg'}
-                                                    className={`w-full border border-border rounded p-2 text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary ${
-                                                        !isTenantAdminUser ? 'bg-border/20 cursor-not-allowed opacity-80' : 'bg-app-bg'
-                                                    }`}
-                                                />
                                             </div>
 
-                                            {/* Column 3: Baling (Bales) */}
-                                            <div>
-                                                <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
-                                                    <span className="font-semibold text-text-main">Baling (Bales)</span>
-                                                    {item.pcsPerBale && item.isBalesModified ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleResetBalesToAuto(idx)}
-                                                            disabled={!isTenantAdminUser}
-                                                            className="text-[9px] text-primary hover:underline cursor-pointer"
-                                                            title="Reset to ratio-based auto suggestion"
-                                                        >
-                                                            Reset Auto
-                                                        </button>
-                                                    ) : item.pcsPerBale ? (
-                                                        <span className="text-[9px] text-primary/80 font-medium">Auto</span>
-                                                    ) : (
-                                                        <span className="text-[9px] text-text-muted">Manual</span>
-                                                    )}
+                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                                                {/* Column 1: Quantity */}
+                                                <div>
+                                                    <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
+                                                        <span className="font-semibold text-text-main">
+                                                            Qty to dispatch ({item.uom || item.unit || 'Pcs'}) *
+                                                        </span>
+                                                        <span className={isOutOfStock ? 'text-xs font-semibold text-red-600' : 'text-xs font-semibold text-primary'}>
+                                                            Max: {maxAllowed.toLocaleString('en-IN')} {item.uom || item.unit || 'Pcs'}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <input
+                                                            type="number"
+                                                            required
+                                                            disabled={!isTenantAdminUser || isOutOfStock}
+                                                            step="any"
+                                                            min="0"
+                                                            max={isTenantAdminUser ? undefined : maxAllowed}
+                                                            value={item.dispatchedQuantity}
+                                                            onChange={(e) => handlePcsChange(idx, e.target.value)}
+                                                            placeholder={isOutOfStock ? 'Out of stock' : `Enter ${item.uom || item.unit || 'Pcs'}`}
+                                                            className={`w-full p-2 text-xs font-mono font-bold focus:outline-none ${
+                                                                isOutOfStock
+                                                                    ? 'bg-white border border-red-300 text-slate-900 rounded-lg focus:ring-2 focus:ring-red-500/20 focus:border-red-500 cursor-not-allowed'
+                                                                    : !isTenantAdminUser
+                                                                    ? 'bg-border/20 cursor-not-allowed opacity-80 border-border rounded'
+                                                                    : 'bg-app-bg border border-border rounded focus:border-primary'
+                                                            }`}
+                                                        />
+                                                        <span className="px-2 py-2 bg-border/40 border border-border rounded text-xs font-bold text-text-muted select-none shrink-0">
+                                                            {item.uom || item.unit || 'Pcs'}
+                                                        </span>
+                                                    </div>
                                                 </div>
-                                                <input
-                                                    type="number"
-                                                    disabled={!isTenantAdminUser}
-                                                    step="any"
-                                                    min="0"
-                                                    value={item.dispatchedBales}
-                                                    onChange={(e) => handleBalesChange(idx, e.target.value)}
-                                                    placeholder={item.pcsPerBale ? 'No. of bales' : 'Enter Bales'}
-                                                    className={`w-full border border-border rounded p-2 text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary ${
-                                                        !isTenantAdminUser ? 'bg-border/20 cursor-not-allowed opacity-80' : 'bg-app-bg'
-                                                    }`}
-                                                />
+
+                                                {/* Column 2: Quantity (Kg) */}
+                                                <div>
+                                                    <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
+                                                        <span className="font-semibold text-text-main">Quantity (Kg)</span>
+                                                        {item.avgBagWeightKg && item.isKgModified ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleResetKgToAuto(idx)}
+                                                                disabled={!isTenantAdminUser}
+                                                                className="text-[9px] text-primary hover:underline cursor-pointer"
+                                                                title="Reset to ratio-based auto suggestion"
+                                                            >
+                                                                Reset Auto
+                                                            </button>
+                                                        ) : item.avgBagWeightKg ? (
+                                                            <span className="text-xs font-semibold text-amber-600">Auto</span>
+                                                        ) : (
+                                                            <span className="text-[9px] text-text-muted">Manual</span>
+                                                        )}
+                                                    </div>
+                                                    <input
+                                                        type="number"
+                                                        disabled={!isTenantAdminUser}
+                                                        step="any"
+                                                        min="0"
+                                                        value={item.dispatchedKg}
+                                                        onChange={(e) => handleKgChange(idx, e.target.value)}
+                                                        placeholder={item.avgBagWeightKg ? 'Net weight Kg' : '-'}
+                                                        className={`w-full p-2 text-xs font-mono font-bold bg-slate-50 border border-slate-200 text-slate-700 rounded-lg focus:outline-none focus:border-primary ${
+                                                            !isTenantAdminUser ? 'cursor-not-allowed opacity-80' : ''
+                                                        }`}
+                                                    />
+                                                </div>
+
+                                                {/* Column 3: Baling (Bales) */}
+                                                <div>
+                                                    <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
+                                                        <span className="font-semibold text-text-main">Baling (Bales)</span>
+                                                        {item.pcsPerBale && item.isBalesModified ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleResetBalesToAuto(idx)}
+                                                                disabled={!isTenantAdminUser}
+                                                                className="text-[9px] text-primary hover:underline cursor-pointer"
+                                                                title="Reset to ratio-based auto suggestion"
+                                                            >
+                                                                Reset Auto
+                                                            </button>
+                                                        ) : item.pcsPerBale ? (
+                                                            <span className="text-xs font-semibold text-amber-600">Auto</span>
+                                                        ) : (
+                                                            <span className="text-[9px] text-text-muted">Manual</span>
+                                                        )}
+                                                    </div>
+                                                    <input
+                                                        type="number"
+                                                        disabled={!isTenantAdminUser}
+                                                        step="any"
+                                                        min="0"
+                                                        value={item.dispatchedBales}
+                                                        onChange={(e) => handleBalesChange(idx, e.target.value)}
+                                                        placeholder={item.pcsPerBale ? 'No. of bales' : '-'}
+                                                        className={`w-full p-2 text-xs font-mono font-bold bg-slate-50 border border-slate-200 text-slate-700 rounded-lg focus:outline-none focus:border-primary ${
+                                                            !isTenantAdminUser ? 'cursor-not-allowed opacity-80' : ''
+                                                        }`}
+                                                    />
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
 
                             <div className="pt-3 border-t border-border flex justify-end gap-3">
@@ -1486,14 +1547,15 @@ export default function DispatchPage() {
                                         setIsDrawerOpen(false);
                                         setEditDispatch(null);
                                     }}
-                                    className="px-4 py-2 bg-app-bg border border-border text-text-muted hover:text-text-main font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+                                    className="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="submit"
-                                    disabled={isSubmitting}
-                                    className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-sidebar-bg font-extrabold rounded-lg text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                    disabled={isSubmitting || dispatchItems.some((it) => it.currentStock !== null && it.currentStock !== undefined && it.currentStock <= 0)}
+                                    title={dispatchItems.some((it) => it.currentStock !== null && it.currentStock !== undefined && it.currentStock <= 0) ? 'Cannot dispatch: item is out of stock' : undefined}
+                                    className="px-5 py-2.5 text-sm font-bold text-slate-950 bg-amber-500 hover:bg-amber-600 rounded-lg shadow-sm transition-colors flex items-center gap-2 cursor-pointer disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed disabled:shadow-none"
                                 >
                                     <Truck size={16} />
                                     <span>{isSubmitting ? (editDispatch ? 'Updating Dispatch...' : 'Processing Dispatch...') : (editDispatch ? 'Save & Update Dispatch' : 'Confirm & Plan Dispatch')}</span>

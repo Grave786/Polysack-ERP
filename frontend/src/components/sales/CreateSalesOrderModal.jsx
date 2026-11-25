@@ -5,6 +5,123 @@ import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { getTodayLocalDateString, getFutureLocalDateString, formatToLocalDateString } from '../../utils/dateUtils';
 
+// Allowed Sales Order Units (Always lists all 4 units)
+const ALL_SO_UNITS = ['Pcs', 'Kg', 'Roll', 'Bags'];
+
+// Normalize any legacy/case-variant unit to the canonical option
+const normalizeSoUnit = (unitStr) => {
+    if (!unitStr) return 'Pcs';
+    const lower = String(unitStr).trim().toLowerCase();
+    if (['kg', 'kgs', 'kilogram', 'kilograms', 'kilo'].includes(lower)) return 'Kg';
+    if (['roll', 'rolls', 'rl'].includes(lower)) return 'Roll';
+    if (['bags', 'bag'].includes(lower)) return 'Bags';
+    if (['pcs', 'pc', 'pieces', 'piece', 'nos', 'no', 'units', 'unit'].includes(lower)) return 'Pcs';
+    return ALL_SO_UNITS.includes(unitStr) ? unitStr : 'Pcs';
+};
+
+// Helper to map finished good's own UOM to one of the 4 standard options
+const mapFgUomToOption = (selectedFg) => {
+    if (!selectedFg) return 'Pcs';
+    const fgUom = (selectedFg.uom && typeof selectedFg.uom === 'object' && (selectedFg.uom.symbol || selectedFg.uom.name || selectedFg.uom.abbreviation))
+        ? (selectedFg.uom.symbol || selectedFg.uom.name || selectedFg.uom.abbreviation)
+        : (typeof selectedFg.uom === 'string' && !/^[0-9a-fA-F]{24}$/.test(selectedFg.uom) ? selectedFg.uom : (selectedFg.unit || 'Pcs'));
+    return normalizeSoUnit(fgUom);
+};
+
+// Helper to resolve physical empty bag weight in grams
+const resolveEmptyBagWeightGms = (fg) => {
+    if (!fg) return null;
+    const directWeight = Number(fg.bagWeightGms || fg.tareWeightGram || 0);
+    if (directWeight >= 15 && directWeight <= 500) {
+        return directWeight;
+    }
+    const gsm = Number(fg.fabricGSM || fg.gsm || 0);
+    const width = Number(fg.dimensions?.width || 0);
+    const length = Number(fg.dimensions?.length || 0);
+    const dimUnit = String(fg.dimensionUnit || fg.dimensions?.unit || 'cm').toLowerCase();
+
+    if (gsm > 0 && width > 0 && length > 0) {
+        const widthCm = dimUnit === 'inch' || dimUnit === 'inches' ? width * 2.54 : width;
+        const lengthCm = dimUnit === 'inch' || dimUnit === 'inches' ? length * 2.54 : length;
+        const computedGrams = Number(((2 * widthCm * lengthCm * gsm) / 10000).toFixed(2));
+        if (computedGrams >= 15 && computedGrams <= 500) {
+            return computedGrams;
+        }
+    }
+    return null;
+};
+
+// Helper to evaluate unit conversion feedback (hint or amber warning)
+const getUnitConversionFeedback = (selectedFg, lineUnit, lineQuantity) => {
+    if (!selectedFg) return null;
+    const fgUom = mapFgUomToOption(selectedFg);
+    const selectedUnit = normalizeSoUnit(lineUnit);
+
+    const isCount = (u) => ['Pcs', 'Bags'].includes(u);
+    const isWeight = (u) => u === 'Kg';
+
+    // If matching unit (or both count units), no conversion note needed
+    if (selectedUnit === fgUom || (isCount(selectedUnit) && isCount(fgUom))) {
+        return null;
+    }
+
+    const qty = Number(lineQuantity) || 0;
+    const bagWeightGms = resolveEmptyBagWeightGms(selectedFg);
+    const capacityKg = Number(selectedFg.bagCapacity || 0);
+
+    // From Weight (Kg) to Count (Pcs/Bags)
+    if (isWeight(selectedUnit) && isCount(fgUom)) {
+        if (bagWeightGms && bagWeightGms > 0) {
+            const bagWeightKg = bagWeightGms / 1000;
+            const approxCount = qty > 0 ? Math.round(qty / bagWeightKg) : null;
+            return {
+                type: 'hint',
+                message: approxCount
+                    ? `approx. ${approxCount.toLocaleString('en-IN')} ${fgUom} (${bagWeightGms}g / bag)`
+                    : `Convertible to ${fgUom} (~${bagWeightGms}g / bag)`
+            };
+        }
+        if (capacityKg > 0) {
+            const approxCount = qty > 0 ? Math.round(qty / capacityKg) : null;
+            return {
+                type: 'hint',
+                message: approxCount
+                    ? `approx. ${approxCount.toLocaleString('en-IN')} ${fgUom} (${capacityKg} Kg capacity)`
+                    : `Convertible to ${fgUom} (~${capacityKg} Kg / bag)`
+            };
+        }
+    }
+
+    // From Count (Pcs/Bags) to Weight (Kg)
+    if (isCount(selectedUnit) && isWeight(fgUom)) {
+        if (bagWeightGms && bagWeightGms > 0) {
+            const bagWeightKg = bagWeightGms / 1000;
+            const approxKg = qty > 0 ? Number((qty * bagWeightKg).toFixed(2)) : null;
+            return {
+                type: 'hint',
+                message: approxKg
+                    ? `approx. ${approxKg.toLocaleString('en-IN')} Kg (${bagWeightGms}g / bag)`
+                    : `Convertible to Kg (~${bagWeightGms}g / bag)`
+            };
+        }
+        if (capacityKg > 0) {
+            const approxKg = qty > 0 ? Number((qty * capacityKg).toFixed(2)) : null;
+            return {
+                type: 'hint',
+                message: approxKg
+                    ? `approx. ${approxKg.toLocaleString('en-IN')} Kg (${capacityKg} Kg capacity)`
+                    : `Convertible to Kg (~${capacityKg} Kg / bag)`
+            };
+        }
+    }
+
+    // No conversion exists for this product and unit
+    return {
+        type: 'warning',
+        message: 'No conversion for this product, dispatch must be in this same unit'
+    };
+};
+
 export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, initialData = null }) {
     const isEditMode = Boolean(initialData && initialData._id);
 
@@ -97,7 +214,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                         return {
                             finishedGood: fgId || '',
                             quantity: qty > 0 ? String(qty) : '',
-                            unit: it.unit || 'Pcs',
+                            unit: normalizeSoUnit(it.unit),
                             ratePerUnit: rate >= 0 ? String(rate) : '',
                             subtotal: qty * rate
                         };
@@ -133,6 +250,16 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
         const updated = [...items];
         updated[index][field] = value;
 
+        if (field === 'finishedGood') {
+            const selectedFG = finishedGoods.find((f) => String(f._id) === String(value));
+            if (selectedFG) {
+                updated[index].unit = mapFgUomToOption(selectedFG);
+                if (!updated[index].ratePerUnit && selectedFG.pricePerBag) {
+                    updated[index].ratePerUnit = String(selectedFG.pricePerBag);
+                }
+            }
+        }
+
         if (field === 'quantity' || field === 'ratePerUnit') {
             const q = Number(field === 'quantity' ? value : updated[index].quantity) || 0;
             const r = Number(field === 'ratePerUnit' ? value : updated[index].ratePerUnit) || 0;
@@ -143,7 +270,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
     };
 
     const handleAddItem = () => {
-        setItems([...items, { finishedGood: '', quantity: '', ratePerUnit: '', subtotal: 0 }]);
+        setItems([...items, { finishedGood: '', quantity: '', unit: 'Pcs', ratePerUnit: '', subtotal: 0 }]);
     };
 
     const handleRemoveItem = (index) => {
@@ -161,7 +288,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
     const quantityTotalsByUnit = items.reduce((acc, it) => {
         const qty = Number(it.quantity) || 0;
         if (qty > 0) {
-            const unit = it.unit || 'Pcs';
+            const unit = normalizeSoUnit(it.unit);
             acc[unit] = (acc[unit] || 0) + qty;
         }
         return acc;
@@ -170,7 +297,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
     const formattedTotalQuantity = Object.entries(quantityTotalsByUnit).length > 0
         ? Object.entries(quantityTotalsByUnit)
             .map(([unit, qty]) => `${qty % 1 === 0 ? qty.toLocaleString('en-IN') : Number(qty.toFixed(3)).toLocaleString('en-IN')} ${unit}`)
-            .join(', ')
+            .join(' + ')
         : '0 Pcs';
 
     const subtotal = items.reduce((acc, it) => acc + (Number(it.subtotal) || 0), 0);
@@ -222,7 +349,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                 items: items.map((it) => ({
                     finishedGood: it.finishedGood,
                     quantity: Number(it.quantity),
-                    unit: it.unit || 'Pcs',
+                    unit: normalizeSoUnit(it.unit),
                     ratePerUnit: Number(it.ratePerUnit)
                 }))
             };
@@ -495,11 +622,17 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                                 className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
                                             >
                                                 <option value="" disabled>-- Select Bag Product --</option>
-                                                {finishedGoods.map((fg) => (
-                                                    <option key={fg._id} value={fg._id}>
-                                                        {fg.code || 'FG'} - {fg.name} (Stock: {fg.currentStock || 0})
-                                                    </option>
-                                                ))}
+                                                {finishedGoods.map((fg) => {
+                                                    const fgUom = (fg.uom && typeof fg.uom === 'object' && (fg.uom.symbol || fg.uom.name || fg.uom.abbreviation))
+                                                        ? (fg.uom.symbol || fg.uom.name || fg.uom.abbreviation)
+                                                        : (typeof fg.uom === 'string' && !/^[0-9a-fA-F]{24}$/.test(fg.uom) ? fg.uom : (fg.unit || 'Pcs'));
+                                                    const stockVal = Number(fg.currentStock !== undefined && fg.currentStock !== null ? fg.currentStock : 0);
+                                                    return (
+                                                        <option key={fg._id} value={fg._id}>
+                                                            {fg.code || 'FG'} - {fg.name} (Stock: {stockVal.toLocaleString('en-IN')} {fgUom})
+                                                        </option>
+                                                    );
+                                                })}
                                             </select>
                                         </div>
 
@@ -519,21 +652,20 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                                     className="w-full min-w-0 border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
                                                 />
                                                 <select
-                                                    value={item.unit || 'Pcs'}
+                                                    value={normalizeSoUnit(item.unit)}
                                                     onChange={(e) => handleItemChange(index, 'unit', e.target.value)}
                                                     className="border border-border rounded p-1.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer shrink-0"
                                                 >
-                                                    <option value="Pcs">Pcs</option>
-                                                    <option value="Kg">Kg</option>
-                                                    <option value="Roll">Roll</option>
-                                                    <option value="Bags">Bags</option>
+                                                    {ALL_SO_UNITS.map((u) => (
+                                                        <option key={u} value={u}>{u}</option>
+                                                    ))}
                                                 </select>
                                             </div>
                                         </div>
 
                                         <div className="col-span-3 sm:col-span-2">
                                             <label className="block text-[10px] font-bold uppercase tracking-wider text-text-muted mb-0.5">
-                                                Rate (₹/Unit) *
+                                                Rate per {item.unit === 'Bags' ? 'Bag' : (item.unit || 'Unit')} *
                                             </label>
                                             <input
                                                 type="number"
@@ -565,6 +697,26 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                                 </button>
                                             )}
                                         </div>
+
+                                        {/* Unit Conversion Hint or Warning */}
+                                        {selectedFg && (() => {
+                                            const feedback = getUnitConversionFeedback(selectedFg, item.unit, item.quantity);
+                                            if (!feedback) return null;
+                                            if (feedback.type === 'hint') {
+                                                return (
+                                                    <div className="col-span-12 px-1 pt-0.5 text-[11px] text-primary font-medium flex items-center gap-1.5">
+                                                        <span className="font-bold">💡</span>
+                                                        <span>{feedback.message}</span>
+                                                    </div>
+                                                );
+                                            }
+                                            return (
+                                                <div className="col-span-12 px-2 py-1 bg-amber-50 border border-amber-200/80 rounded text-[11px] text-amber-800 font-medium flex items-center gap-1.5 mt-0.5">
+                                                    <AlertCircle size={13} className="text-amber-600 shrink-0" />
+                                                    <span>{feedback.message}</span>
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
                                 );
                             })}

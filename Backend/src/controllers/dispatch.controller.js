@@ -7,6 +7,127 @@ const { executeStockTransactionCore } = require('./stockTransaction.controller')
 const { isTenantAdmin } = require('../middlewares/rbac.middleware');
 
 /**
+ * Helper to resolve the real empty bag weight in grams (typically 30g - 150g for standard sacks).
+ * Priority:
+ * 1. Saved bag weight on FinishedGood (bagWeightGms or tareWeightGram) if realistic (15g to 500g).
+ * 2. Computed from bag dimensions and fabric GSM:
+ *    Tubular sack has 2 layers (front + back):
+ *    Weight (grams) = 2 * (Width_cm * Length_cm * GSM) / 10000
+ *    (Valid if between 15g and 500g)
+ * 3. Default active BOM raw materials quantity sum if clearly per-bag material weight (15g - 500g, or 0.015kg - 0.5kg)
+ * 4. Otherwise returns null.
+ */
+const resolveEmptyBagWeightGms = (fgDoc, bomDoc = null) => {
+    if (!fgDoc) return null;
+
+    // 1. Saved finished good weight (bagWeightGms or tareWeightGram)
+    const savedWeight = Number(fgDoc.bagWeightGms || fgDoc.tareWeightGram || 0);
+    if (savedWeight >= 15 && savedWeight <= 500) {
+        return savedWeight;
+    }
+
+    // 2. Computed from dimensions and fabric GSM
+    const gsm = Number(fgDoc.fabricGSM || fgDoc.gsm || 0);
+    const width = Number(fgDoc.dimensions?.width || 0);
+    const length = Number(fgDoc.dimensions?.length || 0);
+    const dimUnit = String(fgDoc.dimensionUnit || fgDoc.dimensions?.unit || 'cm').toLowerCase();
+
+    if (gsm > 0 && width > 0 && length > 0) {
+        const widthCm = dimUnit === 'inch' || dimUnit === 'inches' ? width * 2.54 : width;
+        const lengthCm = dimUnit === 'inch' || dimUnit === 'inches' ? length * 2.54 : length;
+        // Tubular woven sack has 2 sides (front and back)
+        const computedGrams = Number(((2 * widthCm * lengthCm * gsm) / 10000).toFixed(2));
+        if (computedGrams >= 15 && computedGrams <= 500) {
+            return computedGrams;
+        }
+    }
+
+    // 3. BOM fallback if provided
+    if (bomDoc && Array.isArray(bomDoc.materials || bomDoc.rawMaterials)) {
+        const mats = bomDoc.materials || bomDoc.rawMaterials;
+        let totalBomWeight = 0;
+        for (const m of mats) {
+            totalBomWeight += Number(m.quantity || m.quantityPerUnit || 0);
+        }
+        // If in kg (e.g. 0.0612 kg -> 61.2g)
+        if (totalBomWeight >= 0.015 && totalBomWeight <= 0.5) {
+            return Number((totalBomWeight * 1000).toFixed(2));
+        }
+        // If in grams (e.g. 61.2g)
+        if (totalBomWeight >= 15 && totalBomWeight <= 500) {
+            return Number(totalBomWeight.toFixed(2));
+        }
+    }
+
+    return null;
+};
+
+/**
+ * Helper to convert quantity between SO line UOM and Finished Good stock UOM
+ * Blocks incompatible conversions with clear descriptive errors.
+ */
+const convertUomQuantity = (qty, fromUom, toUom, fgDoc) => {
+    const numQty = Number(qty);
+    if (isNaN(numQty) || numQty <= 0) {
+        return { convertedQty: 0, matched: true };
+    }
+
+    const from = String(fromUom || 'Pcs').trim().toLowerCase();
+    const to = String(toUom || 'Pcs').trim().toLowerCase();
+
+    const isCountUnit = (u) => ['pcs', 'pc', 'pieces', 'piece', 'bags', 'bag', 'nos', 'no', 'units', 'unit'].includes(u);
+    const isWeightUnit = (u) => ['kg', 'kgs', 'kilogram', 'kilograms', 'kilo'].includes(u);
+
+    // Case 1: Exact match or count-to-count or weight-to-weight
+    if (from === to || (isCountUnit(from) && isCountUnit(to)) || (isWeightUnit(from) && isWeightUnit(to))) {
+        return { convertedQty: numQty, matched: true };
+    }
+
+    // Case 2: Weight to Count (e.g. SO in Kg, FG stock in Pcs/Bags)
+    if (isWeightUnit(from) && isCountUnit(to)) {
+        const bagWeightGms = resolveEmptyBagWeightGms(fgDoc);
+        if (bagWeightGms > 0) {
+            const bagWeightKg = bagWeightGms / 1000;
+            return {
+                convertedQty: Number((numQty / bagWeightKg).toFixed(4)),
+                matched: true,
+                factorDescription: `${bagWeightGms}g/bag`
+            };
+        }
+        return {
+            convertedQty: null,
+            matched: false,
+            error: `UOM mismatch: cannot convert ${fromUom} to ${toUom} for '${fgDoc?.name || 'product'}' (bag weight is not configured or derivable in Finished Good master).`
+        };
+    }
+
+    // Case 3: Count to Weight (e.g. SO in Pcs/Bags, FG stock in Kg)
+    if (isCountUnit(from) && isWeightUnit(to)) {
+        const bagWeightGms = resolveEmptyBagWeightGms(fgDoc);
+        if (bagWeightGms > 0) {
+            const bagWeightKg = bagWeightGms / 1000;
+            return {
+                convertedQty: Number((numQty * bagWeightKg).toFixed(4)),
+                matched: true,
+                factorDescription: `${bagWeightGms}g/bag`
+            };
+        }
+        return {
+            convertedQty: null,
+            matched: false,
+            error: `UOM mismatch: cannot convert ${fromUom} to ${toUom} for '${fgDoc?.name || 'product'}' (bag weight is not configured or derivable in Finished Good master).`
+        };
+    }
+
+    // Case 4: Any other non-convertible UOM
+    return {
+        convertedQty: null,
+        matched: false,
+        error: `UOM mismatch: cannot convert ${fromUom} to ${toUom} for '${fgDoc?.name || 'product'}'.`
+    };
+};
+
+/**
  * Helper function to auto-generate unique Dispatch number per tenant & year
  */
 const generateDispatchNumber = async (tenantId) => {
@@ -49,16 +170,26 @@ const getDispatchableSources = async (req, res) => {
         const Invoice = require('../models/invoice.model');
         const WorkOrder = require('../models/workOrder.model');
         const ProductionLog = require('../models/productionLog.model');
+        const BOM = require('../models/bom.model');
+        const Customer = require('../models/customer.model');
 
         // 1. Fetch active Sales Orders in CONFIRMED, READY_FOR_DISPATCH, or PARTIALLY_DISPATCHED
         const salesOrders = await SalesOrder.find({
             tenant: tenantId,
             status: { $in: ['CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED'] }
         })
-            .populate('customer', 'companyName code contactPerson phone city state address')
-            .populate('items.finishedGood', 'name code uom currentStock bagWeightGms tareWeightGram')
+            .populate('customer', 'companyName name code contactPerson phone city state address gstin')
+            .populate({
+                path: 'sourceEnquiry',
+                select: 'customer customerRef newCustomerDetails nslNumber',
+                populate: { path: 'customer customerRef', select: 'companyName name code contactPerson phone city state address' }
+            })
+            .populate({
+                path: 'items.finishedGood',
+                select: 'name code uom currentStock bagWeightGms tareWeightGram dimensions dimensionUnit fabricGSM bagShape bagCapacity pcsPerBale balingQuantityPcs',
+                populate: { path: 'uom', select: 'name symbol abbreviation' }
+            })
             .sort({ createdAt: -1 });
-
 
         // 2. Fetch POS Invoices (where salesOrder is null/undefined)
         const posInvoices = await Invoice.find({
@@ -66,9 +197,31 @@ const getDispatchableSources = async (req, res) => {
             salesOrder: null,
             isActive: true
         })
-            .populate('customer', 'companyName code contactPerson phone city state address')
-            .populate('items.finishedGood', 'name code uom currentStock bagWeightGms tareWeightGram')
+            .populate('customer', 'companyName name code contactPerson phone city state address gstin')
+            .populate({
+                path: 'items.finishedGood',
+                select: 'name code uom currentStock bagWeightGms tareWeightGram dimensions dimensionUnit fabricGSM bagShape bagCapacity pcsPerBale balingQuantityPcs',
+                populate: { path: 'uom', select: 'name symbol abbreviation' }
+            })
             .sort({ createdAt: -1 });
+
+        // Lookup any unpopulated or orphan customer references to guarantee real customer names
+        const unpopulatedCustomerIds = [];
+        for (const so of salesOrders) {
+            const cId = so.customer?._id || so.customer;
+            if (cId && (!so.customer || typeof so.customer !== 'object' || !so.customer.companyName)) {
+                if (mongoose.isValidObjectId(cId)) {
+                    unpopulatedCustomerIds.push(cId);
+                }
+            }
+        }
+        const fallbackCustomerMap = new Map();
+        if (unpopulatedCustomerIds.length > 0) {
+            const foundCustomers = await Customer.find({ _id: { $in: unpopulatedCustomerIds } })
+                .select('companyName name code contactPerson phone city state address gstin')
+                .lean();
+            foundCustomers.forEach((c) => fallbackCustomerMap.set(String(c._id), c));
+        }
 
         const posInvoiceIds = posInvoices.map((inv) => inv._id);
         const existingPosDispatches = await Dispatch.find({
@@ -90,7 +243,7 @@ const getDispatchableSources = async (req, res) => {
             }
         }
 
-        // 3. Collect finished goods and query WorkOrder / ProductionLog for Baling & Packing specs
+        // 3. Collect finished goods and query WorkOrder / BOM for Baling & Weight specs
         const allFgIds = new Set();
         for (const so of salesOrders) {
             for (const it of so.items || []) {
@@ -107,41 +260,33 @@ const getDispatchableSources = async (req, res) => {
 
         const fgIdArray = Array.from(allFgIds);
         let workOrders = [];
-        let balingLogs = [];
+        let bomMap = new Map();
 
         if (fgIdArray.length > 0) {
-            workOrders = await WorkOrder.find({
-                tenant: tenantId,
-                finishedGood: { $in: fgIdArray }
-            })
-                .select('_id customer finishedGood stages jobOrderDetails')
-                .sort({ createdAt: -1 })
-                .lean();
-
-            const woIds = workOrders.map((w) => w._id);
-            if (woIds.length > 0) {
-                balingLogs = await ProductionLog.find({
+            const [woDocs, bomDocs] = await Promise.all([
+                WorkOrder.find({
                     tenant: tenantId,
-                    workOrder: { $in: woIds },
-                    $or: [
-                        { stage: 'BALING_PACKING' },
-                        { stageName: 'BALING_PACKING' },
-                        { stageSequence: 8 }
-                    ]
+                    finishedGood: { $in: fgIdArray }
                 })
-                    .select('workOrder quantity netWeight')
-                    .lean();
-            }
+                    .select('_id customer finishedGood stages jobOrderDetails')
+                    .sort({ createdAt: -1 })
+                    .lean(),
+                BOM.find({
+                    tenant: tenantId,
+                    finishedGood: { $in: fgIdArray },
+                    isActive: true
+                })
+                    .select('finishedGood materials rawMaterials totalWeight')
+                    .lean()
+            ]);
+
+            workOrders = woDocs || [];
+            (bomDocs || []).forEach((b) => {
+                if (b.finishedGood) bomMap.set(String(b.finishedGood), b);
+            });
         }
 
-        const logsByWoId = new Map();
-        for (const log of balingLogs) {
-            const wIdStr = String(log.workOrder);
-            if (!logsByWoId.has(wIdStr)) logsByWoId.set(wIdStr, []);
-            logsByWoId.get(wIdStr).push(log);
-        }
-
-        const getBalingSpec = (fgId, customerId, fgDoc) => {
+        const getBalingSpec = (fgId, customerId, fgDoc, activeBom = null) => {
             const fgStr = String(fgId);
             const custStr = customerId ? String(customerId) : null;
 
@@ -153,68 +298,35 @@ const getDispatchableSources = async (req, res) => {
                 targetWos = matchingWos;
             }
 
+            // Step 1: Real Empty Bag Weight in Kg (Valid range: 15g to 500g -> 0.015kg to 0.500kg)
             let avgBagWeightKg = null;
+            const weightGms = resolveEmptyBagWeightGms(fgDoc, activeBom);
+            if (weightGms && weightGms >= 15 && weightGms <= 500) {
+                avgBagWeightKg = Number((weightGms / 1000).toFixed(4));
+            }
+
+            // Step 2: Pcs per Bale must come from finished good or workorder baling specification
             let pcsPerBale = null;
-
-            // Step A: Baling & Packing ProductionLog entries
-            let totalNetWeight = 0;
-            let totalPcsForWeight = 0;
-            let totalBalePcs = 0;
-            let baleCount = 0;
-
-            for (const wo of targetWos) {
-                const woLogs = logsByWoId.get(String(wo._id)) || [];
-                for (const log of woLogs) {
-                    const qty = Number(log.quantity || 0);
-                    const nw = Number(log.netWeight || 0);
-                    if (qty > 0) {
-                        totalBalePcs += qty;
-                        baleCount++;
-                        if (nw > 0) {
-                            totalNetWeight += nw;
-                            totalPcsForWeight += qty;
-                        }
-                    }
-                }
+            if (fgDoc?.pcsPerBale > 0 && fgDoc.pcsPerBale <= 5000) {
+                pcsPerBale = fgDoc.pcsPerBale;
+            } else if (fgDoc?.balingQuantityPcs > 0 && fgDoc.balingQuantityPcs <= 5000) {
+                pcsPerBale = fgDoc.balingQuantityPcs;
             }
 
-            if (totalNetWeight > 0 && totalPcsForWeight > 0) {
-                avgBagWeightKg = Number((totalNetWeight / totalPcsForWeight).toFixed(4));
-            }
-            if (baleCount > 0) {
-                pcsPerBale = Math.round(totalBalePcs / baleCount);
-            }
-
-            // Step B: WorkOrder stage specification fallback
-            if (!avgBagWeightKg || !pcsPerBale) {
+            if (!pcsPerBale) {
                 for (const wo of targetWos) {
                     const balingStage = (wo.stages || []).find(
                         (s) => s.stageName === 'BALING_PACKING' || s.sequence === 8
                     );
-                    if (balingStage) {
-                        if (!pcsPerBale && balingStage.balingQuantityPcs > 0) {
-                            pcsPerBale = balingStage.balingQuantityPcs;
-                        }
-                        if (
-                            !avgBagWeightKg &&
-                            balingStage.balingQuantityPcs > 0 &&
-                            balingStage.balingTotalWeightKg > 0
-                        ) {
-                            avgBagWeightKg = Number(
-                                (balingStage.balingTotalWeightKg / balingStage.balingQuantityPcs).toFixed(4)
-                            );
-                        }
+                    if (balingStage?.balingQuantityPcs >= 20 && balingStage.balingQuantityPcs <= 5000) {
+                        pcsPerBale = balingStage.balingQuantityPcs;
+                        break;
                     }
-                    if (!avgBagWeightKg && wo.jobOrderDetails?.bagWeightGms > 0) {
-                        avgBagWeightKg = Number((wo.jobOrderDetails.bagWeightGms / 1000).toFixed(4));
+                    if (wo.jobOrderDetails?.balingQuantityPcs >= 20 && wo.jobOrderDetails.balingQuantityPcs <= 5000) {
+                        pcsPerBale = wo.jobOrderDetails.balingQuantityPcs;
+                        break;
                     }
-                    if (avgBagWeightKg && pcsPerBale) break;
                 }
-            }
-
-            // Step C: FinishedGood specification fallback
-            if (!avgBagWeightKg && fgDoc?.bagWeightGms > 0) {
-                avgBagWeightKg = Number((fgDoc.bagWeightGms / 1000).toFixed(4));
             }
 
             return {
@@ -231,16 +343,22 @@ const getDispatchableSources = async (req, res) => {
                 const orderedQty = Number(it.quantity || 0);
                 const alreadyDispatched = Number(it.dispatchedQuantity || 0);
                 const remainingQty = Math.max(0, orderedQty - alreadyDispatched);
-                const balingSpec = getBalingSpec(fgId, so.customer?._id || so.customer, fg);
+                const activeBom = bomMap.get(String(fgId));
+                const balingSpec = getBalingSpec(fgId, so.customer?._id || so.customer, fg, activeBom);
+
+                const fgUom = (fg.uom && typeof fg.uom === 'object') ? (fg.uom.symbol || fg.uom.name) : (fg.uom || 'Pcs');
+                const soLineUom = it.unit || fgUom || 'Pcs';
 
                 return {
                     finishedGood: fgId,
                     name: fg.name || 'Finished Goods Bag',
                     code: fg.code || '',
-                    uom: fg.uom?.name || 'BAGS',
+                    uom: soLineUom,
+                    unit: soLineUom,
                     orderedQuantity: orderedQty,
                     alreadyDispatched,
                     remainingQuantity: remainingQty,
+                    currentStock: Number(fg.currentStock !== undefined && fg.currentStock !== null ? fg.currentStock : 0),
                     avgBagWeightKg: balingSpec.avgBagWeightKg,
                     pcsPerBale: balingSpec.pcsPerBale
                 };
@@ -250,18 +368,43 @@ const getDispatchableSources = async (req, res) => {
             const totalOrdered = items.reduce((acc, it) => acc + it.orderedQuantity, 0);
 
             if (totalRemaining > 0) {
-                const custName = so.customer?.companyName || so.customer?.name || 'Customer';
+                const cId = String(so.customer?._id || so.customer || '');
+                const fallbackCust = fallbackCustomerMap.get(cId);
+                const se = so.sourceEnquiry;
+                const seCust = se?.customer || se?.customerRef;
+                const cust = (so.customer && typeof so.customer === 'object' && (so.customer.companyName || so.customer.name))
+                    ? so.customer
+                    : (fallbackCust || seCust || null);
+
+                const custName =
+                    cust?.companyName ||
+                    cust?.name ||
+                    se?.newCustomerDetails?.company ||
+                    se?.newCustomerDetails?.name ||
+                    so.customerName ||
+                    'Customer';
+
+                const remainingByUnit = items.reduce((acc, it) => {
+                    if (it.remainingQuantity > 0) {
+                        acc[it.uom] = (acc[it.uom] || 0) + it.remainingQuantity;
+                    }
+                    return acc;
+                }, {});
+                const remainingLabelText = Object.entries(remainingByUnit)
+                    .map(([u, q]) => `${q % 1 === 0 ? q.toLocaleString('en-IN') : Number(q.toFixed(2)).toLocaleString('en-IN')} ${u}`)
+                    .join(' + ') || `${totalRemaining.toLocaleString()} Pcs`;
+
                 dispatchableSOList.push({
                     sourceType: 'SALES_ORDER',
                     id: so._id,
                     salesOrderId: so._id,
                     invoiceId: null,
                     referenceNumber: so.soNumber,
-                    label: `${so.soNumber} — ${custName} (Sales Order, ${totalRemaining.toLocaleString()} Bags remaining)`,
+                    label: `${so.soNumber} — ${custName} (Sales Order, ${remainingLabelText} remaining)`,
                     customerName: custName,
-                    customerId: so.customer?._id || null,
-                    customerPhone: so.customer?.phone || '',
-                    deliveryAddress: so.customer?.city ? `${so.customer.city}, ${so.customer.state || ''}` : '',
+                    customerId: cust?._id || so.customer?._id || null,
+                    customerPhone: cust?.phone || so.customer?.phone || '',
+                    deliveryAddress: cust?.city ? `${cust.city}, ${cust.state || ''}` : (so.customer?.city ? `${so.customer.city}, ${so.customer.state || ''}` : ''),
                     totalQuantity: totalOrdered,
                     remainingQuantity: totalRemaining,
                     items
@@ -280,13 +423,18 @@ const getDispatchableSources = async (req, res) => {
                 const orderedQty = Number(it.quantity || 0);
                 const alreadyDispatched = itemDispatchedMap[String(fgId)] || 0;
                 const remainingQty = Math.max(0, orderedQty - alreadyDispatched);
-                const balingSpec = getBalingSpec(fgId, inv.customer?._id || inv.customer, fg);
+                const activeBom = bomMap.get(String(fgId));
+                const balingSpec = getBalingSpec(fgId, inv.customer?._id || inv.customer, fg, activeBom);
+
+                const fgUom = (fg.uom && typeof fg.uom === 'object') ? (fg.uom.symbol || fg.uom.name) : (fg.uom || 'Pcs');
+                const posLineUom = it.unit || fgUom || 'Pcs';
 
                 return {
                     finishedGood: fgId,
                     name: fg.name || it.description || 'Finished Goods Bag',
                     code: fg.code || '',
-                    uom: fg.uom?.name || 'BAGS',
+                    uom: posLineUom,
+                    unit: posLineUom,
                     orderedQuantity: orderedQty,
                     alreadyDispatched,
                     remainingQuantity: remainingQty,
@@ -299,14 +447,24 @@ const getDispatchableSources = async (req, res) => {
             const totalOrdered = items.reduce((acc, it) => acc + it.orderedQuantity, 0);
 
             if (totalRemaining > 0) {
-                const custName = inv.customer?.companyName || inv.walkInCustomer?.name || 'Counter Retail Customer';
+                const custName = inv.customer?.companyName || inv.customer?.name || inv.walkInCustomer?.name || 'Counter Retail Customer';
+                const remainingByUnit = items.reduce((acc, it) => {
+                    if (it.remainingQuantity > 0) {
+                        acc[it.uom] = (acc[it.uom] || 0) + it.remainingQuantity;
+                    }
+                    return acc;
+                }, {});
+                const remainingLabelText = Object.entries(remainingByUnit)
+                    .map(([u, q]) => `${q % 1 === 0 ? q.toLocaleString('en-IN') : Number(q.toFixed(2)).toLocaleString('en-IN')} ${u}`)
+                    .join(' + ') || `${totalRemaining.toLocaleString()} Pcs`;
+
                 dispatchablePOSList.push({
                     sourceType: 'POS_INVOICE',
                     id: inv._id,
                     salesOrderId: null,
                     invoiceId: inv._id,
                     referenceNumber: inv.invoiceNumber,
-                    label: `${inv.invoiceNumber} — ${custName} (POS Sale, ${totalRemaining.toLocaleString()} Bags remaining)`,
+                    label: `${inv.invoiceNumber} — ${custName} (POS Sale, ${remainingLabelText} remaining)`,
                     customerName: custName,
                     customerId: inv.customer?._id || null,
                     customerPhone: inv.customer?.phone || inv.walkInCustomer?.phone || '',
@@ -443,17 +601,19 @@ const createDispatch = async (req, res) => {
 
                 const alreadyDispatched = itemDispatchedMap[fgIdStr] || 0;
                 const remainingAllowed = invItem.quantity - alreadyDispatched;
+                const posLineUom = invItem.unit || 'Pcs';
 
                 if (!isUserAdmin && numQty > remainingAllowed + 0.0001) {
                     return res.status(400).json({
                         success: false,
-                        message: `Cannot dispatch ${numQty} units of item. Invoiced: ${invItem.quantity}, Already dispatched: ${alreadyDispatched}, Remaining allowed: ${remainingAllowed}.`
+                        message: `Cannot dispatch ${numQty} ${posLineUom} of item. Invoiced: ${invItem.quantity} ${posLineUom}, Already dispatched: ${alreadyDispatched} ${posLineUom}, Remaining allowed: ${remainingAllowed} ${posLineUom}.`
                     });
                 }
 
                 cleanedItems.push({
                     finishedGood: dispatchItem.finishedGood,
                     dispatchedQuantity: numQty,
+                    unit: posLineUom,
                     dispatchedKg: dispatchItem.dispatchedKg !== undefined && dispatchItem.dispatchedKg !== null && dispatchItem.dispatchedKg !== '' && !isNaN(Number(dispatchItem.dispatchedKg))
                         ? Number(dispatchItem.dispatchedKg)
                         : undefined,
@@ -574,8 +734,11 @@ const createDispatch = async (req, res) => {
                 });
             }
 
-            const currentDispatched = soItem.dispatchedQuantity || 0;
-            const remainingAllowed = soItem.quantity - currentDispatched;
+            // SO line item UOM is source of truth
+            const soLineUom = soItem.unit || 'Pcs';
+
+            const currentDispatched = Number(soItem.dispatchedQuantity || 0);
+            const remainingAllowed = Number(soItem.quantity || 0) - currentDispatched;
 
             if (!isUserAdmin && numQty > remainingAllowed + 0.0001) {
                 if (useTransaction && session) {
@@ -584,12 +747,12 @@ const createDispatch = async (req, res) => {
                 }
                 return res.status(400).json({
                     success: false,
-                    message: `Cannot dispatch ${numQty} units of item. Ordered: ${soItem.quantity}, Already dispatched: ${currentDispatched}, Remaining allowed: ${remainingAllowed}.`
+                    message: `Cannot dispatch ${numQty} ${soLineUom} of item. Ordered: ${soItem.quantity} ${soLineUom}, Already dispatched: ${currentDispatched} ${soLineUom}, Remaining allowed: ${remainingAllowed} ${soLineUom}.`
                 });
             }
 
             // Verify physical sellable currentStock on FinishedGood
-            const fgQuery = FinishedGood.findOne({ _id: dispatchItem.finishedGood, tenant: tenantId });
+            const fgQuery = FinishedGood.findOne({ _id: dispatchItem.finishedGood, tenant: tenantId }).populate('uom');
             if (useTransaction && session) fgQuery.session(session);
             const fgDoc = await fgQuery;
 
@@ -604,20 +767,42 @@ const createDispatch = async (req, res) => {
                 });
             }
 
-            if (fgDoc.currentStock < numQty) {
+            // Stock UOM conversion check
+            const fgStockUom = (fgDoc.uom && typeof fgDoc.uom === 'object') ? (fgDoc.uom.symbol || fgDoc.uom.name) : (fgDoc.uom || 'Pcs');
+            const conversion = convertUomQuantity(numQty, soLineUom, fgStockUom, fgDoc);
+
+            if (!conversion.matched) {
                 if (useTransaction && session) {
                     if (session.inTransaction()) await session.abortTransaction();
                     session.endSession();
                 }
                 return res.status(400).json({
                     success: false,
-                    message: `Insufficient sellable current stock for '${fgDoc.name}'. Current sellable stock: ${fgDoc.currentStock}, requested dispatch: ${numQty}.`
+                    message: conversion.error
+                });
+            }
+
+            const stockDeductQty = conversion.convertedQty;
+            const currentStockNum = Number(fgDoc.currentStock || 0);
+
+            if (currentStockNum <= 0 || currentStockNum < stockDeductQty) {
+                if (useTransaction && session) {
+                    if (session.inTransaction()) await session.abortTransaction();
+                    session.endSession();
+                }
+                return res.status(400).json({
+                    success: false,
+                    message: currentStockNum <= 0
+                        ? `Cannot dispatch '${fgDoc.name}': Item is out of stock (0 ${fgStockUom} available).`
+                        : `Insufficient sellable current stock for '${fgDoc.name}'. Current sellable stock: ${currentStockNum} ${fgStockUom}, requested dispatch requires: ${stockDeductQty % 1 === 0 ? stockDeductQty : stockDeductQty.toFixed(2)} ${fgStockUom} (${numQty} ${soLineUom}).`
                 });
             }
 
             cleanedItems.push({
                 finishedGood: dispatchItem.finishedGood,
                 dispatchedQuantity: numQty,
+                unit: soLineUom,
+                stockDeductQty,
                 dispatchedKg: dispatchItem.dispatchedKg !== undefined && dispatchItem.dispatchedKg !== null && dispatchItem.dispatchedKg !== '' && !isNaN(Number(dispatchItem.dispatchedKg))
                     ? Number(dispatchItem.dispatchedKg)
                     : undefined,
@@ -651,13 +836,14 @@ const createDispatch = async (req, res) => {
 
         // Step B: Create STOCK_OUT StockTransactions for each item & update SalesOrder item dispatchedQuantity
         for (const item of cleanedItems) {
+            const deductQty = item.stockDeductQty !== undefined ? item.stockDeductQty : item.dispatchedQuantity;
             const txnResult = await executeStockTransactionCore({
                 tenantId,
                 referenceNumber: dispatchNumber,
                 itemType: 'FINISHED_GOOD',
                 item: item.finishedGood,
                 transactionType: 'STOCK_OUT',
-                quantity: item.dispatchedQuantity,
+                quantity: deductQty,
                 fromLocation: dispatchLocation,
                 batchNumber: item.batchNumber,
                 notes: notes || `Goods dispatched via Dispatch ${dispatchNumber} for SO ${soDoc.soNumber}`,
@@ -666,18 +852,19 @@ const createDispatch = async (req, res) => {
 
             createdStockTransactions.push(txnResult.transaction);
 
-            // Increment SalesOrder item dispatchedQuantity
+            // Increment SalesOrder item dispatchedQuantity (in SO line UOM)
             const soItem = soDoc.items.find((i) => String(i.finishedGood) === String(item.finishedGood));
             if (soItem) {
-                soItem.dispatchedQuantity += item.dispatchedQuantity;
+                soItem.dispatchedQuantity = Number(soItem.dispatchedQuantity || 0) + item.dispatchedQuantity;
             }
         }
 
         // Step C: Recompute SalesOrder Status (Set 'DISPATCHED' if ALL items fully dispatched)
-        const allFullyDispatched = soDoc.items.every((i) => i.dispatchedQuantity >= i.quantity - 0.0001);
+        const allFullyDispatched = soDoc.items.every((i) => Number(i.dispatchedQuantity || 0) >= Number(i.quantity || 0) - 0.0001);
+        const anyDispatched = soDoc.items.some((i) => Number(i.dispatchedQuantity || 0) > 0.0001);
         if (allFullyDispatched) {
             soDoc.status = 'DISPATCHED';
-        } else {
+        } else if (anyDispatched) {
             soDoc.status = 'PARTIALLY_DISPATCHED';
         }
 
@@ -890,6 +1077,7 @@ const updateDispatch = async (req, res) => {
                     });
                 }
 
+                const soLineUom = soItem.unit || 'Pcs';
                 const otherDispatched = otherDispatchesQtyMap.get(fgStr) || 0;
                 const maxAllowedForThisDispatch = Number(soItem.quantity || 0) - otherDispatched;
 
@@ -900,56 +1088,74 @@ const updateDispatch = async (req, res) => {
                     }
                     return res.status(400).json({
                         success: false,
-                        message: `Cannot dispatch ${item.dispatchedQuantity} units of item '${soItem.name || fgStr}'. Ordered: ${soItem.quantity}, Dispatched in other dispatches: ${otherDispatched}, Maximum allowed for this dispatch: ${maxAllowedForThisDispatch}.`
+                        message: `Cannot dispatch ${item.dispatchedQuantity} ${soLineUom} of item '${soItem.name || fgStr}'. Ordered: ${soItem.quantity} ${soLineUom}, Dispatched in other dispatches: ${otherDispatched} ${soLineUom}, Maximum allowed for this dispatch: ${maxAllowedForThisDispatch} ${soLineUom}.`
                     });
                 }
+
+                item.unit = soLineUom;
 
                 const oldQty = oldThisDispatchQtyMap.get(fgStr) || 0;
                 const delta = item.dispatchedQuantity - oldQty;
 
-                if (delta > 0) {
-                    // Check stock
-                    const fgQuery = FinishedGood.findOne({ _id: item.finishedGood, tenant: tenantId });
+                if (delta > 0 || delta < 0) {
+                    const fgQuery = FinishedGood.findOne({ _id: item.finishedGood, tenant: tenantId }).populate('uom');
                     if (useTransaction && session) fgQuery.session(session);
                     const fgDoc = await fgQuery;
 
-                    if (!fgDoc || fgDoc.currentStock < delta) {
+                    const fgStockUom = (fgDoc?.uom && typeof fgDoc.uom === 'object') ? (fgDoc.uom.symbol || fgDoc.uom.name) : (fgDoc?.uom || 'Pcs');
+                    const conversion = convertUomQuantity(Math.abs(delta), soLineUom, fgStockUom, fgDoc);
+
+                    if (!conversion.matched) {
                         if (useTransaction && session) {
                             if (session.inTransaction()) await session.abortTransaction();
                             session.endSession();
                         }
                         return res.status(400).json({
                             success: false,
-                            message: `Insufficient sellable current stock for '${fgDoc?.name || fgStr}'. Current stock: ${fgDoc?.currentStock || 0}, additional required: ${delta}.`
+                            message: conversion.error
                         });
                     }
 
-                    await executeStockTransactionCore({
-                        tenantId,
-                        referenceNumber: existingDispatch.dispatchNumber,
-                        itemType: 'FINISHED_GOOD',
-                        item: item.finishedGood,
-                        transactionType: 'STOCK_OUT',
-                        quantity: delta,
-                        fromLocation: targetLocation,
-                        batchNumber: item.batchNumber,
-                        notes: notes || `Quantity increased (+${delta}) via Dispatch edit ${existingDispatch.dispatchNumber} for SO ${soDoc.soNumber}`,
-                        performedBy: req.user._id || req.user.id
-                    }, sessionOption);
-                } else if (delta < 0) {
-                    const returnQty = Math.abs(delta);
-                    await executeStockTransactionCore({
-                        tenantId,
-                        referenceNumber: existingDispatch.dispatchNumber,
-                        itemType: 'FINISHED_GOOD',
-                        item: item.finishedGood,
-                        transactionType: 'STOCK_IN',
-                        quantity: returnQty,
-                        toLocation: targetLocation,
-                        batchNumber: item.batchNumber,
-                        notes: notes || `Quantity reduced (-${returnQty}) via Dispatch edit ${existingDispatch.dispatchNumber} for SO ${soDoc.soNumber}`,
-                        performedBy: req.user._id || req.user.id
-                    }, sessionOption);
+                    const convertedDelta = conversion.convertedQty;
+
+                    if (delta > 0) {
+                        if (!fgDoc || Number(fgDoc.currentStock || 0) < convertedDelta) {
+                            if (useTransaction && session) {
+                                if (session.inTransaction()) await session.abortTransaction();
+                                session.endSession();
+                            }
+                            return res.status(400).json({
+                                success: false,
+                                message: `Insufficient sellable current stock for '${fgDoc?.name || fgStr}'. Current stock: ${fgDoc?.currentStock || 0} ${fgStockUom}, additional required: ${convertedDelta % 1 === 0 ? convertedDelta : convertedDelta.toFixed(2)} ${fgStockUom} (+${delta} ${soLineUom}).`
+                            });
+                        }
+
+                        await executeStockTransactionCore({
+                            tenantId,
+                            referenceNumber: existingDispatch.dispatchNumber,
+                            itemType: 'FINISHED_GOOD',
+                            item: item.finishedGood,
+                            transactionType: 'STOCK_OUT',
+                            quantity: convertedDelta,
+                            fromLocation: targetLocation,
+                            batchNumber: item.batchNumber,
+                            notes: notes || `Quantity increased (+${delta} ${soLineUom}) via Dispatch edit ${existingDispatch.dispatchNumber} for SO ${soDoc.soNumber}`,
+                            performedBy: req.user._id || req.user.id
+                        }, sessionOption);
+                    } else if (delta < 0) {
+                        await executeStockTransactionCore({
+                            tenantId,
+                            referenceNumber: existingDispatch.dispatchNumber,
+                            itemType: 'FINISHED_GOOD',
+                            item: item.finishedGood,
+                            transactionType: 'STOCK_IN',
+                            quantity: convertedDelta,
+                            toLocation: targetLocation,
+                            batchNumber: item.batchNumber,
+                            notes: notes || `Quantity reduced (-${Math.abs(delta)} ${soLineUom}) via Dispatch edit ${existingDispatch.dispatchNumber} for SO ${soDoc.soNumber}`,
+                            performedBy: req.user._id || req.user.id
+                        }, sessionOption);
+                    }
                 }
             }
 
@@ -957,15 +1163,22 @@ const updateDispatch = async (req, res) => {
             for (const [oldFgStr, oldQty] of oldThisDispatchQtyMap.entries()) {
                 const stillPresent = cleanedItems.some((i) => String(i.finishedGood) === oldFgStr);
                 if (!stillPresent && oldQty > 0) {
+                    const fgDoc = await FinishedGood.findOne({ _id: oldFgStr, tenant: tenantId }).populate('uom');
+                    const soItem = soDoc.items.find((i) => String(i.finishedGood?._id || i.finishedGood) === oldFgStr);
+                    const soLineUom = soItem?.unit || 'Pcs';
+                    const fgStockUom = (fgDoc?.uom && typeof fgDoc.uom === 'object') ? (fgDoc.uom.symbol || fgDoc.uom.name) : (fgDoc?.uom || 'Pcs');
+                    const conversion = convertUomQuantity(oldQty, soLineUom, fgStockUom, fgDoc);
+                    const returnStockQty = conversion.matched ? conversion.convertedQty : oldQty;
+
                     await executeStockTransactionCore({
                         tenantId,
                         referenceNumber: existingDispatch.dispatchNumber,
                         itemType: 'FINISHED_GOOD',
                         item: oldFgStr,
                         transactionType: 'STOCK_IN',
-                        quantity: oldQty,
+                        quantity: returnStockQty,
                         toLocation: targetLocation,
-                        notes: `Item removed: returned ${oldQty} units to stock via Dispatch edit ${existingDispatch.dispatchNumber}`,
+                        notes: `Item removed: returned ${oldQty} ${soLineUom} to stock via Dispatch edit ${existingDispatch.dispatchNumber}`,
                         performedBy: req.user._id || req.user.id
                     }, sessionOption);
                 }
@@ -1325,7 +1538,7 @@ const getDispatches = async (req, res) => {
             Dispatch.find(filter)
                 .populate({
                     path: 'salesOrder',
-                    select: 'soNumber status customer totalValue orderDate deliveryDue',
+                    select: 'soNumber status customer totalValue orderDate deliveryDue items',
                     populate: {
                         path: 'customer',
                         select: 'companyName code contactPerson phone address city state gstin'
@@ -1340,7 +1553,11 @@ const getDispatches = async (req, res) => {
                     }
                 })
                 .populate('dispatchLocation', 'name code type')
-                .populate('items.finishedGood', 'name code uom bagShape dimensions dimensionUnit fabricGSM')
+                .populate({
+                    path: 'items.finishedGood',
+                    select: 'name code uom bagShape dimensions dimensionUnit fabricGSM',
+                    populate: { path: 'uom', select: 'name symbol abbreviation' }
+                })
                 .populate('dispatchedBy', 'name email')
                 .populate('pod.uploadedBy', 'name email')
                 .populate('pod.approvedBy', 'name email')
@@ -1364,6 +1581,15 @@ const getDispatches = async (req, res) => {
             if (!dObj.invoice && dObj.salesOrder) {
                 const soIdStr = String(dObj.salesOrder?._id || dObj.salesOrder);
                 dObj.invoice = soInvoiceMap.get(soIdStr) || null;
+            }
+            if (Array.isArray(dObj.items)) {
+                dObj.items.forEach((it) => {
+                    if (!it.unit) {
+                        const fgId = it.finishedGood?._id || it.finishedGood;
+                        const soItem = dObj.salesOrder?.items?.find((si) => String(si.finishedGood?._id || si.finishedGood) === String(fgId));
+                        it.unit = soItem?.unit || it.finishedGood?.uom?.symbol || it.finishedGood?.uom?.name || 'Pcs';
+                    }
+                });
             }
             return dObj;
         });
@@ -1415,7 +1641,7 @@ const getDispatchById = async (req, res) => {
         const dispatch = await Dispatch.findOne({ _id: req.params.id, tenant: tenantId })
             .populate({
                 path: 'salesOrder',
-                select: 'soNumber status orderDate deliveryDue customer totalValue',
+                select: 'soNumber status orderDate deliveryDue customer totalValue items',
                 populate: { path: 'customer', select: 'companyName code contactPerson phone address' }
             })
             .populate({
@@ -1449,6 +1675,16 @@ const getDispatchById = async (req, res) => {
 
         const responseData = dispatch.toObject();
         responseData.invoice = linkedInvoice || null;
+
+        if (Array.isArray(responseData.items)) {
+            responseData.items.forEach((it) => {
+                if (!it.unit) {
+                    const fgId = it.finishedGood?._id || it.finishedGood;
+                    const soItem = responseData.salesOrder?.items?.find((si) => String(si.finishedGood?._id || si.finishedGood) === String(fgId));
+                    it.unit = soItem?.unit || it.finishedGood?.uom?.symbol || it.finishedGood?.uom?.name || 'Pcs';
+                }
+            });
+        }
 
         return res.status(200).json({
             success: true,
@@ -1520,22 +1756,38 @@ const getDeliveryRegister = async (req, res) => {
         const dispatches = await Dispatch.find(filter)
             .populate({
                 path: 'salesOrder',
-                select: 'soNumber status customer totalValue orderDate deliveryDue',
-                populate: {
-                    path: 'customer',
-                    select: 'companyName code contactPerson phone address city state gstin'
-                }
+                select: 'soNumber status customer totalValue orderDate deliveryDue items sourceEnquiry customerName',
+                populate: [
+                    {
+                        path: 'customer',
+                        select: 'companyName name code contactPerson phone address city state gstin'
+                    },
+                    {
+                        path: 'sourceEnquiry',
+                        select: 'customer customerRef newCustomerDetails nslNumber',
+                        populate: { path: 'customer customerRef', select: 'companyName name code contactPerson phone address city state gstin' }
+                    },
+                    {
+                        path: 'items.finishedGood',
+                        select: 'uom',
+                        populate: { path: 'uom', select: 'name symbol abbreviation' }
+                    }
+                ]
             })
             .populate({
                 path: 'invoice',
-                select: 'invoiceNumber customer walkInCustomer grandTotal paymentStatus paymentMode dueAmount invoiceDate',
+                select: 'invoiceNumber customer walkInCustomer grandTotal paymentStatus paymentMode dueAmount invoiceDate items',
                 populate: {
                     path: 'customer',
-                    select: 'companyName code contactPerson phone address city state gstin'
+                    select: 'companyName name code contactPerson phone address city state gstin'
                 }
             })
             .populate('dispatchLocation', 'name code type')
-            .populate('items.finishedGood', 'name code uom bagShape dimensions dimensionUnit fabricGSM')
+            .populate({
+                path: 'items.finishedGood',
+                select: 'name code uom bagShape dimensions dimensionUnit fabricGSM',
+                populate: { path: 'uom', select: 'name symbol abbreviation' }
+            })
             .populate('dispatchedBy', 'name email')
             .populate('pod.uploadedBy', 'name email')
             .populate('pod.approvedBy', 'name email')
@@ -1560,13 +1812,16 @@ const getDeliveryRegister = async (req, res) => {
                 ? (d.invoice?.invoiceDate || d.createdAt)
                 : (d.salesOrder?.deliveryDue || null);
 
+            const se = d.salesOrder?.sourceEnquiry;
+            const seCust = se?.customer || se?.customerRef;
+
             const cust = isPos
                 ? (d.invoice?.customer || d.invoice?.walkInCustomer || {})
-                : (d.salesOrder?.customer || {});
+                : (d.salesOrder?.customer || seCust || {});
 
             const customerName = isPos
                 ? (d.invoice?.customer?.companyName || d.invoice?.customer?.name || d.invoice?.walkInCustomer?.name || 'Walk-in Retail Customer')
-                : (d.salesOrder?.customer?.companyName || d.salesOrder?.customer?.name || '-');
+                : (d.salesOrder?.customer?.companyName || d.salesOrder?.customer?.name || seCust?.companyName || seCust?.name || se?.newCustomerDetails?.company || se?.newCustomerDetails?.name || d.salesOrder?.customerName || '-');
 
             const customerCode = cust.code || '-';
             const customerGstin = cust.gstin || '-';
@@ -1593,9 +1848,18 @@ const getDeliveryRegister = async (req, res) => {
                 const fg = item.finishedGood || {};
                 const fgName = fg.name || 'Finished Goods Bag';
                 const fgCode = fg.code || '-';
-                const uom = (fg.uom && typeof fg.uom === 'object' && fg.uom.name)
-                    ? fg.uom.name
-                    : (typeof fg.uom === 'string' && !/^[0-9a-fA-F]{24}$/.test(fg.uom) ? fg.uom : 'Bags');
+                const fgUom = (fg.uom && typeof fg.uom === 'object' && (fg.uom.symbol || fg.uom.name || fg.uom.abbreviation))
+                    ? (fg.uom.symbol || fg.uom.name || fg.uom.abbreviation)
+                    : (typeof fg.uom === 'string' && !/^[0-9a-fA-F]{24}$/.test(fg.uom) ? fg.uom : null);
+
+                let matchedSoItem = null;
+                if (d.salesOrder && Array.isArray(d.salesOrder.items)) {
+                    matchedSoItem = d.salesOrder.items.find(soIt =>
+                        String(soIt.finishedGood?._id || soIt.finishedGood) === String(fg._id || item.finishedGood)
+                    );
+                }
+
+                const uom = item.unit || matchedSoItem?.unit || fgUom || 'Pcs';
                 const dispatchedQty = Number(item.dispatchedQuantity || 0);
                 const batchNumber = item.batchNumber || '-';
                 const bagShape = fg.bagShape || '-';

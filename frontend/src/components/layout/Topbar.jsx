@@ -102,6 +102,56 @@ export default function Topbar({ onToggleSidebar }) {
         };
     }, [isSuperAdmin]);
 
+    const VALID_NOTIFICATION_ROUTES = new Set([
+        '/dashboard',
+        '/profile',
+        '/production',
+        '/pos',
+        '/sales',
+        '/master-data',
+        '/quality',
+        '/inventory',
+        '/procurement',
+        '/customer-crm',
+        '/dispatch',
+        '/attendance',
+        '/analytics',
+        '/approvals',
+        '/administration',
+        '/administration/tenants',
+        '/administration/users',
+        '/administration/roles',
+        '/users',
+        '/roles'
+    ]);
+
+    const resolveSafeNotificationLink = (notif) => {
+        let target = typeof notif?.link === 'string' ? notif.link.trim() : '';
+
+        // Legacy mapping for older saved notifications pointing to /crm
+        if (target === '/crm' || target.startsWith('/crm?') || target.startsWith('/crm/')) {
+            target = `/customer-crm${target.slice(4)}`;
+        }
+
+        if (!target) {
+            if (notif?.type === 'LOW_STOCK') {
+                target = `/inventory?tab=raw-materials&search=${encodeURIComponent(notif.data?.code || '')}`;
+            } else if (notif?.type === 'NEW_ENQUIRY') {
+                target = notif.data?.enquiryId
+                    ? `/customer-crm?tab=enquiries&id=${notif.data.enquiryId}`
+                    : '/customer-crm?tab=enquiries';
+            } else if (['PO_APPROVAL', 'APPROVAL_REQUEST', 'APPROVAL_REMINDER'].includes(notif?.type)) {
+                if (isTenantAdmin(user)) {
+                    target = notif.data?.approvalId ? `/approvals?id=${notif.data.approvalId}` : '/approvals';
+                }
+            }
+        }
+
+        if (!target || !target.startsWith('/')) return '';
+        const pathname = target.split('?')[0].split('#')[0];
+        return VALID_NOTIFICATION_ROUTES.has(pathname) ? target : '';
+    };
+
     const handleNotificationClick = async (notif) => {
         try {
             if (!notif.isRead) {
@@ -115,14 +165,9 @@ export default function Topbar({ onToggleSidebar }) {
 
         setShowNotificationDropdown(false);
 
-        if (notif.link) {
-            navigate(notif.link);
-        } else if (notif.type === 'LOW_STOCK') {
-            navigate(`/inventory?tab=raw-materials&search=${encodeURIComponent(notif.data?.code || '')}`);
-        } else if (notif.type === 'PO_APPROVAL' || notif.type === 'APPROVAL_REQUEST' || notif.type === 'APPROVAL_REMINDER') {
-            if (isTenantAdmin(user)) {
-                navigate(notif.data?.approvalId ? `/approvals?id=${notif.data.approvalId}` : '/approvals');
-            }
+        const safeLink = resolveSafeNotificationLink(notif);
+        if (safeLink) {
+            navigate(safeLink);
         }
     };
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
     PhoneCall, AlertTriangle, Plus, RefreshCw, ClipboardList,
     CheckCircle2, XCircle, Eye, Pencil, Trash2, AlertCircle,
@@ -6,7 +7,6 @@ import {
 } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SlideOverPanel from '../components/shared/SlideOverPanel';
-import DetailViewModal from '../components/shared/DetailViewModal';
 import CreateSalesOrderModal from '../components/sales/CreateSalesOrderModal';
 import CreateCustomerModal from '../components/shared/CreateCustomerModal';
 import LogFollowUpModal from '../components/crm/LogFollowUpModal';
@@ -149,6 +149,9 @@ export default function CustomerCrmPage() {
     const isUserAdmin = isTenantAdmin(rawUser) || checkIsSuperAdmin(rawUser);
 
     const [activeTab, setActiveTab] = useState('enquiries');
+    const [sourceFilter, setSourceFilter] = useState('');
+    const [searchParams] = useSearchParams();
+    const handledTabParamRef = useRef('');
     const [isInteractionDrawerOpen, setIsInteractionDrawerOpen] = useState(false);
     const [editingInteraction, setEditingInteraction] = useState(null); // null = create, object = edit
     const [isInteractionModalOpen, setIsInteractionModalOpen] = useState(false);
@@ -180,6 +183,15 @@ export default function CustomerCrmPage() {
                 .catch(() => {});
         }
     }, [viewingEnquiry?._id]);
+
+    // Switch to requested tab once when ?tab=... is present (record modal is handled by TabbedResourcePage)
+    useEffect(() => {
+        const tabParam = searchParams.get('tab');
+        if (tabParam && ['enquiries', 'follow-ups', 'complaints'].includes(tabParam) && handledTabParamRef.current !== tabParam) {
+            handledTabParamRef.current = tabParam;
+            setActiveTab(tabParam);
+        }
+    }, [searchParams]);
 
     // Shared dropdown data
     const [customers, setCustomers] = useState([]);
@@ -1124,15 +1136,29 @@ export default function CustomerCrmPage() {
                 const displayName = isNew
                     ? (row.newCustomerDetails?.company || row.newCustomerDetails?.name || 'New Prospect')
                     : (c?.companyName || c?.name || '-');
+                const isWebsiteEnquiry = row.source === 'Website' || Boolean(row.enquiryNumber);
 
                 return (
                     <div className="font-sans leading-tight">
-                        <div className="font-extrabold text-text-main text-xs">{displayName}</div>
-                        {row.nslNumber ? (
-                            <div className="text-[10px] font-mono text-primary font-bold">{row.nslNumber}</div>
-                        ) : (
-                            c?.code && <div className="text-[10px] font-mono text-text-muted">{c.code}</div>
-                        )}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-extrabold text-text-main text-xs">{displayName}</span>
+                            {isWebsiteEnquiry && (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-800 border border-blue-200 shrink-0">
+                                    Website Enquiry
+                                </span>
+                            )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                            {row.nslNumber && (
+                                <span className="text-[10px] font-mono text-primary font-bold">{row.nslNumber}</span>
+                            )}
+                            {row.enquiryNumber && row.enquiryNumber !== row.nslNumber && (
+                                <span className="text-[10px] font-mono text-text-muted font-medium">({row.enquiryNumber})</span>
+                            )}
+                            {!row.nslNumber && c?.code && (
+                                <span className="text-[10px] font-mono text-text-muted">{c.code}</span>
+                            )}
+                        </div>
                     </div>
                 );
             },
@@ -1402,6 +1428,26 @@ export default function CustomerCrmPage() {
     const inp = 'w-full border border-border rounded-md p-2.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary font-sans';
     const sel = `${inp} cursor-pointer`;
 
+    const enquiryFilterSlot = activeTab === 'enquiries' ? (
+        <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+            aria-label="Filter enquiries by source"
+            className="border border-border rounded-lg px-2.5 py-1.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+        >
+            <option value="">All Sources</option>
+            <option value="Website">Website Enquiries</option>
+            <option value="Manual">Manual / CRM</option>
+        </select>
+    ) : null;
+
+    const enquiryExtraFilterParams = useMemo(() => {
+        if (activeTab === 'enquiries' && sourceFilter) {
+            return { source: sourceFilter };
+        }
+        return {};
+    }, [activeTab, sourceFilter]);
+
     return (
         <>
             <TabbedResourcePage
@@ -1412,6 +1458,15 @@ export default function CustomerCrmPage() {
                 activeTabKey={activeTab}
                 onTabChange={(key) => setActiveTab(key)}
                 headerActions={headerButton}
+                filterSlot={enquiryFilterSlot}
+                extraFilterParams={enquiryExtraFilterParams}
+                onEdit={(rec, tabKey) => {
+                    if (tabKey === 'enquiries') {
+                        handleEditEnquiry(rec);
+                    }
+                }}
+                externalViewRecord={viewingEnquiry}
+                onClearExternalViewRecord={() => setViewingEnquiry(null)}
             />
 
             {/* ─── Drawer 1: Log Customer Interaction ────────────────────────── */}
@@ -2111,15 +2166,6 @@ export default function CustomerCrmPage() {
                     </div>
                 </div>
             )}
-
-            {/* ─── Detail View Modal (Order Enquiry read-only) ───────────────── */}
-            <DetailViewModal
-                isOpen={Boolean(viewingEnquiry)}
-                onClose={() => setViewingEnquiry(null)}
-                record={viewingEnquiry}
-                tabKey="enquiries"
-                tabLabel="Order Enquiry"
-            />
 
             {/* ─── Create Customer Modal (New Prospect conversion) ───────────── */}
             <CreateCustomerModal

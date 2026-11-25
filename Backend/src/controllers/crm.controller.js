@@ -1045,21 +1045,7 @@ const createOrderEnquiry = async (req, res) => {
             return res.status(400).json({ success: false, message: 'A maximum of 5 PO attachments are allowed.' });
         }
 
-        const currentYear = new Date().getFullYear();
-        // Sort by nslNumber descending to get the highest sequence, regardless of creation date
-        const lastEnquiry = await OrderEnquiry.findOne({ 
-            nslNumber: { $regex: `^NSL-${currentYear}-` } 
-        }).sort({ nslNumber: -1 });
-        
-        let nextSeq = 1;
-        if (lastEnquiry && lastEnquiry.nslNumber) {
-            const parts = lastEnquiry.nslNumber.split('-');
-            if (parts.length === 3) {
-                const lastSeq = parseInt(parts[2], 10);
-                if (!isNaN(lastSeq)) nextSeq = lastSeq + 1;
-            }
-        }
-        req.body.nslNumber = `NSL-${currentYear}-${nextSeq.toString().padStart(4, '0')}`;
+        req.body.nslNumber = await OrderEnquiry.generateNextNslNumber(tenantId);
 
         const enquiry = new OrderEnquiry({
             tenant: tenantId,
@@ -1129,18 +1115,23 @@ const getOrderEnquiries = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Tenant context is missing or invalid.' });
         }
 
-        const { customer, orderConfirmed, productCategory, status, search, page = 1, limit = 20 } = req.query;
+        const { customer, orderConfirmed, productCategory, status, source, search, page = 1, limit = 20 } = req.query;
         const filter = { tenant: tenantId, isActive: true };
 
         if (customer) filter.customer = customer;
         if (productCategory) filter.productCategory = productCategory;
         if (status && status !== 'All Statuses' && status !== 'All') filter.status = status;
+        if (source && source !== 'All' && source !== 'All Sources') filter.source = source;
         if (orderConfirmed !== undefined) filter.orderConfirmed = orderConfirmed === 'true';
 
         if (search) {
             filter.$or = [
                 { nslNumber: { $regex: search, $options: 'i' } },
+                { enquiryNumber: { $regex: search, $options: 'i' } },
                 { contactPerson: { $regex: search, $options: 'i' } },
+                { contactNumber: { $regex: search, $options: 'i' } },
+                { 'newCustomerDetails.name': { $regex: search, $options: 'i' } },
+                { 'newCustomerDetails.company': { $regex: search, $options: 'i' } },
                 { materialQualityFabric: { $regex: search, $options: 'i' } },
                 { description: { $regex: search, $options: 'i' } },
                 { remarks: { $regex: search, $options: 'i' } }

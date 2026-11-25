@@ -100,7 +100,11 @@ const createInvoiceFromSalesOrder = async (req, res) => {
 
         // 1. Fetch SalesOrder within tenant scope
         const salesOrder = await SalesOrder.findOne({ _id: salesOrderId, tenant: tenantId })
-            .populate('items.finishedGood', 'name code uom pricePerBag')
+            .populate({
+                path: 'items.finishedGood',
+                select: 'name code uom pricePerBag',
+                populate: { path: 'uom', select: 'name symbol abbreviation' }
+            })
             .populate('customer', 'companyName code contactPerson phone gstin state');
 
         if (!salesOrder) {
@@ -127,16 +131,21 @@ const createInvoiceFromSalesOrder = async (req, res) => {
         // 2. Snapshot items from SalesOrder
         let totalTaxable = 0;
         const invoiceItems = salesOrder.items.map(item => {
-            const fgDoc = item.finishedGood;
+            const fgDoc = item.finishedGood || {};
             const qty = Number(item.quantity);
             const rate = Number(item.ratePerUnit);
             const taxableValue = qty * rate;
             totalTaxable += taxableValue;
 
+            const fgUom = (fgDoc.uom && typeof fgDoc.uom === 'object' && (fgDoc.uom.symbol || fgDoc.uom.name || fgDoc.uom.abbreviation))
+                ? (fgDoc.uom.symbol || fgDoc.uom.name || fgDoc.uom.abbreviation)
+                : (typeof fgDoc.uom === 'string' && !/^[0-9a-fA-F]{24}$/.test(fgDoc.uom) ? fgDoc.uom : null);
+
             return {
                 finishedGood: fgDoc._id || item.finishedGood,
                 description: fgDoc.name ? `${fgDoc.name} (${fgDoc.code})` : 'Finished Good Item',
                 quantity: qty,
+                unit: item.unit || fgUom || 'Pcs',
                 ratePerUnit: rate,
                 taxableValue
             };
@@ -339,11 +348,19 @@ const getInvoiceById = async (req, res) => {
 
         const invoice = await Invoice.findOne({ _id: req.params.id, tenant: tenantId })
             .populate('customer', 'companyName code contactPerson phone email address gstin')
-            .populate('salesOrder', 'soNumber status orderDate deliveryDue')
+            .populate({
+                path: 'salesOrder',
+                select: 'soNumber status orderDate deliveryDue items',
+                populate: {
+                    path: 'items.finishedGood',
+                    select: 'name code uom',
+                    populate: { path: 'uom', select: 'name symbol abbreviation' }
+                }
+            })
             .populate({
                 path: 'items.finishedGood',
                 select: 'name code uom pricePerBag',
-                populate: { path: 'uom', select: 'name symbol' }
+                populate: { path: 'uom', select: 'name symbol abbreviation' }
             });
 
         if (!invoice) {
@@ -353,9 +370,28 @@ const getInvoiceById = async (req, res) => {
             });
         }
 
+        const invObj = invoice.toObject ? invoice.toObject() : invoice;
+        if (Array.isArray(invObj.items)) {
+            invObj.items = invObj.items.map((it) => {
+                const fg = it.finishedGood || {};
+                const fgUom = (fg.uom && typeof fg.uom === 'object' && (fg.uom.symbol || fg.uom.name || fg.uom.abbreviation))
+                    ? (fg.uom.symbol || fg.uom.name || fg.uom.abbreviation)
+                    : (typeof fg.uom === 'string' && !/^[0-9a-fA-F]{24}$/.test(fg.uom) ? fg.uom : null);
+
+                let matchedSoItem = null;
+                if (invObj.salesOrder && Array.isArray(invObj.salesOrder.items)) {
+                    matchedSoItem = invObj.salesOrder.items.find((soIt) =>
+                        String(soIt.finishedGood?._id || soIt.finishedGood) === String(fg._id || it.finishedGood)
+                    );
+                }
+                const unit = it.unit || matchedSoItem?.unit || fgUom || 'Pcs';
+                return { ...it, unit };
+            });
+        }
+
         return res.status(200).json({
             success: true,
-            data: invoice
+            data: invObj
         });
     } catch (error) {
         console.error('Error in getInvoiceById:', error);

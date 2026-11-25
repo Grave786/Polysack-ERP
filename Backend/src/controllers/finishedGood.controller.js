@@ -43,10 +43,10 @@ const createFinishedGood = async (req, res) => {
         const rawMaterialReqs = req.body.materialRequirements || req.body.rawMaterials || req.body.recipe || req.body.components || [];
 
         // 1. Basic validation
-        if (!code || !name || !category || !uom) {
+        if (!code || !category || !uom) {
             return res.status(400).json({
                 success: false,
-                message: 'Please provide all required fields: code, name, category, and uom.'
+                message: 'Please provide all required fields: code, category, and uom.'
             });
         }
 
@@ -96,7 +96,6 @@ const createFinishedGood = async (req, res) => {
         }
 
         const formattedCode = String(code).trim().toUpperCase();
-        const formattedName = String(name).trim();
 
         // 3. Validate tenant-ownership of referenced models
         const categoryDoc = await Category.findOne({ _id: category, tenant: tenantId });
@@ -105,6 +104,18 @@ const createFinishedGood = async (req, res) => {
                 success: false,
                 message: 'Category does not exist or does not belong to your organization.'
             });
+        }
+
+        let formattedName = (name && String(name).trim()) ? String(name).trim() : '';
+        if (!formattedName) {
+            const parts = [
+                bagShape,
+                req.body.bagType,
+                categoryDoc.name,
+                req.body.baseName,
+                (bagCapacity || req.body.capacity) ? `${bagCapacity || req.body.capacity}Kg` : ''
+            ].filter(Boolean);
+            formattedName = parts.join(' ').trim() || `${formattedCode} Finished Good`;
         }
 
         const uomDoc = await UOM.findOne({ _id: uom, tenant: tenantId });
