@@ -380,11 +380,10 @@ const getPurchaseOrders = async (req, res) => {
             const poObj = po.toObject ? po.toObject() : { ...po };
             const payable = computePoPayableValues(poObj);
             const grandTotal = resolvePoGrandTotal(poObj);
-            const payableBase = Math.max(grandTotal, payable.receivedValue);
-            const totalPaid = Math.min(payableBase, Number(poObj.paidAmount || poObj.amountPaid || 0));
-            const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
+            const totalPaid = Math.min(grandTotal, Number(poObj.paidAmount || poObj.amountPaid || 0));
+            const balanceDue = Math.max(0, Number((grandTotal - totalPaid).toFixed(2)));
             const overdue = computeOverdueInfo({
-                totalAmount: payableBase,
+                totalAmount: grandTotal,
                 paidAmount: totalPaid,
                 docDate: poObj.poDate || poObj.createdAt,
                 docDueDate: poObj.dueDate || null,
@@ -393,7 +392,7 @@ const getPurchaseOrders = async (req, res) => {
             });
 
             let computedPaymentStatus = overdue.paymentStatus;
-            if (payableBase > 0) {
+            if (grandTotal > 0) {
                 if (balanceDue <= 0.01) {
                     computedPaymentStatus = 'PAID';
                 } else if (overdue.isOverdue) {
@@ -527,21 +526,22 @@ const updatePurchaseOrder = async (req, res) => {
             });
         }
 
-        // Prevent editing if any items have already been received, or if CANCELLED
-        const hasReceivedQty = Array.isArray(purchaseOrder.items) && purchaseOrder.items.some((it) => Number(it.receivedQuantity || 0) > 0);
-        if (hasReceivedQty || ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'].includes(purchaseOrder.status)) {
+        if (['CANCELLED', 'REJECTED'].includes(purchaseOrder.status)) {
             return res.status(400).json({
                 success: false,
-                message: `Cannot edit Purchase Order with status '${purchaseOrder.status}' or with received items. Please use GRN to adjust receipts.`
+                message: `Cannot edit Purchase Order with status '${purchaseOrder.status}'.`
             });
         }
 
-        // Restrict PENDING_APPROVAL and SENT_TO_SUPPLIER PO editing to Tenant Admin
-        if (['PENDING_APPROVAL', 'SENT_TO_SUPPLIER'].includes(purchaseOrder.status)) {
+        const hasGrn = (Array.isArray(purchaseOrder.items) && purchaseOrder.items.some((it) => Number(it.receivedQuantity || 0) > 0))
+            || ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED'].includes(purchaseOrder.status);
+
+        // Restrict PENDING_APPROVAL, SENT_TO_SUPPLIER, PARTIALLY_RECEIVED, and FULLY_RECEIVED PO editing to Tenant Admin
+        if (['PENDING_APPROVAL', 'SENT_TO_SUPPLIER', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED'].includes(purchaseOrder.status)) {
             if (!isTenantAdmin(req.user)) {
                 return res.status(403).json({
                     success: false,
-                    message: 'Only Tenant Admins can edit Purchase Orders that are Pending Approval or Sent to Supplier.'
+                    message: 'Only Tenant Admins can edit approved, sent, or received Purchase Orders.'
                 });
             }
         } else if (purchaseOrder.status !== 'DRAFT') {
@@ -566,15 +566,18 @@ const updatePurchaseOrder = async (req, res) => {
             discountType,
             discountValue,
             freightAmount,
+            freightCharges,
             insuranceAmount,
+            insuranceCharges,
             otherChargesAmount,
+            otherCharges,
             otherChargesLabel,
             gstTreatment,
             gstRate,
             autoRoundOff
         } = req.body;
 
-        if (supplier) {
+        if (!hasGrn && supplier) {
             const supplierDoc = await Supplier.findOne({ _id: supplier, tenant: tenantId });
             if (!supplierDoc) {
                 return res.status(400).json({
@@ -585,7 +588,7 @@ const updatePurchaseOrder = async (req, res) => {
             purchaseOrder.supplier = supplier;
         }
 
-        if (deliveryLocation !== undefined) {
+        if (!hasGrn && deliveryLocation !== undefined) {
             if (deliveryLocation) {
                 const locationDoc = await Location.findOne({ _id: deliveryLocation, tenant: tenantId });
                 if (!locationDoc) {
@@ -600,10 +603,10 @@ const updatePurchaseOrder = async (req, res) => {
             }
         }
 
-        if (poDate) purchaseOrder.poDate = poDate;
-        if (expectedDelivery) purchaseOrder.expectedDelivery = expectedDelivery;
+        if (!hasGrn && poDate) purchaseOrder.poDate = poDate;
+        if (!hasGrn && expectedDelivery) purchaseOrder.expectedDelivery = expectedDelivery;
         if (notes !== undefined) purchaseOrder.notes = notes;
-        if (status) {
+        if (!hasGrn && status) {
             if (status === 'SENT_TO_SUPPLIER' && purchaseOrder.status !== 'SENT_TO_SUPPLIER') {
                 return res.status(400).json({
                     success: false,
@@ -620,7 +623,7 @@ const updatePurchaseOrder = async (req, res) => {
             }
         }
 
-        if (items !== undefined) {
+        if (!hasGrn && items !== undefined) {
             if (!Array.isArray(items) || items.length === 0) {
                 return res.status(400).json({
                     success: false,
@@ -679,13 +682,16 @@ const updatePurchaseOrder = async (req, res) => {
         }
 
         const existingItemsSubtotal = (purchaseOrder.items || []).reduce((s, it) => s + (Number(it.orderedQuantity || 0) * Number(it.ratePerUnit || 0)), 0);
+        const resolvedFreight = freightAmount !== undefined ? freightAmount : (freightCharges !== undefined ? freightCharges : (purchaseOrder.freightAmount || 0));
+        const resolvedInsurance = insuranceAmount !== undefined ? insuranceAmount : (insuranceCharges !== undefined ? insuranceCharges : (purchaseOrder.insuranceAmount || 0));
+        const resolvedOther = otherChargesAmount !== undefined ? otherChargesAmount : (otherCharges !== undefined ? otherCharges : (purchaseOrder.otherChargesAmount || 0));
         const totalsCalc = computeDocumentTotals({
             itemsSubtotal: purchaseOrder.itemsSubtotal > 0 ? purchaseOrder.itemsSubtotal : existingItemsSubtotal,
             discountType: discountType !== undefined ? discountType : (purchaseOrder.discountType || 'FIXED'),
             discountValue: discountValue !== undefined ? discountValue : (purchaseOrder.discountValue || 0),
-            freightAmount: freightAmount !== undefined ? freightAmount : (purchaseOrder.freightAmount || 0),
-            insuranceAmount: insuranceAmount !== undefined ? insuranceAmount : (purchaseOrder.insuranceAmount || 0),
-            otherChargesAmount: otherChargesAmount !== undefined ? otherChargesAmount : (purchaseOrder.otherChargesAmount || 0),
+            freightAmount: resolvedFreight,
+            insuranceAmount: resolvedInsurance,
+            otherChargesAmount: resolvedOther,
             otherChargesLabel: otherChargesLabel !== undefined ? otherChargesLabel : (purchaseOrder.otherChargesLabel || ''),
             gstTreatment: gstTreatment !== undefined ? gstTreatment : (purchaseOrder.gstTreatment || 'TAXABLE'),
             gstRate: gstRate !== undefined ? gstRate : (purchaseOrder.gstRate ?? 18),
@@ -711,7 +717,16 @@ const updatePurchaseOrder = async (req, res) => {
         purchaseOrder.roundOff = totalsCalc.roundOff;
         purchaseOrder.grandTotal = totalsCalc.grandTotal;
         purchaseOrder.totalValue = totalsCalc.grandTotal;
-        purchaseOrder.balanceAmount = Math.max(0, Number((totalsCalc.grandTotal - Number(purchaseOrder.paidAmount || 0)).toFixed(2)));
+
+        const paidAmount = Number(purchaseOrder.paidAmount || 0);
+        purchaseOrder.balanceAmount = Math.max(0, Number((totalsCalc.grandTotal - paidAmount).toFixed(2)));
+        if (paidAmount <= 0) {
+            purchaseOrder.paymentStatus = 'UNPAID';
+        } else if (paidAmount + 0.01 < totalsCalc.grandTotal) {
+            purchaseOrder.paymentStatus = 'PARTIALLY_PAID';
+        } else {
+            purchaseOrder.paymentStatus = 'PAID';
+        }
 
         await purchaseOrder.save();
 
@@ -1251,7 +1266,7 @@ const recordPoPayment = async (req, res) => {
             });
         }
 
-        const totalValue = Number(po.grandTotal ?? po.totalValue ?? po.totalAmount ?? 0);
+        const totalValue = resolvePoGrandTotal(po);
         const currentPaid = Number(po.paidAmount || 0);
         let remainingBalance = Math.max(0, Math.round((totalValue - currentPaid) * 100) / 100);
 
@@ -1415,7 +1430,7 @@ const getPayablesSummary = async (req, res) => {
                 status: { $nin: ['CANCELLED', 'REJECTED'] }
             })
                 .populate('supplier', 'paymentTerms advanceBalance')
-                .select('status items totalValue grandTotal paidAmount balanceAmount dueDate poDate createdAt paymentStatus supplier')
+                .select('status items itemsSubtotal discountType discountValue discountAmount freightAmount insuranceAmount otherChargesAmount gstTreatment gstRate autoRoundOff roundOff totalValue grandTotal paidAmount balanceAmount dueDate poDate createdAt paymentStatus supplier')
                 .lean(),
             Supplier.find({ tenant: tenantId, isActive: true, advanceBalance: { $gt: 0 } })
                 .select('advanceBalance')
@@ -1428,23 +1443,25 @@ const getPayablesSummary = async (req, res) => {
         const now = new Date();
 
         pos.forEach((po) => {
-            const payable = computePoPayableValues(po);
+            const grandTotal = resolvePoGrandTotal(po);
+            const paidAmount = Math.min(grandTotal, Number(po.paidAmount || 0));
+            const balanceDue = Math.max(0, Number((grandTotal - paidAmount).toFixed(2)));
             const overdue = computeOverdueInfo({
-                totalAmount: payable.receivedValue,
-                paidAmount: payable.paidAmount,
+                totalAmount: grandTotal,
+                paidAmount,
                 docDate: po.poDate || po.createdAt,
                 docDueDate: po.dueDate || null,
                 paymentTerms: po.supplier?.paymentTerms,
                 now
             });
 
-            if (payable.payableBalance > 0.0001) {
-                totalPayable += payable.payableBalance;
+            if (balanceDue > 0.01) {
+                totalPayable += balanceDue;
                 if (po.supplier) {
                     suppliersWithDues.add(String(po.supplier._id || po.supplier));
                 }
                 if (overdue.isOverdue) {
-                    overdueAmount += payable.payableBalance;
+                    overdueAmount += balanceDue;
                 }
             }
         });
@@ -1523,25 +1540,28 @@ const getSupplierOutstanding = async (req, res) => {
             ensureSuppEntry(suppId, po.supplier);
 
             const payable = computePoPayableValues(po);
+            const grandTotal = resolvePoGrandTotal(po);
+            const paidAmount = Math.min(grandTotal, Number(po.paidAmount || 0));
+            const balanceDue = Math.max(0, Number((grandTotal - paidAmount).toFixed(2)));
             const overdue = computeOverdueInfo({
-                totalAmount: payable.receivedValue,
-                paidAmount: payable.paidAmount,
+                totalAmount: grandTotal,
+                paidAmount,
                 docDate: po.poDate || po.createdAt,
                 docDueDate: po.dueDate || null,
                 paymentTerms: po.supplier?.paymentTerms,
                 now
             });
 
-            supplierMap[suppId].totalPurchased += payable.poValue;
+            supplierMap[suppId].totalPurchased += grandTotal;
             supplierMap[suppId].totalReceived += payable.receivedValue;
-            supplierMap[suppId].totalPaid += payable.paidAmount;
-            supplierMap[suppId].balance += payable.payableBalance;
+            supplierMap[suppId].totalPaid += paidAmount;
+            supplierMap[suppId].balance += balanceDue;
             supplierMap[suppId].poCount += 1;
 
-            if (payable.payableBalance > 0.0001) {
+            if (balanceDue > 0.01) {
                 supplierMap[suppId].unpaidPoCount += 1;
                 if (overdue.isOverdue) {
-                    supplierMap[suppId].overdueAmount += payable.payableBalance;
+                    supplierMap[suppId].overdueAmount += balanceDue;
                 }
             }
         });

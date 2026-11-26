@@ -8,7 +8,13 @@ import { getTodayLocalDateString, getFutureLocalDateString } from '../../utils/d
 import { computeDocumentTotals } from '../../utils/chargesHelper';
 import ChargesAndAdjustmentsSection from '../shared/ChargesAndAdjustmentsSection';
 
-export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, editPo, financialsOnly = false }) {
+export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, editPo }) {
+    const hasGrn = Boolean(editPo) && (
+        Number(editPo.totalReceivedQty || 0) > 0 ||
+        (Array.isArray(editPo.grns) && editPo.grns.length > 0) ||
+        (Array.isArray(editPo.items) && editPo.items.some((it) => Number(it.receivedQuantity || 0) > 0)) ||
+        ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'PARTIALLY RECEIVED', 'FULLY RECEIVED'].includes(String(editPo.status || '').toUpperCase())
+    );
     const [suppliers, setSuppliers] = useState([]);
     const [locations, setLocations] = useState([]);
     const [rawMaterials, setRawMaterials] = useState([]);
@@ -233,36 +239,6 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
             return;
         }
 
-        if (financialsOnly && editPo?._id) {
-            try {
-                setIsSubmitting(true);
-                const chargesPayload = {
-                    gstTreatment,
-                    gstRate: gstTreatment === 'EXEMPT' ? 0 : Number(gstRate ?? 18),
-                    discountType: charges.discountType,
-                    discountValue: Number(charges.discountValue || 0),
-                    freightAmount: Number(charges.freightAmount || 0),
-                    insuranceAmount: Number(charges.insuranceAmount || 0),
-                    otherChargesAmount: Number(charges.otherChargesAmount || 0),
-                    otherChargesLabel: charges.otherChargesLabel.trim(),
-                    autoRoundOff: charges.autoRoundOff !== false
-                };
-                const res = await axiosInstance.patch(`/purchase-orders/${editPo._id}/charges`, chargesPayload);
-                if (res.data?.success) {
-                    const poNum = res.data.data?.poNumber || editPo.poNumber || '';
-                    toast.success(`Charges & GST updated for ${poNum}!`);
-                    if (onSuccess) onSuccess();
-                    onClose();
-                }
-            } catch (err) {
-                console.error('Error updating Purchase Order charges:', err);
-                toast.error(err.response?.data?.message || 'Failed to update PO charges & GST');
-            } finally {
-                setIsSubmitting(false);
-            }
-            return;
-        }
-
         // Determine target status when editing existing PO
         let statusToSend = targetStatus;
         if (editPo?._id) {
@@ -272,8 +248,8 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                 );
                 if (!confirmed) return;
                 statusToSend = 'SENT_TO_SUPPLIER';
-            } else if (editPo.status === 'PENDING_APPROVAL') {
-                statusToSend = 'PENDING_APPROVAL';
+            } else if (['PENDING_APPROVAL', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED'].includes(editPo.status)) {
+                statusToSend = editPo.status;
             }
         }
 
@@ -317,6 +293,8 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                 if (editPo) {
                     if (editPo.status === 'SENT_TO_SUPPLIER') {
                         actionMsg = `Purchase Order ${poNum} updated successfully! Remember to notify the supplier.`;
+                    } else if (hasGrn) {
+                        actionMsg = `Purchase Order ${poNum} GST & charges updated successfully!`;
                     } else if (editPo.status === 'PENDING_APPROVAL') {
                         actionMsg = `Pending Purchase Order ${poNum} updated successfully!`;
                     } else if (targetStatus === 'DRAFT') {
@@ -345,16 +323,10 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
         <SlideOverPanel
             isOpen={isOpen}
             onClose={onClose}
-            title={
-                financialsOnly
-                    ? `Edit Charges & GST (${editPo?.poNumber || ''})`
-                    : editPo
-                        ? `Edit Purchase Order (${editPo.poNumber || ''})`
-                        : "Create Purchase Order"
-            }
+            title={editPo ? `Edit Purchase Order (${editPo.poNumber || ''})` : "Create Purchase Order"}
             subtitle={
-                financialsOnly
-                    ? "Update GST, discount, freight, insurance, or other charges (items & quantities are locked)"
+                hasGrn
+                    ? "Update GST, charges & adjustments (items & quantities are locked after GRN)"
                     : editPo
                         ? (editPo.status === 'SENT_TO_SUPPLIER'
                             ? "Correct PO details before delivery arrives (Sent to Supplier)"
@@ -365,9 +337,9 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
             }
         >
             <form onSubmit={(e) => { e.preventDefault(); submitOrder(editPo?.status || 'PENDING_APPROVAL'); }} className="space-y-4 font-sans text-xs">
-                {financialsOnly && (
+                {hasGrn && (
                     <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-[11px] font-semibold">
-                        Items, quantities, and supplier are locked because this PO is already approved/received. Only GST and charges/adjustments can be updated.
+                        Items &amp; quantities are locked because GRN stock has been received. You can still update GST, Charges &amp; Adjustments.
                     </div>
                 )}
                 {/* Supplier Selection */}
@@ -383,7 +355,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                     ) : (
                         <SearchableSelect
                             required
-                            disabled={financialsOnly}
+                            disabled={hasGrn}
                             value={supplier}
                             onChange={(val) => setSupplier(val)}
                             placeholder="-- Select Supplier --"
@@ -409,7 +381,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <input
                             type="date"
                             value={poDate}
-                            disabled={financialsOnly}
+                            disabled={hasGrn}
                             onChange={(e) => setPoDate(e.target.value)}
                             className="border border-border rounded p-2 text-xs w-full bg-card-bg text-text-main font-mono font-bold focus:outline-none focus:border-primary cursor-pointer disabled:opacity-60"
                             required
@@ -423,7 +395,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <input
                             type="date"
                             required
-                            disabled={financialsOnly}
+                            disabled={hasGrn}
                             value={expectedDelivery}
                             onChange={handleExpectedDeliveryChange}
                             className="w-full border border-border rounded-md p-2 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-60"
@@ -437,7 +409,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         Delivery Location
                     </label>
                     <SearchableSelect
-                        disabled={financialsOnly}
+                        disabled={hasGrn}
                         value={deliveryLocation}
                         onChange={(val) => setDeliveryLocation(val)}
                         placeholder="-- Select Location --"
@@ -459,7 +431,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
                             Raw Material Items List ({items.length}) *
                         </label>
-                        {!financialsOnly && (
+                        {!hasGrn && (
                             <button
                                 type="button"
                                 onClick={handleAddItemRow}
@@ -478,7 +450,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                                     <span className="text-[10px] font-extrabold uppercase text-text-muted">
                                         ITEM #{idx + 1}
                                     </span>
-                                    {!financialsOnly && (
+                                    {!hasGrn && (
                                         <button
                                             type="button"
                                             onClick={() => handleRemoveItemRow(idx)}
@@ -495,7 +467,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                                     </label>
                                     <SearchableSelect
                                         required
-                                        disabled={financialsOnly}
+                                        disabled={hasGrn}
                                         value={item.rawMaterial}
                                         onChange={(val) => handleItemChange(idx, 'rawMaterial', val)}
                                         placeholder="-- Select Material --"
@@ -525,13 +497,13 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                                                 step="0.001"
                                                 min="0.001"
                                                 required
-                                                disabled={financialsOnly}
+                                                disabled={hasGrn}
                                                 value={item.orderedQuantity}
                                                 onChange={(e) => handleItemChange(idx, 'orderedQuantity', e.target.value)}
                                                 className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary disabled:opacity-60"
                                             />
                                             <select
-                                                disabled={financialsOnly}
+                                                disabled={hasGrn}
                                                 value={item.unit || 'Kg'}
                                                 onChange={(e) => handleItemChange(idx, 'unit', e.target.value)}
                                                 className="border border-border rounded p-1.5 bg-card-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-60"
@@ -553,7 +525,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                                             step="any"
                                             min="0"
                                             required
-                                            disabled={financialsOnly}
+                                            disabled={hasGrn}
                                             value={item.ratePerUnit}
                                             onChange={(e) => handleItemChange(idx, 'ratePerUnit', e.target.value)}
                                             className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-primary focus:outline-none focus:border-primary disabled:opacity-60"
@@ -659,7 +631,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <span className="text-text-muted font-sans text-xs uppercase">Estimated PO Grand Total:</span>
                         <span className="text-sm text-primary">₹{totalsCalc.grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                     </div>
-                    {financialsOnly && editPo && (
+                    {hasGrn && editPo && (
                         <>
                             <div className="flex justify-between items-center text-xs">
                                 <span className="text-text-muted font-medium">Already Paid:</span>
@@ -684,7 +656,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                     >
                         Cancel
                     </button>
-                    {!financialsOnly && (!editPo || editPo.status === 'DRAFT') && (
+                    {!hasGrn && (!editPo || editPo.status === 'DRAFT') && (
                         <button
                             type="button"
                             disabled={isSubmitting}
@@ -704,8 +676,8 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <ShoppingBag size={15} />
                         <span>
                             {isSubmitting
-                                ? (financialsOnly ? 'Saving Charges...' : (editPo ? 'Saving Changes...' : 'Submitting PO...'))
-                                : (financialsOnly
+                                ? (hasGrn ? 'Saving Charges...' : (editPo ? 'Saving Changes...' : 'Submitting PO...'))
+                                : (hasGrn
                                     ? 'Save Charges & GST'
                                     : (editPo
                                         ? (editPo.status === 'SENT_TO_SUPPLIER'

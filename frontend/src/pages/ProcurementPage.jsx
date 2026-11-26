@@ -21,7 +21,6 @@ export default function ProcurementPage() {
 
     const [isCreatePoOpen, setIsCreatePoOpen] = useState(false);
     const [editPo, setEditPo] = useState(null);
-    const [editChargesOnly, setEditChargesOnly] = useState(false);
     const [selectedPoForGrn, setSelectedPoForGrn] = useState(null);
     const [editGrn, setEditGrn] = useState(null);
     const [isGrnPanelOpen, setIsGrnPanelOpen] = useState(false);
@@ -222,13 +221,17 @@ export default function ProcurementPage() {
         },
         {
             header: 'BALANCE (OUTSTANDING) (₹)',
-            exportValue: (row) => Math.max(0, (row.totalValue !== undefined ? row.totalValue : (row.totalAmount || 0)) - (row.paidAmount || 0)),
+            exportValue: (row) => {
+                const grandTotal = getPoGrandTotal(row);
+                const paid = Number(row.paidAmount || row.amountPaid || 0);
+                return Math.max(0, Number((grandTotal - paid).toFixed(2)));
+            },
             render: (row) => {
-                const total = Number(row.totalValue !== undefined ? row.totalValue : (row.totalAmount || 0));
-                const paid = Number(row.paidAmount || 0);
-                const bal = Math.max(0, total - paid);
+                const grandTotal = getPoGrandTotal(row);
+                const paid = Number(row.paidAmount || row.amountPaid || 0);
+                const bal = Math.max(0, Number((grandTotal - paid).toFixed(2)));
                 return (
-                    <span className={`font-mono font-bold ${bal > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                    <span className={`font-mono font-bold ${bal > 0.01 ? 'text-rose-600' : 'text-emerald-700'}`}>
                         ₹{bal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                     </span>
                 );
@@ -472,7 +475,6 @@ export default function ProcurementPage() {
                             <button
                                 type="button"
                                 onClick={() => {
-                                    setEditChargesOnly(false);
                                     setEditPo(row);
                                     setIsCreatePoOpen(true);
                                 }}
@@ -483,11 +485,10 @@ export default function ProcurementPage() {
                             </button>
                         )}
 
-                        {isAdmin && (row.status === 'PENDING_APPROVAL' || row.status === 'SENT_TO_SUPPLIER') && (
+                        {isAdmin && ['PENDING_APPROVAL', 'SENT_TO_SUPPLIER', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED'].includes(row.status) && (
                             <button
                                 type="button"
                                 onClick={async () => {
-                                    setEditChargesOnly(false);
                                     try {
                                         const res = await axiosInstance.get(`/purchase-orders/${row._id}`);
                                         if (res.data?.success && res.data.data) {
@@ -501,33 +502,9 @@ export default function ProcurementPage() {
                                     setIsCreatePoOpen(true);
                                 }}
                                 className="text-gray-500 hover:text-amber-600 mr-1.5 cursor-pointer"
-                                title={row.status === 'PENDING_APPROVAL' ? "Edit Pending Approval PO" : "Edit Sent to Supplier PO"}
+                                title="Edit Purchase Order"
                             >
                                 <Pencil size={14} />
-                            </button>
-                        )}
-
-                        {isAdmin && (row.status === 'SENT_TO_SUPPLIER' || row.status === 'PARTIALLY_RECEIVED' || row.status === 'FULLY_RECEIVED') && (
-                            <button
-                                type="button"
-                                onClick={async () => {
-                                    setEditChargesOnly(true);
-                                    try {
-                                        const res = await axiosInstance.get(`/purchase-orders/${row._id}`);
-                                        if (res.data?.success && res.data.data) {
-                                            setEditPo(res.data.data);
-                                        } else {
-                                            setEditPo(row);
-                                        }
-                                    } catch {
-                                        setEditPo(row);
-                                    }
-                                    setIsCreatePoOpen(true);
-                                }}
-                                className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap"
-                                title="Edit Charges & GST (Items Locked)"
-                            >
-                                Charges / GST
                             </button>
                         )}
 
@@ -549,10 +526,10 @@ export default function ProcurementPage() {
                                     setSelectedPoForGrn(row);
                                     setIsGrnPanelOpen(true);
                                 }}
-                                className="text-gray-500 hover:text-amber-600 mr-1.5 cursor-pointer"
-                                title="Edit GRN Item Receipts (Tenant Admin Only)"
+                                className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+                                title="Edit Goods Receipt Note (GRN)"
                             >
-                                <Pencil size={14} />
+                                Edit GRN
                             </button>
                         )}
 
@@ -1356,7 +1333,6 @@ export default function ProcurementPage() {
             <button
                 type="button"
                 onClick={() => {
-                    setEditChargesOnly(false);
                     setEditPo(null);
                     setIsCreatePoOpen(true);
                 }}
@@ -1393,11 +1369,9 @@ export default function ProcurementPage() {
             <CreatePurchaseOrderPanel
                 isOpen={isCreatePoOpen}
                 editPo={editPo}
-                financialsOnly={editChargesOnly}
                 onClose={() => {
                     setIsCreatePoOpen(false);
                     setEditPo(null);
-                    setEditChargesOnly(false);
                 }}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />
