@@ -137,6 +137,31 @@ export default function ProcurementPage() {
         return `${qty} ${unit}`;
     };
 
+    const getPoGrandTotal = (row) => {
+        if (Number(row?.grandTotal || 0) > 0) return Number(row.grandTotal);
+        const itemsSub = Number(row?.itemsSubtotal || 0) > 0
+            ? Number(row.itemsSubtotal)
+            : (Array.isArray(row?.items)
+                ? row.items.reduce((s, it) => s + (Number(it.orderedQuantity || 0) * Number(it.ratePerUnit || 0)), 0)
+                : 0);
+        if (itemsSub > 0) {
+            const disc = Number(row?.discountAmount || 0);
+            const charges = Number(row?.freightAmount ?? row?.freightCharges ?? 0)
+                + Number(row?.insuranceAmount ?? row?.insuranceCharges ?? 0)
+                + Number(row?.otherChargesAmount ?? row?.otherCharges ?? 0);
+            const taxable = Math.max(0, itemsSub - disc + charges);
+            const isExempt = String(row?.gstTreatment || 'TAXABLE').toUpperCase() === 'EXEMPT';
+            const rate = isExempt ? 0 : (row?.gstRate !== undefined && row?.gstRate !== null ? Number(row.gstRate) : 18);
+            const gst = Number(row?.gstAmount ?? row?.taxAmount ?? ((taxable * rate) / 100));
+            const raw = taxable + gst;
+            const roundOff = row?.roundOff !== undefined
+                ? Number(row.roundOff)
+                : (row?.autoRoundOff !== false ? Number((Math.round(raw) - raw).toFixed(2)) : 0);
+            return Number((raw + roundOff).toFixed(2));
+        }
+        return Number(row?.poValue || row?.totalAmount || row?.totalValue || 0);
+    };
+
     // ─── Purchase Orders columns ─────────────────────────────────────────────
     const poColumns = [
         {
@@ -179,10 +204,10 @@ export default function ProcurementPage() {
         },
         {
             header: 'PO TOTAL VALUE (₹)',
-            exportValue: (row) => (row.totalValue !== undefined ? row.totalValue : (row.totalAmount || 0)),
+            exportValue: (row) => getPoGrandTotal(row),
             render: (row) => (
                 <span className="font-mono font-bold text-text-main">
-                    ₹{Number(row.totalValue !== undefined ? row.totalValue : (row.totalAmount || 0)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    ₹{getPoGrandTotal(row).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                 </span>
             )
         },
@@ -281,13 +306,13 @@ export default function ProcurementPage() {
         {
             header: 'PAYABLE & DUE',
             exportValue: (row) => {
-                const payableBase = Number(row.grandTotal || row.poValue || row.totalValue || row.totalAmount || 0);
+                const payableBase = getPoGrandTotal(row);
                 const totalPaid = Number(row.paidAmount || row.amountPaid || 0);
                 const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
                 return `${payableBase} / ${row.receivedValue ?? 0} / ${balanceDue}`;
             },
             render: (row) => {
-                const payableBase = Number(row.grandTotal || row.poValue || row.totalValue || row.totalAmount || 0);
+                const payableBase = getPoGrandTotal(row);
                 const rcvVal = Number(row.receivedValue ?? 0);
                 const totalPaid = Number(row.paidAmount || row.amountPaid || 0);
                 const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
@@ -310,7 +335,7 @@ export default function ProcurementPage() {
         {
             header: 'PAYMENT STATUS',
             exportValue: (row) => {
-                const payableBase = Number(row.grandTotal || row.poValue || row.totalValue || row.totalAmount || 0);
+                const payableBase = getPoGrandTotal(row);
                 const totalPaid = Number(row.paidAmount || row.amountPaid || 0);
                 const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
                 if (payableBase > 0 && balanceDue <= 0.01) return 'PAID';
@@ -319,7 +344,7 @@ export default function ProcurementPage() {
                 return 'UNPAID';
             },
             render: (row) => {
-                const payableBase = Number(row.grandTotal || row.poValue || row.totalValue || row.totalAmount || 0);
+                const payableBase = getPoGrandTotal(row);
                 const totalPaid = Number(row.paidAmount || row.amountPaid || 0);
                 const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
                 let status = 'UNPAID';
@@ -403,7 +428,7 @@ export default function ProcurementPage() {
                 const isPendingApproval = row.status === 'PENDING_APPROVAL';
                 const poStatusUpper = String(row.status || '').trim().toUpperCase().replace(/\s+/g, '_');
                 const isApprovedForPayment = !['PENDING_APPROVAL', 'DRAFT', 'REJECTED', 'CANCELLED'].includes(poStatusUpper);
-                const payableBase = Number(row.grandTotal || row.poValue || row.totalValue || row.totalAmount || 0);
+                const payableBase = getPoGrandTotal(row);
                 const totalPaid = Number(row.paidAmount || row.amountPaid || 0);
                 const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
                 const canPay = isApprovedForPayment && balanceDue > 0.01 && row.paymentStatus !== 'PAID';

@@ -46,6 +46,34 @@ const isDateOverdue = (dateVal, now = new Date()) => {
     return d.getTime() < now.getTime();
 };
 
+const resolvePoGrandTotal = (poObj) => {
+    const storedGrand = Number(poObj?.grandTotal || 0);
+    if (storedGrand > 0) return storedGrand;
+    const itemsSub = Number(poObj?.itemsSubtotal || 0) > 0
+        ? Number(poObj.itemsSubtotal)
+        : (Array.isArray(poObj?.items)
+            ? poObj.items.reduce((s, it) => s + (Number(it.orderedQuantity || 0) * Number(it.ratePerUnit || 0)), 0)
+            : 0);
+    if (itemsSub > 0) {
+        const totals = computeDocumentTotals({
+            itemsSubtotal: itemsSub,
+            discountType: poObj?.discountType || 'FIXED',
+            discountValue: poObj?.discountValue || 0,
+            freightAmount: poObj?.freightAmount ?? poObj?.freightCharges ?? 0,
+            insuranceAmount: poObj?.insuranceAmount ?? poObj?.insuranceCharges ?? 0,
+            otherChargesAmount: poObj?.otherChargesAmount ?? poObj?.otherCharges ?? 0,
+            otherChargesLabel: poObj?.otherChargesLabel || '',
+            gstTreatment: poObj?.gstTreatment || 'TAXABLE',
+            gstRate: poObj?.gstRate !== undefined && poObj?.gstRate !== null ? poObj.gstRate : 18,
+            autoRoundOff: poObj?.autoRoundOff !== false
+        });
+        if (!totals.error && totals.grandTotal > 0) {
+            return totals.grandTotal;
+        }
+    }
+    return Math.max(0, Number(poObj?.totalAmount || poObj?.totalValue || 0));
+};
+
 /**
  * Helper function to auto-generate unique PO number per tenant & year
  */
@@ -351,7 +379,8 @@ const getPurchaseOrders = async (req, res) => {
         const enrichedPOs = purchaseOrders.map((po) => {
             const poObj = po.toObject ? po.toObject() : { ...po };
             const payable = computePoPayableValues(poObj);
-            const payableBase = Math.max(Number(poObj.grandTotal || poObj.totalValue || poObj.totalAmount || 0), payable.receivedValue);
+            const grandTotal = resolvePoGrandTotal(poObj);
+            const payableBase = Math.max(grandTotal, payable.receivedValue);
             const totalPaid = Math.min(payableBase, Number(poObj.paidAmount || poObj.amountPaid || 0));
             const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
             const overdue = computeOverdueInfo({
@@ -376,7 +405,9 @@ const getPurchaseOrders = async (req, res) => {
                 }
             }
 
-            poObj.poValue = payable.poValue;
+            poObj.grandTotal = grandTotal;
+            poObj.totalAmount = grandTotal;
+            poObj.poValue = grandTotal;
             poObj.receivedValue = payable.receivedValue;
             poObj.payableBalance = payable.payableBalance;
             poObj.paidAmount = totalPaid;
@@ -680,7 +711,7 @@ const updatePurchaseOrder = async (req, res) => {
         purchaseOrder.roundOff = totalsCalc.roundOff;
         purchaseOrder.grandTotal = totalsCalc.grandTotal;
         purchaseOrder.totalValue = totalsCalc.grandTotal;
-        purchaseOrder.balanceAmount = Math.max(0, totalsCalc.grandTotal - Number(purchaseOrder.paidAmount || 0));
+        purchaseOrder.balanceAmount = Math.max(0, Number((totalsCalc.grandTotal - Number(purchaseOrder.paidAmount || 0)).toFixed(2)));
 
         await purchaseOrder.save();
 
