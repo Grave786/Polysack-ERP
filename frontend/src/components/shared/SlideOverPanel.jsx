@@ -40,13 +40,13 @@ export default function SlideOverPanel({
                 </div>
 
                 {/* Panel Body */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                <div className="flex-1 overflow-y-auto p-6 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                     {children}
                 </div>
 
                 {/* Optional Panel Footer */}
                 {footer && (
-                    <div className="p-4 border-t border-border bg-card-bg flex justify-end gap-3 shrink-0">
+                    <div className="shrink-0 border-t border-slate-200 bg-white px-6 py-4 flex items-center justify-end gap-3">
                         {footer}
                     </div>
                 )}

@@ -51,6 +51,11 @@ const SupplierSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    advanceBalance: {
+        type: Number,
+        default: 0,
+        min: [0, 'Advance balance cannot be negative']
+    },
     isActive: {
         type: Boolean,
         default: true

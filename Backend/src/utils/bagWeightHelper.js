@@ -1,10 +1,11 @@
 /**
  * Shared Finished Bag Weight & Unit Conversion Helper (Backend)
  * Single source of truth for empty bag weight in grams/kg across SO, WO, and Dispatch.
+ * Priority: (a) Finished Good BOM (Kg/g materials), (b) Saved bag weight, (c) Size x GSM estimate.
  * Never uses bagCapacity (fill capacity) for physical bag weight.
  */
 
-const DEFAULT_ALLOWANCE_PCT = 0.05; // 5% stitching & margin allowance
+const DEFAULT_ALLOWANCE_PCT = 0;
 
 /**
  * Convert dimension value to meters.
@@ -19,12 +20,53 @@ const toMeters = (val, unit = 'cm') => {
 };
 
 /**
- * Resolve physical empty bag weight in grams + sanity guard metadata.
+ * Sum per-bag BOM material quantities in Kg (converts g -> Kg; ignores non-weight units like Mtr, Gaze, Pcs).
+ */
+const computeBomWeightKg = (bomDoc, fgDoc = null) => {
+    const mats =
+        (bomDoc && Array.isArray(bomDoc.items) && bomDoc.items.length > 0 ? bomDoc.items : null) ||
+        (bomDoc && Array.isArray(bomDoc.materials) && bomDoc.materials.length > 0 ? bomDoc.materials : null) ||
+        (bomDoc && Array.isArray(bomDoc.rawMaterials) && bomDoc.rawMaterials.length > 0 ? bomDoc.rawMaterials : null) ||
+        (fgDoc && Array.isArray(fgDoc.materialRequirements) && fgDoc.materialRequirements.length > 0 ? fgDoc.materialRequirements : null) ||
+        (fgDoc && Array.isArray(fgDoc.bomItems) && fgDoc.bomItems.length > 0 ? fgDoc.bomItems : null);
+
+    if (!mats || mats.length === 0) return null;
+
+    let totalKg = 0;
+    let hasWeightItem = false;
+
+    for (const m of mats) {
+        const qty = Number(m?.quantityPerUnit ?? m?.quantity ?? 0);
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+
+        const rm = m?.rawMaterial && typeof m.rawMaterial === 'object' ? m.rawMaterial : null;
+        const rawUnit =
+            (rm?.uom && typeof rm.uom === 'object' ? (rm.uom.symbol || rm.uom.abbreviation || rm.uom.name) : rm?.uom) ||
+            m?.unit ||
+            m?.uom ||
+            'kg';
+
+        const u = String(rawUnit || 'kg').trim().toLowerCase();
+        if (['kg', 'kgs', 'kilogram', 'kilograms', 'kilo'].includes(u)) {
+            totalKg += qty;
+            hasWeightItem = true;
+        } else if (['g', 'gm', 'gms', 'gram', 'grams'].includes(u)) {
+            totalKg += qty / 1000;
+            hasWeightItem = true;
+        }
+        // Ignore non-weight units (Mtr, Gaze, Pcs, Roll, etc.)
+    }
+
+    return hasWeightItem && totalKg > 0 ? totalKg : null;
+};
+
+/**
+ * Resolve physical empty bag weight in grams + source + sanity guard metadata.
  *
  * @param {Object} fgDoc - FinishedGood document
- * @param {Object|null} bomDoc - Optional BOM document fallback
+ * @param {Object|null} bomDoc - Optional BOM document
  * @param {Object} options - { allowancePct?: number }
- * @returns {{ weightGrams: number|null, weightKg: number|null, isUnrealistic: boolean, warning: string|null, source: string|null }}
+ * @returns {{ weightGrams: number|null, weightKg: number|null, isUnrealistic: boolean, warning: string|null, source: 'BOM'|'Saved'|'Estimated'|null }}
  */
 const resolveBagWeightSpec = (fgDoc, bomDoc = null, options = {}) => {
     if (!fgDoc || typeof fgDoc !== 'object') {
@@ -38,21 +80,29 @@ const resolveBagWeightSpec = (fgDoc, bomDoc = null, options = {}) => {
     let weightGrams = null;
     let source = null;
 
-    // 1. Saved finished good weight (bagWeightGms, tareWeightGram, weightPerBagGrams, avgBagWeightGms)
-    const savedWeight = Number(
-        fgDoc.bagWeightGms ||
-        fgDoc.tareWeightGram ||
-        fgDoc.weightPerBagGrams ||
-        fgDoc.avgBagWeightGms ||
-        0
-    );
-    if (Number.isFinite(savedWeight) && savedWeight > 0) {
-        weightGrams = Number(savedWeight.toFixed(2));
-        source = 'saved';
+    // 1. (a) Finished Good BOM (single source of truth)
+    const bomKg = computeBomWeightKg(bomDoc, fgDoc);
+    if (bomKg !== null && bomKg > 0) {
+        weightGrams = Number((bomKg * 1000).toFixed(2));
+        source = 'BOM';
     }
 
-    // 2. Computed from dimensions (m) and fabric GSM:
-    //    2 * width(m) * length(m) * fabricGSM * (1 + allowancePct) + liner/lamination weight
+    // 2. (b) Saved finished good weight (bagWeightGms, tareWeightGram, weightPerBagGrams, avgBagWeightGms)
+    if (weightGrams === null) {
+        const savedWeight = Number(
+            fgDoc.bagWeightGms ||
+            fgDoc.tareWeightGram ||
+            fgDoc.weightPerBagGrams ||
+            fgDoc.avgBagWeightGms ||
+            0
+        );
+        if (Number.isFinite(savedWeight) && savedWeight > 0) {
+            weightGrams = Number(savedWeight.toFixed(2));
+            source = 'Saved';
+        }
+    }
+
+    // 3. (c) Computed estimate from dimensions (m) and fabric GSM
     if (weightGrams === null) {
         const gsm = Number(fgDoc.fabricGSM || fgDoc.gsm || fgDoc.fabricGsm || 0);
         const rawW = Number(fgDoc.dimensions?.width || 0);
@@ -73,25 +123,9 @@ const resolveBagWeightSpec = (fgDoc, bomDoc = null, options = {}) => {
                 const totalGrams = Number((withAllowanceGrams + linerWeightGms + extraLaminationGrams).toFixed(2));
                 if (totalGrams > 0) {
                     weightGrams = totalGrams;
-                    source = 'spec';
+                    source = 'Estimated';
                 }
             }
-        }
-    }
-
-    // 3. BOM fallback if provided
-    if (weightGrams === null && bomDoc && Array.isArray(bomDoc.materials || bomDoc.rawMaterials || bomDoc.items)) {
-        const mats = bomDoc.materials || bomDoc.rawMaterials || bomDoc.items;
-        let totalBomWeight = 0;
-        for (const m of mats) {
-            totalBomWeight += Number(m.quantity || m.quantityPerUnit || 0);
-        }
-        if (totalBomWeight >= 0.005 && totalBomWeight <= 2.0) {
-            weightGrams = Number((totalBomWeight * 1000).toFixed(2));
-            source = 'bom';
-        } else if (totalBomWeight >= 5 && totalBomWeight <= 2000) {
-            weightGrams = Number(totalBomWeight.toFixed(2));
-            source = 'bom';
         }
     }
 
@@ -104,7 +138,7 @@ const resolveBagWeightSpec = (fgDoc, bomDoc = null, options = {}) => {
         weightGrams,
         weightKg: Number((weightGrams / 1000).toFixed(6)),
         isUnrealistic,
-        warning: isUnrealistic ? 'Please check the bag size, GSM or weight in Master Data' : null,
+        warning: isUnrealistic ? 'Please check the BOM or bag weight in Master Data' : null,
         source
     };
 };

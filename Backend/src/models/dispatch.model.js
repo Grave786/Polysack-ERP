@@ -20,6 +20,14 @@ const DispatchItemSchema = new mongoose.Schema({
         type: Number,
         default: null
     },
+    dispatchedPcs: {
+        type: Number,
+        default: null
+    },
+    isKgManual: {
+        type: Boolean,
+        default: false
+    },
     dispatchedBales: {
         type: Number,
         default: null

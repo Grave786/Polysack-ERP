@@ -40,8 +40,13 @@ export default function LogInteractionModal({ isOpen, onClose, onSuccess, editDa
             else if (initialType === 'VISIT') initialType = 'Site Visit';
             else if (initialType === 'OTHER' || initialType === 'Other') initialType = 'Other / Escalation';
 
+            const resolvedCustomerId =
+                typeof activeData.customer === 'object' && activeData.customer !== null
+                    ? activeData.customer._id || activeData.customer.id || ''
+                    : activeData.customer || activeData.customerId || '';
+
             setFormData({
-                customerId: activeData.customerId || activeData.customer?._id || activeData.customer || '',
+                customerId: resolvedCustomerId,
                 interactionType: initialType,
                 interactionDate: activeData.interactionDate
                     ? new Date(activeData.interactionDate).toISOString().split('T')[0]

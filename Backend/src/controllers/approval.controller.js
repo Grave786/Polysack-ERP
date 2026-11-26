@@ -3,23 +3,27 @@ const Approval = require('../models/approval.model');
 const User = require('../models/user.model');
 const PurchaseOrder = require('../models/purchaseOrder.model');
 const OrderEnquiry = require('../models/orderEnquiry.model');
-const { isTenantAdmin } = require('../middlewares/rbac.middleware');
+const SalesOrder = require('../models/salesOrder.model');
+const WorkOrder = require('../models/workOrder.model');
+const { hasApprovalPermission } = require('../middlewares/rbac.middleware');
 const {
     getApprovalHandler,
     markApprovalNotificationsRead,
-    syncPendingPurchaseOrderApprovals
+    syncPendingPurchaseOrderApprovals,
+    syncPendingNslApprovals,
+    syncPendingSalesOrderApprovals
 } = require('../services/approval.service');
 
 /**
- * @desc    Get list of approvals with filtering, tabs and pagination (Tenant Admin only)
+ * @desc    Get list of approvals with filtering, tabs and pagination
  * @route   GET /api/approvals
- * @access  Private (Tenant Admin only)
+ * @access  Private (Approval permission / Tenant Admin)
  */
 const getApprovals = async (req, res) => {
     try {
-        const isAdmin = await isTenantAdmin(req.user);
-        if (!isAdmin) {
-            return res.status(403).json({ success: false, message: 'Forbidden: Approvals module is restricted to Tenant Admin only.' });
+        const canApprove = await hasApprovalPermission(req.user);
+        if (!canApprove) {
+            return res.status(403).json({ success: false, message: 'Forbidden: You do not have permission to access Approvals.' });
         }
 
         const tenantId = req.user?.tenant;
@@ -27,11 +31,15 @@ const getApprovals = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
         }
 
-        // Idempotently create missing Approvals for any pending POs in isolated try/catch (Requirement 2)
+        // Idempotently create missing Approvals for any pending POs, NSLs, and Sales Orders
         try {
-            await syncPendingPurchaseOrderApprovals(tenantId);
+            await Promise.all([
+                syncPendingPurchaseOrderApprovals(tenantId),
+                syncPendingNslApprovals(tenantId),
+                syncPendingSalesOrderApprovals(tenantId)
+            ]);
         } catch (syncErr) {
-            console.error('[getApprovals] syncPendingPurchaseOrderApprovals error (non-fatal):', syncErr);
+            console.error('[getApprovals] sync error (non-fatal):', syncErr);
         }
 
         const {
@@ -138,9 +146,9 @@ const getApprovals = async (req, res) => {
  */
 const getPendingCount = async (req, res) => {
     try {
-        const isAdmin = await isTenantAdmin(req.user);
-        if (!isAdmin) {
-            return res.status(403).json({ success: false, message: 'Forbidden: Approvals module is restricted to Tenant Admin only.', count: 0 });
+        const canApprove = await hasApprovalPermission(req.user);
+        if (!canApprove) {
+            return res.status(403).json({ success: false, message: 'Forbidden: Approvals module requires approval permission.', count: 0 });
         }
 
         const tenantId = req.user?.tenant;
@@ -150,9 +158,13 @@ const getPendingCount = async (req, res) => {
 
         // Idempotently create missing Approvals in isolated try/catch
         try {
-            await syncPendingPurchaseOrderApprovals(tenantId);
+            await Promise.all([
+                syncPendingPurchaseOrderApprovals(tenantId),
+                syncPendingNslApprovals(tenantId),
+                syncPendingSalesOrderApprovals(tenantId)
+            ]);
         } catch (syncErr) {
-            console.error('[getPendingCount] syncPendingPurchaseOrderApprovals error (non-fatal):', syncErr);
+            console.error('[getPendingCount] sync error (non-fatal):', syncErr);
         }
 
         const count = await Approval.countDocuments({
@@ -182,9 +194,9 @@ const getPendingCount = async (req, res) => {
  */
 const getApprovalById = async (req, res) => {
     try {
-        const isAdmin = await isTenantAdmin(req.user);
-        if (!isAdmin) {
-            return res.status(403).json({ success: false, message: 'Forbidden: Approvals module is restricted to Tenant Admin only.' });
+        const canApprove = await hasApprovalPermission(req.user);
+        if (!canApprove) {
+            return res.status(403).json({ success: false, message: 'Forbidden: Approvals module requires approval permission.' });
         }
 
         const tenantId = req.user?.tenant;
@@ -232,6 +244,13 @@ const getApprovalById = async (req, res) => {
                         .populate('customer customerRef', 'companyName code name phone email gstin')
                         .lean();
                     if (nslDoc) approval.referenceId = nslDoc;
+                } else if (approval.referenceModel === 'SalesOrder' || approval.type === 'SO') {
+                    const soDoc = await SalesOrder.findById(approval.referenceId._id || approval.referenceId)
+                        .populate('customer', 'companyName name code contactPerson phone email gstin')
+                        .populate('dispatchLocation', 'name code type')
+                        .populate({ path: 'items.finishedGood', select: 'name code uom', populate: { path: 'uom', select: 'name symbol' } })
+                        .lean();
+                    if (soDoc) approval.referenceId = soDoc;
                 } else if (approval.referenceModel === 'WorkOrder' || approval.type === 'CONTINUATION_WO') {
                     const woDoc = await WorkOrder.findById(approval.referenceId._id || approval.referenceId)
                         .populate('customer', 'companyName code contactPerson phone')
@@ -274,11 +293,11 @@ const approveApproval = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
         }
 
-        const hasAccess = await isTenantAdmin(req.user);
+        const hasAccess = await hasApprovalPermission(req.user);
         if (!hasAccess) {
             return res.status(403).json({
                 success: false,
-                message: 'Forbidden: Only Tenant Admins can approve requests.'
+                message: 'Forbidden: You do not have permission to approve requests.'
             });
         }
 
@@ -288,27 +307,35 @@ const approveApproval = async (req, res) => {
         }
         const targetObjectId = new mongoose.Types.ObjectId(idParam);
 
+        const approveQuery = {
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            status: 'Pending',
+            $or: [
+                { _id: targetObjectId },
+                { referenceId: targetObjectId }
+            ]
+        };
+        const approveUpdate = {
+            $set: {
+                status: 'Approved',
+                decidedBy: new mongoose.Types.ObjectId(req.user._id || req.user.id),
+                decidedAt: new Date(),
+                remarks: req.body.remarks ? req.body.remarks.trim() : 'Approved',
+                nextReminderAt: null
+            }
+        };
+
         // Prevent double decisions: update only if status is strictly "Pending"
-        const updatedApproval = await Approval.findOneAndUpdate(
-            {
-                tenant: new mongoose.Types.ObjectId(tenantId),
-                status: 'Pending',
-                $or: [
-                    { _id: targetObjectId },
-                    { referenceId: targetObjectId }
-                ]
-            },
-            {
-                $set: {
-                    status: 'Approved',
-                    decidedBy: new mongoose.Types.ObjectId(req.user._id || req.user.id),
-                    decidedAt: new Date(),
-                    remarks: req.body.remarks ? req.body.remarks.trim() : 'Approved',
-                    nextReminderAt: null
-                }
-            },
-            { new: true }
-        );
+        let updatedApproval = await Approval.findOneAndUpdate(approveQuery, approveUpdate, { new: true });
+
+        if (!updatedApproval) {
+            await Promise.all([
+                syncPendingNslApprovals(tenantId),
+                syncPendingSalesOrderApprovals(tenantId),
+                syncPendingPurchaseOrderApprovals(tenantId)
+            ]).catch(() => {});
+            updatedApproval = await Approval.findOneAndUpdate(approveQuery, approveUpdate, { new: true });
+        }
 
         if (!updatedApproval) {
             const existing = await Approval.findOne({
@@ -378,11 +405,11 @@ const rejectApproval = async (req, res) => {
             });
         }
 
-        const hasAccess = await isTenantAdmin(req.user);
+        const hasAccess = await hasApprovalPermission(req.user);
         if (!hasAccess) {
             return res.status(403).json({
                 success: false,
-                message: 'Forbidden: Only Tenant Admins can reject requests.'
+                message: 'Forbidden: You do not have permission to reject requests.'
             });
         }
 
@@ -392,27 +419,35 @@ const rejectApproval = async (req, res) => {
         }
         const targetObjectId = new mongoose.Types.ObjectId(idParam);
 
+        const rejectQuery = {
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            status: 'Pending',
+            $or: [
+                { _id: targetObjectId },
+                { referenceId: targetObjectId }
+            ]
+        };
+        const rejectUpdate = {
+            $set: {
+                status: 'Rejected',
+                decidedBy: new mongoose.Types.ObjectId(req.user._id || req.user.id),
+                decidedAt: new Date(),
+                remarks: remarks,
+                nextReminderAt: null
+            }
+        };
+
         // Prevent double decisions: update only if status is strictly "Pending"
-        const updatedApproval = await Approval.findOneAndUpdate(
-            {
-                tenant: new mongoose.Types.ObjectId(tenantId),
-                status: 'Pending',
-                $or: [
-                    { _id: targetObjectId },
-                    { referenceId: targetObjectId }
-                ]
-            },
-            {
-                $set: {
-                    status: 'Rejected',
-                    decidedBy: new mongoose.Types.ObjectId(req.user._id || req.user.id),
-                    decidedAt: new Date(),
-                    remarks: remarks,
-                    nextReminderAt: null
-                }
-            },
-            { new: true }
-        );
+        let updatedApproval = await Approval.findOneAndUpdate(rejectQuery, rejectUpdate, { new: true });
+
+        if (!updatedApproval) {
+            await Promise.all([
+                syncPendingNslApprovals(tenantId),
+                syncPendingSalesOrderApprovals(tenantId),
+                syncPendingPurchaseOrderApprovals(tenantId)
+            ]).catch(() => {});
+            updatedApproval = await Approval.findOneAndUpdate(rejectQuery, rejectUpdate, { new: true });
+        }
 
         if (!updatedApproval) {
             const existing = await Approval.findOne({
@@ -480,9 +515,9 @@ const cancelApproval = async (req, res) => {
         }
         const targetObjectId = new mongoose.Types.ObjectId(idParam);
 
-        const isAdmin = await isTenantAdmin(req.user);
+        const isAdmin = await hasApprovalPermission(req.user);
         if (!isAdmin) {
-            return res.status(403).json({ success: false, message: 'Forbidden: Only Tenant Admins can cancel approval requests.' });
+            return res.status(403).json({ success: false, message: 'Forbidden: Only authorized approvers can cancel approval requests.' });
         }
 
         const updatedApproval = await Approval.findOneAndUpdate(

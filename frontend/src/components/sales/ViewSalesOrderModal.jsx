@@ -1,15 +1,20 @@
-import { ShoppingCart, Calendar, User, MapPin, Package, CheckCircle2, FileText, Factory, ExternalLink, Clock, XCircle, Truck } from 'lucide-react';
+import { ShoppingCart, Calendar, User, MapPin, Package, CheckCircle2, FileText, Factory, ExternalLink, Clock, XCircle, Truck, Check, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatDate } from '../../utils/dateUtils';
 import { useAuthStore } from '../../store/authStore';
-import { hasModulePermission } from '../../utils/permissionUtils';
+import { hasModulePermission, hasApprovalPermission } from '../../utils/permissionUtils';
 
-export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGenerateInvoice, onEdit, onQuickStatusChange, onCancelOrder }) {
+export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGenerateInvoice, onEdit, onQuickStatusChange, onCancelOrder, onApproveSo, onRejectSo }) {
     const navigate = useNavigate();
     const user = useAuthStore((state) => state.user);
     const canAccessProduction = hasModulePermission(user, 'PRODUCTION');
+    const canApprove = hasApprovalPermission(user);
 
     if (!isOpen || !salesOrder) return null;
+
+    const approvalStatus = salesOrder.soApprovalStatus || 'Not Required';
+    const isPendingApproval = approvalStatus === 'Pending Approval';
+    const isRejectedApproval = approvalStatus === 'Rejected';
 
     const customer = typeof salesOrder.customer === 'object' ? salesOrder.customer : null;
     const se = typeof salesOrder.sourceEnquiry === 'object' ? salesOrder.sourceEnquiry : null;
@@ -55,6 +60,16 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                             <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/10 text-primary border border-primary/20">
                                 {salesOrder.status || 'CONFIRMED'}
                             </span>
+                            {isPendingApproval && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-300">
+                                    Pending Approval
+                                </span>
+                            )}
+                            {isRejectedApproval && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300">
+                                    Approval Rejected
+                                </span>
+                            )}
                             {isGstExempt && (
                                 <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
                                     GST Exempt
@@ -162,18 +177,46 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                     </div>
                     <div className="text-right space-y-0.5">
                         <div className="text-[11px] text-text-muted">
-                            Taxable Value: <span className="font-mono font-bold text-text-main">₹{subtotal.toLocaleString()}</span>
+                            Items Subtotal: <span className="font-mono font-bold text-text-main">₹{Number(salesOrder.itemsSubtotal || subtotal).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                        </div>
+                        {Number(salesOrder.discountAmount || 0) > 0 && (
+                            <div className="text-[11px] text-emerald-700">
+                                Less: Discount{salesOrder.discountType === 'PERCENT' ? ` (${salesOrder.discountValue}%)` : ''}: <span className="font-mono font-bold">-₹{Number(salesOrder.discountAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            </div>
+                        )}
+                        {Number(salesOrder.freightAmount || 0) > 0 && (
+                            <div className="text-[11px] text-text-muted">
+                                Freight / Transport: <span className="font-mono font-semibold text-text-main">+₹{Number(salesOrder.freightAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            </div>
+                        )}
+                        {Number(salesOrder.insuranceAmount || 0) > 0 && (
+                            <div className="text-[11px] text-text-muted">
+                                Insurance Charges: <span className="font-mono font-semibold text-text-main">+₹{Number(salesOrder.insuranceAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            </div>
+                        )}
+                        {Number(salesOrder.otherChargesAmount || 0) > 0 && (
+                            <div className="text-[11px] text-text-muted">
+                                {salesOrder.otherChargesLabel ? `Other (${salesOrder.otherChargesLabel}):` : 'Other Charges:'} <span className="font-mono font-semibold text-text-main">+₹{Number(salesOrder.otherChargesAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            </div>
+                        )}
+                        <div className="text-[11px] text-text-muted">
+                            Taxable Value: <span className="font-mono font-bold text-text-main">₹{Number(salesOrder.taxableValue || subtotal).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                         </div>
                         <div className="text-[11px] text-text-muted">
-                            {isGstExempt ? 'GST (Exempt):' : `Estimated GST (${gstRate}%):`} <span className="font-mono font-bold text-text-main">₹{gstAmount.toLocaleString()}</span>
+                            {isGstExempt ? 'GST (Exempt):' : `Estimated GST (${gstRate}%):`} <span className="font-mono font-bold text-text-main">₹{gstAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                         </div>
+                        {Number(salesOrder.roundOff || 0) !== 0 && (
+                            <div className="text-[11px] text-text-muted">
+                                Round Off: <span className="font-mono font-semibold text-text-main">{Number(salesOrder.roundOff) > 0 ? `+₹${Number(salesOrder.roundOff).toFixed(2)}` : `-₹${Math.abs(Number(salesOrder.roundOff)).toFixed(2)}`}</span>
+                            </div>
+                        )}
                         {isGstExempt && salesOrder.exemptionReason && (
                             <div className="text-[10px] text-emerald-800 font-semibold">
                                 Exemption Reason: {salesOrder.exemptionReason}
                             </div>
                         )}
                         <div className="text-xs font-bold text-text-main pt-1 border-t border-border/80">
-                            Grand Total: <span className="font-mono font-extrabold text-sm text-primary">₹{grandTotal.toLocaleString()}</span>
+                            Grand Total: <span className="font-mono font-extrabold text-sm text-primary">₹{grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                         </div>
                     </div>
                 </div>
@@ -200,7 +243,7 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                                 {salesOrder.productionStatus || 'Not Planned'}
                             </span>
                         </div>
-                        {canAccessProduction && salesOrder.status === 'CONFIRMED' && salesOrder.productionStatus !== 'Fully Planned' && salesOrder.productionStatus !== 'Production Completed' && (
+                        {canAccessProduction && !isPendingApproval && !isRejectedApproval && salesOrder.status === 'CONFIRMED' && salesOrder.productionStatus !== 'Fully Planned' && salesOrder.productionStatus !== 'Production Completed' && (
                             <button
                                 type="button"
                                 onClick={() => {
@@ -347,16 +390,27 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                                 Edit Sales Order
                             </button>
                         )}
-                        {salesOrder.status === 'CONFIRMED' && onQuickStatusChange && (
-                            <button
-                                type="button"
-                                onClick={() => onQuickStatusChange(salesOrder, 'READY_FOR_DISPATCH')}
-                                className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-800 font-bold rounded-lg text-xs transition-colors cursor-pointer flex items-center gap-1"
-                            >
-                                <Truck size={13} />
-                                <span>Mark Ready for Dispatch</span>
-                            </button>
-                        )}
+                        {salesOrder.status === 'CONFIRMED' && !isPendingApproval && !isRejectedApproval && onQuickStatusChange && (() => {
+                            const isProductionCompleted =
+                                ['Production Completed', 'Completed', 'Produced'].includes(salesOrder.productionStatus) ||
+                                ['Production Completed', 'Completed', 'Produced'].includes(salesOrder.productionSummary?.status);
+                            return (
+                                <button
+                                    type="button"
+                                    disabled={!isProductionCompleted}
+                                    onClick={() => isProductionCompleted && onQuickStatusChange(salesOrder, 'READY_FOR_DISPATCH')}
+                                    title={isProductionCompleted ? 'Mark Ready for Dispatch' : 'Complete production before marking ready for dispatch'}
+                                    className={`px-3 py-1.5 border rounded-lg text-xs font-bold transition-colors flex items-center gap-1 ${
+                                        isProductionCompleted
+                                            ? 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-800 cursor-pointer'
+                                            : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-70'
+                                    }`}
+                                >
+                                    <Truck size={13} />
+                                    <span>Mark Ready for Dispatch</span>
+                                </button>
+                            );
+                        })()}
                         {salesOrder.status === 'READY_FOR_DISPATCH' && onQuickStatusChange && (
                             <button
                                 type="button"
@@ -379,7 +433,27 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                         )}
                     </div>
                     <div className="flex items-center gap-2">
-                        {salesOrder.status !== 'DRAFT' && salesOrder.status !== 'CANCELLED' && onGenerateInvoice && (
+                        {isPendingApproval && canApprove && onRejectSo && (
+                            <button
+                                type="button"
+                                onClick={() => onRejectSo(salesOrder)}
+                                className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer flex items-center gap-1"
+                            >
+                                <X size={13} />
+                                <span>Reject</span>
+                            </button>
+                        )}
+                        {isPendingApproval && canApprove && onApproveSo && (
+                            <button
+                                type="button"
+                                onClick={() => onApproveSo(salesOrder)}
+                                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs transition-all shadow-xs cursor-pointer flex items-center gap-1"
+                            >
+                                <Check size={13} />
+                                <span>Approve</span>
+                            </button>
+                        )}
+                        {salesOrder.status !== 'DRAFT' && salesOrder.status !== 'CANCELLED' && !isPendingApproval && !isRejectedApproval && onGenerateInvoice && (
                             <button
                                 type="button"
                                 onClick={() => {

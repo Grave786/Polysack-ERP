@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import axiosInstance from '../api/axiosInstance';
 import { useAuthStore } from '../store/authStore';
-import { isTenantAdmin } from '../utils/permissionUtils';
+import { hasApprovalPermission } from '../utils/permissionUtils';
 import toast from 'react-hot-toast';
 import { formatDate, formatDateTime } from '../utils/dateUtils';
 
@@ -50,13 +50,11 @@ const getWaitingTime = (dateVal) => {
 
 export default function ApprovalsPage() {
     const user = useAuthStore((state) => state.user);
-    const isAdmin = isTenantAdmin(user);
+    const canDecide = hasApprovalPermission(user);
 
-    if (!isAdmin) {
-        return <Navigate to="/403" state={{ message: "Only Tenant Admin can access the Approvals module." }} replace />;
+    if (!canDecide) {
+        return <Navigate to="/403" state={{ message: "You do not have permission to access the Approvals module." }} replace />;
     }
-
-    const canDecide = true;
 
     const [searchParams, setSearchParams] = useSearchParams();
     const highlightId = searchParams.get('id') || '';
@@ -370,7 +368,8 @@ export default function ApprovalsPage() {
                             className="px-2.5 py-1.5 bg-app-bg border border-border rounded-lg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
                         >
                             <option value="All">All Types</option>
-                            <option value="NSL">NSL (Sales Lead)</option>
+                            <option value="NSL">New Sales Lead / Order Enquiry</option>
+                            <option value="SO">Sales Order</option>
                             <option value="PO">PO (Purchase Order)</option>
                             <option value="CONTINUATION_WO">Continuation WO</option>
                         </select>
@@ -431,8 +430,14 @@ export default function ApprovalsPage() {
                                                 {row.approvalNo}
                                             </td>
                                             <td className="py-3 px-4 whitespace-nowrap">
-                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-50 text-blue-800 border border-blue-200">
-                                                    {row.type}
+                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
+                                                    row.type === 'SO'
+                                                        ? 'bg-purple-50 text-purple-800 border-purple-200'
+                                                        : row.type === 'NSL'
+                                                        ? 'bg-sky-50 text-sky-800 border-sky-200'
+                                                        : 'bg-blue-50 text-blue-800 border-blue-200'
+                                                }`}>
+                                                    {row.type === 'NSL' ? 'New Sales Lead / Order Enquiry' : row.type === 'SO' ? 'Sales Order' : row.type}
                                                 </span>
                                             </td>
                                             <td className="py-3 px-4 font-mono font-semibold text-text-main whitespace-nowrap">
@@ -838,6 +843,13 @@ export default function ApprovalsPage() {
                                         </div>
 
                                         <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Source & Enquiry Date</span>
+                                            <span className="font-semibold text-text-main">
+                                                {viewRecord.referenceId.source === 'Website' ? 'Website' : 'NSL'} • {formatISTDate(viewRecord.referenceId.enquiryDate || viewRecord.referenceId.createdAt)}
+                                            </span>
+                                        </div>
+
+                                        <div>
                                             <span className="text-[10px] uppercase font-bold text-text-muted block">Product Category</span>
                                             <span className="font-extrabold text-text-main">
                                                 {viewRecord.referenceId.productCategory || 'N/A'}
@@ -882,6 +894,95 @@ export default function ApprovalsPage() {
                                             <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Requirement Notes & Specs</span>
                                             <p className="text-xs text-text-main whitespace-pre-wrap font-sans">
                                                 {viewRecord.referenceId.description || viewRecord.referenceId.remarks}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Sales Order Reference Details */}
+                            {viewRecord.type === 'SO' && viewRecord.referenceId && (
+                                <div className="space-y-3">
+                                    <div className="text-[11px] font-extrabold uppercase tracking-widest text-text-muted border-b border-border pb-1">
+                                        Sales Order Details
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg p-3.5 rounded-xl border border-border">
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Customer</span>
+                                            <span className="font-extrabold text-text-main text-sm">
+                                                {viewRecord.referenceId.customer?.companyName || viewRecord.referenceId.customer?.name || 'Customer'}
+                                            </span>
+                                            {viewRecord.referenceId.customer?.code && (
+                                                <div className="text-[11px] text-text-muted font-mono">
+                                                    {viewRecord.referenceId.customer.code}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Grand Total</span>
+                                            <span className="font-mono font-extrabold text-primary text-sm">
+                                                ₹{Number(viewRecord.referenceId.grandTotal ?? viewRecord.referenceId.totalValue ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Order Date</span>
+                                            <span className="font-mono text-text-main font-semibold">
+                                                {formatISTDate(viewRecord.referenceId.orderDate || viewRecord.referenceId.createdAt)}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Delivery Due</span>
+                                            <span className="font-mono text-text-main font-semibold">
+                                                {formatISTDate(viewRecord.referenceId.deliveryDue)}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {Array.isArray(viewRecord.referenceId.items) && viewRecord.referenceId.items.length > 0 && (
+                                        <div className="bg-app-bg rounded-xl border border-border overflow-hidden">
+                                            <div className="px-3 py-2 bg-card-bg border-b border-border text-[10px] font-bold uppercase tracking-wider text-text-muted">
+                                                Ordered Items ({viewRecord.referenceId.items.length})
+                                            </div>
+                                            <table className="w-full text-left text-xs">
+                                                <thead>
+                                                    <tr className="border-b border-border text-[10px] uppercase text-text-muted font-bold">
+                                                        <th className="py-1.5 px-3">Item</th>
+                                                        <th className="py-1.5 px-3">Qty</th>
+                                                        <th className="py-1.5 px-3">Rate (₹)</th>
+                                                        <th className="py-1.5 px-3 text-right">Amount (₹)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-border">
+                                                    {viewRecord.referenceId.items.map((it, idx) => (
+                                                        <tr key={idx} className="hover:bg-card-bg/40">
+                                                            <td className="py-1.5 px-3 font-semibold text-text-main">
+                                                                {it.finishedGood?.name || it.finishedGood?.code || 'Finished Good'}
+                                                            </td>
+                                                            <td className="py-1.5 px-3 font-mono">
+                                                                {Number(it.quantity || 0).toLocaleString('en-IN')} {it.unit || 'Pcs'}
+                                                            </td>
+                                                            <td className="py-1.5 px-3 font-mono">
+                                                                ₹{Number(it.ratePerUnit || 0).toLocaleString('en-IN')}
+                                                            </td>
+                                                            <td className="py-1.5 px-3 font-mono text-right font-bold">
+                                                                ₹{Number((it.quantity || 0) * (it.ratePerUnit || 0)).toLocaleString('en-IN')}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+
+                                    {viewRecord.referenceId.notes && (
+                                        <div className="bg-app-bg p-3 rounded-xl border border-border">
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Notes</span>
+                                            <p className="text-xs text-text-main whitespace-pre-wrap font-sans">
+                                                {viewRecord.referenceId.notes}
                                             </p>
                                         </div>
                                     )}

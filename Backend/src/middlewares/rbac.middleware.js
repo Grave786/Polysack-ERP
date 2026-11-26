@@ -374,11 +374,59 @@ const requireTenantAdmin = async (req, res, next) => {
     }
 };
 
+/**
+ * Determine if a user has approval permission (Tenant Admin by default, or APPROVALS module permission).
+ */
+const hasApprovalPermission = async (user) => {
+    if (!user) return false;
+    if (await isTenantAdmin(user)) return true;
+
+    const userId = user._id || user.id || (typeof user === 'string' ? user : null);
+    let userDoc = user;
+    if (!userDoc.role || typeof userDoc.role !== 'object' || !Array.isArray(userDoc.role.permissions)) {
+        if (userId) {
+            userDoc = await User.findById(userId).populate({
+                path: 'role',
+                populate: { path: 'permissions' }
+            }).lean();
+        }
+    }
+    const perms = userDoc?.role?.permissions || userDoc?.permissions || [];
+    if (!Array.isArray(perms)) return false;
+    return perms.some((p) => {
+        if (!p) return false;
+        const mod = String(p.module || '').toUpperCase().trim();
+        const act = String(p.action || '').toUpperCase().trim();
+        return mod === 'APPROVALS' && ['APPROVE', 'UPDATE', 'CREATE', 'READ'].includes(act);
+    });
+};
+
+const requireApprovalPermission = async (req, res, next) => {
+    try {
+        const allowed = await hasApprovalPermission(req.user);
+        if (!allowed) {
+            return res.status(403).json({
+                success: false,
+                message: 'Forbidden: You do not have approval permission.'
+            });
+        }
+        next();
+    } catch (err) {
+        console.error('Error in requireApprovalPermission middleware:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Internal server error verifying approval access.'
+        });
+    }
+};
+
 module.exports = {
     authenticate,
     checkPermission,
     checkTenantModule,
     clearTenantStatusCache,
     isTenantAdmin,
-    requireTenantAdmin
+    requireTenantAdmin,
+    hasApprovalPermission,
+    requireApprovalPermission
 };

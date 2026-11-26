@@ -7,6 +7,7 @@ import CreateGRNPanel from '../components/procurement/CreateGRNPanel';
 import PrintPOModal from '../components/procurement/PrintPOModal';
 import DetailViewModal from '../components/shared/DetailViewModal';
 import RecordPaymentModal from '../components/sales/RecordPaymentModal';
+import PartyAdvanceModal from '../components/shared/PartyAdvanceModal';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
@@ -28,6 +29,12 @@ export default function ProcurementPage() {
     const [dashboardFilter, setDashboardFilter] = useState(null);
     const [recordingPaymentPo, setRecordingPaymentPo] = useState(null);
     const [payablesSummary, setPayablesSummary] = useState(null);
+    const [partyAdvanceModal, setPartyAdvanceModal] = useState({
+        isOpen: false,
+        partyId: null,
+        partyName: '',
+        mode: 'RECORD'
+    });
 
     // One-time consumption of dashboard redirect params (tab & filter)
     useEffect(() => {
@@ -271,25 +278,70 @@ export default function ProcurementPage() {
             }
         },
         {
-            header: 'PAYMENT STATUS',
-            exportValue: (row) => row.paymentStatus || 'UNPAID',
+            header: 'PAYABLE & DUE',
+            exportValue: (row) => {
+                const payableBase = Number(row.grandTotal || row.poValue || row.totalValue || row.totalAmount || 0);
+                const totalPaid = Number(row.paidAmount || row.amountPaid || 0);
+                const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
+                return `${payableBase} / ${row.receivedValue ?? 0} / ${balanceDue}`;
+            },
             render: (row) => {
-                const status = row.paymentStatus || 'UNPAID';
-                let badgeStyle = 'bg-slate-100 text-slate-800 border-slate-300';
+                const payableBase = Number(row.grandTotal || row.poValue || row.totalValue || row.totalAmount || 0);
+                const rcvVal = Number(row.receivedValue ?? 0);
+                const totalPaid = Number(row.paidAmount || row.amountPaid || 0);
+                const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
+                const dueD = row.effectiveDueDate || row.dueDate;
+                return (
+                    <div className="text-[11px] space-y-0.5 font-mono">
+                        <div>PO: <strong className="text-text-main">₹{payableBase.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong></div>
+                        <div className="text-text-muted">
+                            Rcvd: ₹{rcvVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })} • Paid: ₹{totalPaid.toLocaleString('en-IN', { maximumFractionDigits: 2 })} • Due: <strong className={balanceDue > 0.01 ? 'text-amber-700' : 'text-emerald-700'}>₹{balanceDue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong>
+                        </div>
+                        {dueD && (
+                            <div className={row.isOverdue && balanceDue > 0.01 ? 'text-rose-600 font-bold' : 'text-text-muted'}>
+                                {formatDate(dueD)}{row.isOverdue && balanceDue > 0.01 && row.daysOverdue > 0 ? ` (${row.daysOverdue}d overdue)` : ''}
+                            </div>
+                        )}
+                    </div>
+                );
+            }
+        },
+        {
+            header: 'PAYMENT STATUS',
+            exportValue: (row) => {
+                const payableBase = Number(row.grandTotal || row.poValue || row.totalValue || row.totalAmount || 0);
+                const totalPaid = Number(row.paidAmount || row.amountPaid || 0);
+                const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
+                if (payableBase > 0 && balanceDue <= 0.01) return 'PAID';
+                if (row.isOverdue && balanceDue > 0.01) return 'OVERDUE';
+                if (payableBase > 0 && totalPaid > 0 && balanceDue > 0.01) return 'PARTIALLY_PAID';
+                return 'UNPAID';
+            },
+            render: (row) => {
+                const payableBase = Number(row.grandTotal || row.poValue || row.totalValue || row.totalAmount || 0);
+                const totalPaid = Number(row.paidAmount || row.amountPaid || 0);
+                const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
+                let status = 'UNPAID';
+                if (payableBase > 0 && balanceDue <= 0.01) {
+                    status = 'PAID';
+                } else if (row.isOverdue && balanceDue > 0.01) {
+                    status = 'OVERDUE';
+                } else if (payableBase > 0 && totalPaid > 0 && balanceDue > 0.01) {
+                    status = 'PARTIALLY_PAID';
+                }
+
+                let badgeStyle = 'bg-rose-50 text-rose-700 border-rose-200';
                 let label = 'Unpaid';
 
                 if (status === 'PAID') {
                     badgeStyle = 'bg-emerald-100 text-emerald-800 border-emerald-300';
                     label = 'Paid';
                 } else if (status === 'PARTIALLY_PAID') {
-                    badgeStyle = 'bg-blue-100 text-blue-800 border-blue-300';
+                    badgeStyle = 'bg-amber-100 text-amber-800 border-amber-300';
                     label = 'Partial';
                 } else if (status === 'OVERDUE') {
                     badgeStyle = 'bg-rose-100 text-rose-800 border-rose-300';
                     label = 'Overdue';
-                } else {
-                    badgeStyle = 'bg-amber-100 text-amber-800 border-amber-300';
-                    label = 'Unpaid';
                 }
 
                 return (
@@ -348,25 +400,29 @@ export default function ProcurementPage() {
             render: (row) => {
                 const canReceive = row.status === 'SENT_TO_SUPPLIER' || row.status === 'PARTIALLY_RECEIVED';
                 const isPendingApproval = row.status === 'PENDING_APPROVAL';
-                const bal = row.balanceAmount !== undefined ? row.balanceAmount : Math.max(0, (row.totalValue || 0) - (row.paidAmount || 0));
-                const canPay = bal > 0 && row.status !== 'CANCELLED' && row.status !== 'DRAFT';
+                const poStatusUpper = String(row.status || '').trim().toUpperCase().replace(/\s+/g, '_');
+                const isApprovedForPayment = !['PENDING_APPROVAL', 'DRAFT', 'REJECTED', 'CANCELLED'].includes(poStatusUpper);
+                const payableBase = Number(row.grandTotal || row.poValue || row.totalValue || row.totalAmount || 0);
+                const totalPaid = Number(row.paidAmount || row.amountPaid || 0);
+                const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
+                const canPay = isApprovedForPayment && balanceDue > 0.01 && row.paymentStatus !== 'PAID';
 
                 return (
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
                             onClick={async () => {
+                                setViewRecord(row);
+                                setIsDetailModalOpen(true);
+                                if (!row?._id) return;
                                 try {
                                     const res = await axiosInstance.get(`/purchase-orders/${row._id}`);
                                     if (res.data?.success && res.data.data) {
                                         setViewRecord(res.data.data);
-                                    } else {
-                                        setViewRecord(row);
                                     }
                                 } catch {
-                                    setViewRecord(row);
+                                    // Keep row data if detail fetch fails
                                 }
-                                setIsDetailModalOpen(true);
                             }}
                             className="text-gray-500 hover:text-blue-600 mr-1.5 cursor-pointer"
                             title="View Details"
@@ -561,6 +617,28 @@ export default function ProcurementPage() {
             )
         },
         {
+            header: 'RECEIVED (₹)',
+            align: 'right',
+            sortable: true,
+            exportValue: (row) => row.totalReceived || 0,
+            render: (row) => (
+                <span className="font-mono font-semibold text-xs text-text-main">
+                    ₹{Number(row.totalReceived || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
+            header: 'ADVANCE (₹)',
+            align: 'right',
+            sortable: true,
+            exportValue: (row) => row.advanceBalance || 0,
+            render: (row) => (
+                <span className={`font-mono font-bold text-xs ${Number(row.advanceBalance || 0) > 0 ? 'text-emerald-700' : 'text-text-muted'}`}>
+                    ₹{Number(row.advanceBalance || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
             header: 'UNPAID POs',
             align: 'center',
             exportValue: (row) => `${row.unpaidPoCount || 0} / ${row.poCount || 0}`,
@@ -574,7 +652,27 @@ export default function ProcurementPage() {
             header: 'ACTIONS',
             align: 'right',
             render: (row) => (
-                <div className="flex items-center justify-end">
+                <div className="flex items-center justify-end gap-1.5">
+                    {row.supplierId && String(row.supplierId).length === 24 && (
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => setPartyAdvanceModal({ isOpen: true, partyId: row.supplierId, partyName: row.supplierName, mode: 'RECORD' })}
+                                className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold cursor-pointer whitespace-nowrap"
+                                title="Record Supplier Advance"
+                            >
+                                + Advance
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setPartyAdvanceModal({ isOpen: true, partyId: row.supplierId, partyName: row.supplierName, mode: 'LEDGER' })}
+                                className="px-2 py-1 bg-app-bg hover:bg-card-bg border border-border text-text-muted hover:text-text-main rounded text-[10px] font-semibold cursor-pointer"
+                                title="View Advance & Payment Ledger"
+                            >
+                                Ledger
+                            </button>
+                        </>
+                    )}
                     <button
                         type="button"
                         onClick={() => {
@@ -1287,6 +1385,16 @@ export default function ProcurementPage() {
                 po={recordingPaymentPo}
                 type="po"
                 onClose={() => setRecordingPaymentPo(null)}
+                onSuccess={() => setRefreshKey((prev) => prev + 1)}
+            />
+
+            <PartyAdvanceModal
+                isOpen={partyAdvanceModal.isOpen}
+                partyType="SUPPLIER"
+                partyId={partyAdvanceModal.partyId}
+                partyName={partyAdvanceModal.partyName}
+                initialMode={partyAdvanceModal.mode}
+                onClose={() => setPartyAdvanceModal((p) => ({ ...p, isOpen: false }))}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />
         </>

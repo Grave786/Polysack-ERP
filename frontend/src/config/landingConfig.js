@@ -499,3 +499,27 @@ export const FAQS = [
         answer: 'Every lot is produced from tested virgin PP polymers and audited through in-house quality checkpoints: tape denier testing, circular mesh count, burst resistance, free-fall drop testing, and stitch tenacity sign-off before hydraulic baling.'
     }
 ];
+
+// ── Factory Videos (Hero Background Playlist & Inside Our Factory Section) ──
+// NOTE: Titles and captions below are editable placeholders — update them
+// anytime to match the exact footage in frontend/public/videos/.
+export const FACTORY_VIDEOS = [
+    {
+        id: 'factory-1',
+        src: '/videos/factory_video_1_optimized (1).mp4',
+        title: 'Weaving and Lamination Floor',
+        caption: 'In-house polypropylene fabric weaving and extrusion lamination operations.'
+    },
+    {
+        id: 'factory-3',
+        src: '/videos/factory_video_3_optimized (1).mp4',
+        title: 'Printing and Stitching',
+        caption: 'Precision flexographic printing, cutting, and bag stitching lines.'
+    },
+    {
+        id: 'factory-4',
+        src: '/videos/factory_video_4_optimized (1).mp4',
+        title: 'Quality Check and Packing',
+        caption: 'Finished bag inspection, baling, and dispatch-ready handling.'
+    }
+];

@@ -8,6 +8,11 @@ const WorkOrder = require('../models/workOrder.model');
 const Dispatch = require('../models/dispatch.model');
 const Invoice = require('../models/invoice.model');
 const Notification = require('../models/notification.model');
+const Tenant = require('../models/tenant.model');
+const Approval = require('../models/approval.model');
+const { hasApprovalPermission } = require('../middlewares/rbac.middleware');
+const { createSalesOrderApprovalRequest } = require('../services/approval.service');
+const { computeDocumentTotals } = require('../utils/gstHelper');
 const {
     validateSoStatusTransition,
     SO_DISPATCHED_STATUSES
@@ -18,6 +23,46 @@ const {
     doesWoMatchSoLine,
     notifyProductionOnSoConfirm
 } = require('../services/soProduction.service');
+
+const SO_REAPPROVAL_TRIGGER_FIELDS = ['quantity', 'ratePerUnit', 'customer'];
+
+const resolveSoApprovalOnConfirm = async ({ tenantId, user, linkedEnquiry }) => {
+    if (linkedEnquiry) {
+        return {
+            soApprovalStatus: 'Approved',
+            approvalRemarks: 'Approved via enquiry',
+            approvedBy: user?._id || user?.id || null,
+            approvedAt: new Date(),
+            autoApproved: true,
+            historyRemark: 'Order created (Approved via enquiry)'
+        };
+    }
+
+    const [tenantDoc, canApprove] = await Promise.all([
+        Tenant.findById(tenantId).select('approvalSettings').lean(),
+        hasApprovalPermission(user)
+    ]);
+
+    if (tenantDoc?.approvalSettings?.autoApproveSalesOrdersByApprover === true && canApprove) {
+        return {
+            soApprovalStatus: 'Approved',
+            approvalRemarks: 'Auto-approved by approver',
+            approvedBy: user?._id || user?.id || null,
+            approvedAt: new Date(),
+            autoApproved: true,
+            historyRemark: 'Auto-approved by approver'
+        };
+    }
+
+    return {
+        soApprovalStatus: 'Pending Approval',
+        approvalRemarks: '',
+        approvedBy: null,
+        approvedAt: null,
+        autoApproved: false,
+        historyRemark: 'Submitted for approval'
+    };
+};
 
 /**
  * Helper function to auto-generate unique SO number per tenant & year
@@ -151,6 +196,17 @@ const applySoStatusTransition = async ({
         return { unchanged: true };
     }
 
+    if (nextStatus === 'READY_FOR_DISPATCH' || nextStatus === 'DISPATCHED') {
+        const hasLinkedWOs = Array.isArray(deps?.linkedWOs) && deps.linkedWOs.length > 0;
+        const allWosCompleted = hasLinkedWOs && deps.linkedWOs.every((w) => String(w.status || '').toUpperCase() === 'COMPLETED');
+        if (!hasLinkedWOs || !allWosCompleted || salesOrder.productionStatus === 'Not Planned') {
+            return {
+                statusCode: 400,
+                error: 'Cannot mark Sales Order as Ready for Dispatch before production is completed.'
+            };
+        }
+    }
+
     if (nextStatus === 'CANCELLED') {
         const blockers = [];
         if (deps.blockingWOs.length > 0) {
@@ -226,6 +282,11 @@ const applySoStatusTransition = async ({
             },
             { $set: { orderConfirmed: false, status: 'Approved', salesOrder: null, salesOrderNo: '' } }
         );
+
+        await Approval.updateMany(
+            { tenant: tenantId, type: 'SO', referenceId: salesOrder._id, status: 'Pending' },
+            { $set: { status: 'Cancelled', remarks: String(remark || 'Sales Order cancelled').trim(), nextReminderAt: null } }
+        );
     }
 
     salesOrder.status = nextStatus;
@@ -263,7 +324,6 @@ const createSalesOrder = async (req, res) => {
         delete req.body.totalValue;
         delete req.body.gstAmount;
         delete req.body.grandTotal;
-        delete req.body.gstRate;
 
         const {
             customer,
@@ -274,7 +334,15 @@ const createSalesOrder = async (req, res) => {
             notes,
             status,
             gstTreatment,
-            exemptionReason
+            gstRate,
+            exemptionReason,
+            discountType,
+            discountValue,
+            freightAmount,
+            insuranceAmount,
+            otherChargesAmount,
+            otherChargesLabel,
+            autoRoundOff
         } = req.body;
 
         // 1. Validation
@@ -423,6 +491,16 @@ const createSalesOrder = async (req, res) => {
             });
         }
 
+        const inactiveFg = foundFGs.find(
+            (fg) => fg.isActive === false || String(fg.status || 'Active').toLowerCase() !== 'active'
+        );
+        if (inactiveFg) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot sell inactive Finished Good: ${inactiveFg.name} (${inactiveFg.code}). Please activate it in Master Data first.`
+            });
+        }
+
         for (const it of cleanedItems) {
             if (!it.unit) {
                 const fgDoc = foundFGs.find(f => String(f._id) === String(it.finishedGood));
@@ -470,10 +548,32 @@ const createSalesOrder = async (req, res) => {
         const soNumber = await generateSoNumber(tenantId);
         const initialStatus = (status === 'CONFIRMED') ? 'CONFIRMED' : 'DRAFT';
 
-        const gstCalc = computeSoGstTotals(computedTotalValue, gstTreatment);
-        if (gstCalc.error) {
-            return res.status(400).json({ success: false, message: gstCalc.error });
+        const isExemptCreate = String(gstTreatment || 'TAXABLE').trim().toUpperCase() === 'EXEMPT';
+        const resolvedCreateGstRate = isExemptCreate
+            ? 0
+            : (gstRate !== undefined && gstRate !== null && gstRate !== '' && !isNaN(Number(gstRate))
+                ? Math.min(100, Math.max(0, Number(gstRate)))
+                : 18);
+
+        const totalsCalc = computeDocumentTotals({
+            itemsSubtotal: computedTotalValue,
+            discountType,
+            discountValue,
+            freightAmount,
+            insuranceAmount,
+            otherChargesAmount,
+            otherChargesLabel,
+            gstTreatment,
+            gstRate: resolvedCreateGstRate,
+            autoRoundOff
+        });
+        if (totalsCalc.error) {
+            return res.status(400).json({ success: false, message: totalsCalc.error });
         }
+
+        const approvalInit = initialStatus === 'CONFIRMED'
+            ? await resolveSoApprovalOnConfirm({ tenantId, user: req.user, linkedEnquiry })
+            : { soApprovalStatus: 'Not Required', approvalRemarks: '', approvedBy: null, approvedAt: null, autoApproved: false, historyRemark: 'Draft created' };
 
         const salesOrder = new SalesOrder({
             tenant: tenantId,
@@ -482,21 +582,38 @@ const createSalesOrder = async (req, res) => {
             orderDate: orderDate ? new Date(orderDate) : new Date(),
             deliveryDue: deliveryDue ? new Date(deliveryDue) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
             items: cleanedItems,
-            totalValue: computedTotalValue,
-            gstTreatment: gstCalc.gstTreatment,
-            exemptionReason: gstCalc.gstTreatment === 'EXEMPT' ? String(exemptionReason || '').trim() : '',
-            gstRate: gstCalc.gstRate,
-            gstAmount: gstCalc.gstAmount,
-            grandTotal: gstCalc.grandTotal,
+            totalValue: totalsCalc.itemsSubtotal,
+            itemsSubtotal: totalsCalc.itemsSubtotal,
+            discountType: totalsCalc.discountType,
+            discountValue: totalsCalc.discountValue,
+            discountAmount: totalsCalc.discountAmount,
+            freightAmount: totalsCalc.freightAmount,
+            insuranceAmount: totalsCalc.insuranceAmount,
+            otherChargesAmount: totalsCalc.otherChargesAmount,
+            otherChargesLabel: totalsCalc.otherChargesLabel,
+            taxableValue: totalsCalc.taxableValue,
+            gstTreatment: totalsCalc.gstTreatment,
+            exemptionReason: totalsCalc.gstTreatment === 'EXEMPT' ? String(exemptionReason || '').trim() : '',
+            gstRate: totalsCalc.gstRate,
+            gstAmount: totalsCalc.gstAmount,
+            taxAmount: totalsCalc.taxAmount,
+            autoRoundOff: totalsCalc.autoRoundOff,
+            roundOff: totalsCalc.roundOff,
+            grandTotal: totalsCalc.grandTotal,
             status: initialStatus,
+            soApprovalStatus: approvalInit.soApprovalStatus,
+            approvalRemarks: approvalInit.approvalRemarks,
+            approvedBy: approvalInit.approvedBy,
+            approvedAt: approvalInit.approvedAt,
+            createdBy: req.user?._id || req.user?.id || null,
             statusHistory: [
                 {
                     from: '',
-                    to: initialStatus,
+                    to: initialStatus === 'CONFIRMED' && approvalInit.soApprovalStatus === 'Pending Approval' ? 'Pending Approval' : initialStatus,
                     changedBy: req.user?._id || req.user?.id || null,
                     changedByName: req.user?.name || req.user?.email || '',
                     changedAt: new Date(),
-                    remark: 'Order created'
+                    remark: approvalInit.historyRemark
                 }
             ],
             dispatchLocation: dispatchLocation || null,
@@ -509,7 +626,11 @@ const createSalesOrder = async (req, res) => {
         await salesOrder.save();
 
         if (salesOrder.status === 'CONFIRMED') {
-            await notifyProductionOnSoConfirm(salesOrder, tenantId);
+            if (salesOrder.soApprovalStatus === 'Pending Approval') {
+                await createSalesOrderApprovalRequest(salesOrder, req.user);
+            } else {
+                await notifyProductionOnSoConfirm(salesOrder, tenantId);
+            }
         } else if (salesOrder.status === 'CANCELLED') {
             // Flag existing active linked Work Orders so shop floor knows SO was cancelled
             await WorkOrder.updateMany(
@@ -534,10 +655,6 @@ const createSalesOrder = async (req, res) => {
                 salesOrder: salesOrder._id,
                 salesOrderNo: salesOrder.soNumber
             });
-        }
-
-        if (salesOrder.status === 'CONFIRMED') {
-            await notifyProductionOnSoConfirm(salesOrder, tenantId);
         }
 
         await salesOrder.populate([
@@ -934,13 +1051,20 @@ const updateSalesOrder = async (req, res) => {
         const deps = await getSoDependencies(salesOrder._id, tenantId);
         const isDispatchedState = SO_DISPATCHED_STATUSES.includes(salesOrder.status);
         const isLockedByDeps = deps.hasLinkedWo || deps.hasDispatch || deps.hasInvoice;
+        const prevCustomerId = String(salesOrder.customer || '');
+        const prevItemsSnapshot = (salesOrder.items || []).map((it) => ({
+            finishedGood: String(it.finishedGood || ''),
+            quantity: Number(it.quantity || 0),
+            ratePerUnit: Number(it.ratePerUnit || 0)
+        }));
+        const prevStatus = salesOrder.status;
+        const prevApprovalStatus = salesOrder.soApprovalStatus || 'Not Required';
 
         delete req.body.tenant;
         delete req.body.soNumber;
         delete req.body.totalValue;
         delete req.body.gstAmount;
         delete req.body.grandTotal;
-        delete req.body.gstRate;
 
         const {
             customer,
@@ -950,7 +1074,15 @@ const updateSalesOrder = async (req, res) => {
             dispatchLocation,
             notes,
             gstTreatment,
+            gstRate,
             exemptionReason,
+            discountType,
+            discountValue,
+            freightAmount,
+            insuranceAmount,
+            otherChargesAmount,
+            otherChargesLabel,
+            autoRoundOff,
             status: requestedStatus,
             statusRemark,
             cancellationReason,
@@ -1129,15 +1261,45 @@ const updateSalesOrder = async (req, res) => {
         }
 
         const effectiveTreatment = gstTreatment !== undefined ? gstTreatment : (salesOrder.gstTreatment || 'TAXABLE');
-        const gstCalc = computeSoGstTotals(salesOrder.totalValue || 0, effectiveTreatment);
-        if (gstCalc.error) {
-            return res.status(400).json({ success: false, message: gstCalc.error });
+        const isExemptUpdate = String(effectiveTreatment).trim().toUpperCase() === 'EXEMPT';
+        const fallbackExistingRate = (salesOrder.gstRate !== undefined && salesOrder.gstRate !== null) ? Number(salesOrder.gstRate) : 18;
+        const resolvedUpdateGstRate = isExemptUpdate
+            ? 0
+            : (gstRate !== undefined && gstRate !== null && gstRate !== '' && !isNaN(Number(gstRate))
+                ? Math.min(100, Math.max(0, Number(gstRate)))
+                : (String(salesOrder.gstTreatment || '').toUpperCase() === 'EXEMPT' && fallbackExistingRate === 0 ? 18 : fallbackExistingRate));
+        const totalsCalc = computeDocumentTotals({
+            itemsSubtotal: salesOrder.totalValue || 0,
+            discountType: discountType !== undefined ? discountType : (salesOrder.discountType || 'FIXED'),
+            discountValue: discountValue !== undefined ? discountValue : (salesOrder.discountValue || 0),
+            freightAmount: freightAmount !== undefined ? freightAmount : (salesOrder.freightAmount || 0),
+            insuranceAmount: insuranceAmount !== undefined ? insuranceAmount : (salesOrder.insuranceAmount || 0),
+            otherChargesAmount: otherChargesAmount !== undefined ? otherChargesAmount : (salesOrder.otherChargesAmount || 0),
+            otherChargesLabel: otherChargesLabel !== undefined ? otherChargesLabel : (salesOrder.otherChargesLabel || ''),
+            gstTreatment: effectiveTreatment,
+            gstRate: resolvedUpdateGstRate,
+            autoRoundOff: autoRoundOff !== undefined ? autoRoundOff : (salesOrder.autoRoundOff !== false)
+        });
+        if (totalsCalc.error) {
+            return res.status(400).json({ success: false, message: totalsCalc.error });
         }
-        salesOrder.gstTreatment = gstCalc.gstTreatment;
-        salesOrder.gstRate = gstCalc.gstRate;
-        salesOrder.gstAmount = gstCalc.gstAmount;
-        salesOrder.grandTotal = gstCalc.grandTotal;
-        if (gstCalc.gstTreatment === 'EXEMPT') {
+        salesOrder.itemsSubtotal = totalsCalc.itemsSubtotal;
+        salesOrder.discountType = totalsCalc.discountType;
+        salesOrder.discountValue = totalsCalc.discountValue;
+        salesOrder.discountAmount = totalsCalc.discountAmount;
+        salesOrder.freightAmount = totalsCalc.freightAmount;
+        salesOrder.insuranceAmount = totalsCalc.insuranceAmount;
+        salesOrder.otherChargesAmount = totalsCalc.otherChargesAmount;
+        salesOrder.otherChargesLabel = totalsCalc.otherChargesLabel;
+        salesOrder.taxableValue = totalsCalc.taxableValue;
+        salesOrder.gstTreatment = totalsCalc.gstTreatment;
+        salesOrder.gstRate = totalsCalc.gstRate;
+        salesOrder.gstAmount = totalsCalc.gstAmount;
+        salesOrder.taxAmount = totalsCalc.taxAmount;
+        salesOrder.autoRoundOff = totalsCalc.autoRoundOff;
+        salesOrder.roundOff = totalsCalc.roundOff;
+        salesOrder.grandTotal = totalsCalc.grandTotal;
+        if (totalsCalc.gstTreatment === 'EXEMPT') {
             if (exemptionReason !== undefined) {
                 salesOrder.exemptionReason = String(exemptionReason || '').trim();
             }
@@ -1147,6 +1309,13 @@ const updateSalesOrder = async (req, res) => {
 
         let transitionResult = null;
         if (requestedStatus && String(requestedStatus).trim().toUpperCase() !== salesOrder.status) {
+            const targetUpper = String(requestedStatus).trim().toUpperCase();
+            if (targetUpper === 'READY_FOR_DISPATCH' && ['Pending Approval', 'Rejected'].includes(salesOrder.soApprovalStatus)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot mark Ready for Dispatch while Sales Order approval status is '${salesOrder.soApprovalStatus}'.`
+                });
+            }
             transitionResult = await applySoStatusTransition({
                 salesOrder,
                 targetStatus: requestedStatus,
@@ -1167,10 +1336,72 @@ const updateSalesOrder = async (req, res) => {
             }
         }
 
+        // Approval flow on edit / confirm / resubmit
+        let reapprovalRequired = false;
+        const customerChanged = SO_REAPPROVAL_TRIGGER_FIELDS.includes('customer') && String(salesOrder.customer || '') !== prevCustomerId;
+        const newItemsSnapshot = (salesOrder.items || []).map((it) => ({
+            finishedGood: String(it.finishedGood || ''),
+            quantity: Number(it.quantity || 0),
+            ratePerUnit: Number(it.ratePerUnit || 0)
+        }));
+        const itemsChanged = items !== undefined && (
+            newItemsSnapshot.length !== prevItemsSnapshot.length ||
+            newItemsSnapshot.some((it, i) => {
+                const prev = prevItemsSnapshot[i];
+                if (!prev) return true;
+                if (it.finishedGood !== prev.finishedGood) return true;
+                if (SO_REAPPROVAL_TRIGGER_FIELDS.includes('quantity') && it.quantity !== prev.quantity) return true;
+                if (SO_REAPPROVAL_TRIGGER_FIELDS.includes('ratePerUnit') && it.ratePerUnit !== prev.ratePerUnit) return true;
+                return false;
+            })
+        );
+
+        if (salesOrder.status === 'CONFIRMED') {
+            if (prevStatus === 'DRAFT' || prevApprovalStatus === 'Rejected') {
+                const approvalInit = await resolveSoApprovalOnConfirm({ tenantId, user: req.user, linkedEnquiry: null });
+                salesOrder.soApprovalStatus = approvalInit.soApprovalStatus;
+                salesOrder.approvalRemarks = approvalInit.approvalRemarks;
+                salesOrder.approvedBy = approvalInit.approvedBy;
+                salesOrder.approvedAt = approvalInit.approvedAt;
+                salesOrder.statusHistory = Array.isArray(salesOrder.statusHistory) ? salesOrder.statusHistory : [];
+                salesOrder.statusHistory.push({
+                    from: prevApprovalStatus === 'Rejected' ? 'Rejected' : prevStatus,
+                    to: approvalInit.soApprovalStatus === 'Pending Approval' ? 'Pending Approval' : 'CONFIRMED',
+                    changedBy: req.user?._id || req.user?.id || null,
+                    changedByName: req.user?.name || req.user?.email || '',
+                    changedAt: new Date(),
+                    remark: prevApprovalStatus === 'Rejected' ? 'Resubmitted for approval' : approvalInit.historyRemark
+                });
+                reapprovalRequired = approvalInit.soApprovalStatus === 'Pending Approval';
+            } else if (prevApprovalStatus === 'Pending Approval') {
+                salesOrder.soApprovalStatus = 'Pending Approval';
+            } else if (!isLockedByDeps && (customerChanged || itemsChanged)) {
+                const approvalInit = await resolveSoApprovalOnConfirm({ tenantId, user: req.user, linkedEnquiry: null });
+                salesOrder.soApprovalStatus = approvalInit.soApprovalStatus;
+                salesOrder.approvalRemarks = approvalInit.approvalRemarks;
+                salesOrder.approvedBy = approvalInit.approvedBy;
+                salesOrder.approvedAt = approvalInit.approvedAt;
+                if (approvalInit.soApprovalStatus === 'Pending Approval') {
+                    reapprovalRequired = true;
+                    salesOrder.statusHistory = Array.isArray(salesOrder.statusHistory) ? salesOrder.statusHistory : [];
+                    salesOrder.statusHistory.push({
+                        from: 'Approved',
+                        to: 'Pending Approval',
+                        changedBy: req.user?._id || req.user?.id || null,
+                        changedByName: req.user?.name || req.user?.email || '',
+                        changedAt: new Date(),
+                        remark: 'Re-approval required due to changes in customer, quantity, or rate'
+                    });
+                }
+            }
+        }
+
         await salesOrder.save();
 
-        if (transitionResult?.changed) {
-            if (salesOrder.status === 'CONFIRMED') {
+        if (salesOrder.status === 'CONFIRMED' && salesOrder.soApprovalStatus === 'Pending Approval') {
+            await createSalesOrderApprovalRequest(salesOrder, req.user);
+        } else if (transitionResult?.changed) {
+            if (salesOrder.status === 'CONFIRMED' && salesOrder.soApprovalStatus !== 'Pending Approval') {
                 await notifyProductionOnSoConfirm(salesOrder, tenantId);
             } else if (salesOrder.status === 'READY_FOR_DISPATCH') {
                 await createSoModuleNotification({
@@ -1201,7 +1432,10 @@ const updateSalesOrder = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: 'Sales Order updated successfully.',
+            reapprovalRequired,
+            message: reapprovalRequired
+                ? 'Sales Order updated and sent for approval.'
+                : 'Sales Order updated successfully.',
             data: salesOrder
         });
     } catch (error) {
@@ -1252,6 +1486,14 @@ const updateStatus = async (req, res) => {
             });
         }
 
+        const targetUpper = String(status).trim().toUpperCase();
+        if (targetUpper === 'READY_FOR_DISPATCH' && ['Pending Approval', 'Rejected'].includes(salesOrder.soApprovalStatus)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot mark Ready for Dispatch while Sales Order approval status is '${salesOrder.soApprovalStatus}'.`
+            });
+        }
+
         const deps = await getSoDependencies(salesOrder._id, tenantId);
         const tr = await applySoStatusTransition({
             salesOrder,
@@ -1273,11 +1515,23 @@ const updateStatus = async (req, res) => {
             });
         }
 
+        if (tr.changed && salesOrder.status === 'CONFIRMED' && tr.from === 'DRAFT') {
+            const approvalInit = await resolveSoApprovalOnConfirm({ tenantId, user: req.user, linkedEnquiry: null });
+            salesOrder.soApprovalStatus = approvalInit.soApprovalStatus;
+            salesOrder.approvalRemarks = approvalInit.approvalRemarks;
+            salesOrder.approvedBy = approvalInit.approvedBy;
+            salesOrder.approvedAt = approvalInit.approvedAt;
+        }
+
         await salesOrder.save();
 
         if (tr.changed) {
             if (salesOrder.status === 'CONFIRMED') {
-                await notifyProductionOnSoConfirm(salesOrder, tenantId);
+                if (salesOrder.soApprovalStatus === 'Pending Approval') {
+                    await createSalesOrderApprovalRequest(salesOrder, req.user);
+                } else {
+                    await notifyProductionOnSoConfirm(salesOrder, tenantId);
+                }
             } else if (salesOrder.status === 'READY_FOR_DISPATCH') {
                 await createSoModuleNotification({
                     tenantId,

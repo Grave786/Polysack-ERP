@@ -101,7 +101,7 @@ const calculateGstBreakdown = ({
         }
     }
 
-    const rate = Number(gstRate) || 18;
+    const rate = (gstRate !== undefined && gstRate !== null && !isNaN(Number(gstRate))) ? Math.max(0, Number(gstRate)) : 18;
     const gstAmount = totalTaxable * (rate / 100);
 
     if (isInterState) {
@@ -125,7 +125,105 @@ const calculateGstBreakdown = ({
     }
 };
 
+/**
+ * Configurable rule: when true (default), Freight, Insurance, and Other Charges
+ * are added to taxableValue and taxed at the same GST rate as the goods.
+ */
+const TAX_CHARGES_WITH_GOODS = true;
+
+const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+
+/**
+ * Compute full Charges, Discount, Taxable Value, Tax, Round-off and Grand Total.
+ */
+const computeDocumentTotals = ({
+    itemsSubtotal = 0,
+    discountType = 'FIXED',
+    discountValue = 0,
+    freightAmount = 0,
+    insuranceAmount = 0,
+    otherChargesAmount = 0,
+    otherChargesLabel = '',
+    gstTreatment = 'TAXABLE',
+    gstRate = 18,
+    autoRoundOff = true
+} = {}) => {
+    const cleanSubtotal = Math.max(0, round2(itemsSubtotal));
+    const normDiscountType = String(discountType || 'FIXED').trim().toUpperCase() === 'PERCENT' ? 'PERCENT' : 'FIXED';
+    const rawDiscountVal = Number(discountValue || 0);
+    const freight = Number(freightAmount || 0);
+    const insurance = Number(insuranceAmount || 0);
+    const otherCharges = Number(otherChargesAmount || 0);
+
+    if (isNaN(rawDiscountVal) || rawDiscountVal < 0) {
+        return { error: 'Discount value cannot be negative.' };
+    }
+    if (normDiscountType === 'PERCENT' && rawDiscountVal > 100) {
+        return { error: 'Discount percentage cannot exceed 100%.' };
+    }
+    if (isNaN(freight) || freight < 0) {
+        return { error: 'Freight charges cannot be negative.' };
+    }
+    if (isNaN(insurance) || insurance < 0) {
+        return { error: 'Insurance charges cannot be negative.' };
+    }
+    if (isNaN(otherCharges) || otherCharges < 0) {
+        return { error: 'Other charges cannot be negative.' };
+    }
+
+    const discountAmount = normDiscountType === 'PERCENT'
+        ? round2((cleanSubtotal * rawDiscountVal) / 100)
+        : round2(rawDiscountVal);
+
+    if (discountAmount > cleanSubtotal + 0.001) {
+        return { error: 'Discount amount cannot exceed items subtotal.' };
+    }
+
+    const normTreatment = String(gstTreatment || 'TAXABLE').trim().toUpperCase();
+    if (!['TAXABLE', 'EXEMPT'].includes(normTreatment)) {
+        return { error: `Invalid gstTreatment '${gstTreatment}'. Allowed values: TAXABLE, EXEMPT.` };
+    }
+    const isExempt = normTreatment === 'EXEMPT';
+    const effectiveGstRate = isExempt ? 0 : (gstRate !== undefined && !isNaN(Number(gstRate)) ? Math.max(0, Number(gstRate)) : 18);
+
+    const netGoods = Math.max(0, round2(cleanSubtotal - discountAmount));
+    const totalCharges = round2(freight + insurance + otherCharges);
+    const taxableValue = TAX_CHARGES_WITH_GOODS
+        ? round2(netGoods + totalCharges)
+        : netGoods;
+
+    const taxAmount = isExempt ? 0 : round2((taxableValue * effectiveGstRate) / 100);
+    const preRoundTotal = TAX_CHARGES_WITH_GOODS
+        ? round2(taxableValue + taxAmount)
+        : round2(taxableValue + taxAmount + totalCharges);
+
+    const useAutoRoundOff = autoRoundOff !== false && autoRoundOff !== 'false';
+    const grandTotal = useAutoRoundOff ? Math.round(preRoundTotal) : preRoundTotal;
+    const roundOff = useAutoRoundOff ? round2(grandTotal - preRoundTotal) : 0;
+
+    return {
+        itemsSubtotal: cleanSubtotal,
+        discountType: normDiscountType,
+        discountValue: round2(rawDiscountVal),
+        discountAmount,
+        freightAmount: round2(freight),
+        insuranceAmount: round2(insurance),
+        otherChargesAmount: round2(otherCharges),
+        otherChargesLabel: String(otherChargesLabel || '').trim(),
+        taxableValue,
+        gstTreatment: normTreatment,
+        gstRate: effectiveGstRate,
+        gstAmount: taxAmount,
+        taxAmount,
+        autoRoundOff: useAutoRoundOff,
+        roundOff,
+        grandTotal
+    };
+};
+
 module.exports = {
     normalizeStateCode,
-    calculateGstBreakdown
+    calculateGstBreakdown,
+    TAX_CHARGES_WITH_GOODS,
+    computeDocumentTotals
 };

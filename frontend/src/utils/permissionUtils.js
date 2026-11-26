@@ -30,6 +30,30 @@ export const isTenantAdmin = (user) => {
 
 export const checkIsTenantAdmin = isTenantAdmin;
 
+/**
+ * Helper to check if a user has approval permission (Tenant Admin by default, or APPROVALS module permission)
+ */
+export const hasApprovalPermission = (user) => {
+    if (!user) return false;
+    if (isTenantAdmin(user)) return true;
+    const permittedModules = user.permittedModules || [];
+    if (Array.isArray(permittedModules) && permittedModules.includes('APPROVALS')) return true;
+    const permissions = user.role?.permissions || user.permissions || [];
+    if (Array.isArray(permissions)) {
+        return permissions.some((p) => {
+            const mod = typeof p === 'object' ? p.module : String(p);
+            const act = typeof p === 'object' ? p.action : '';
+            if (!mod) return false;
+            const modUpper = String(mod).toUpperCase().trim();
+            if (modUpper === 'APPROVALS') {
+                return !act || ['APPROVE', 'UPDATE', 'CREATE', 'READ'].includes(String(act).toUpperCase().trim());
+            }
+            return modUpper.startsWith('APPROVALS');
+        });
+    }
+    return false;
+};
+
 export const DEFAULT_ALL_MODULES = [
     'MASTER_DATA', 'PRODUCTION', 'QUALITY', 'INVENTORY',
     'POS', 'SALES', 'PROCUREMENT', 'CRM', 'DISPATCH', 'HR', 'ANALYTICS', 'COMPANY_SETTINGS'

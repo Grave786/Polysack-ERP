@@ -4,7 +4,7 @@ import { useAuthStore } from '../../store/authStore';
 import GlobalSearchBar from './GlobalSearchBar';
 import { Building2, ChevronDown, ShieldCheck, Bell, BellOff, LogOut, Loader2, Check, Menu, User, Settings, Users, ShoppingCart, CheckCircle, AlertTriangle, CheckCheck, ExternalLink, X } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
-import { hasModulePermission, checkIsSuperAdmin, isTenantAdmin } from '../../utils/permissionUtils';
+import { hasModulePermission, checkIsSuperAdmin, isTenantAdmin, hasApprovalPermission } from '../../utils/permissionUtils';
 import toast from 'react-hot-toast';
 import { formatDate } from '../../utils/dateUtils';
 
@@ -141,8 +141,14 @@ export default function Topbar({ onToggleSidebar }) {
                     ? `/customer-crm?tab=enquiries&id=${notif.data.enquiryId}`
                     : '/customer-crm?tab=enquiries';
             } else if (['PO_APPROVAL', 'APPROVAL_REQUEST', 'APPROVAL_REMINDER'].includes(notif?.type)) {
-                if (isTenantAdmin(user)) {
+                if (hasApprovalPermission(user)) {
                     target = notif.data?.approvalId ? `/approvals?id=${notif.data.approvalId}` : '/approvals';
+                }
+            } else if (notif?.type === 'APPROVAL_DECISION') {
+                if (notif.data?.type === 'NSL') {
+                    target = notif.data?.referenceId ? `/customer-crm?tab=enquiries&id=${notif.data.referenceId}` : '/customer-crm?tab=enquiries';
+                } else if (notif.data?.type === 'SO') {
+                    target = '/sales?tab=sales-orders';
                 }
             }
         }
@@ -260,8 +266,11 @@ export default function Topbar({ onToggleSidebar }) {
     };
 
     const visibleNotifications = notifications.filter(notif => {
+        if (notif?.type === 'APPROVAL_DECISION') {
+            return hasApprovalPermission(user) || isTenantAdmin(user) || String(notif?.data?.targetUserId || '') === String(user?._id || user?.id || '');
+        }
         if (isApprovalNotification(notif)) {
-            return isTenantAdmin(user);
+            return hasApprovalPermission(user) || isTenantAdmin(user);
         }
         return true;
     });

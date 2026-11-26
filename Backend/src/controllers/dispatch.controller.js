@@ -5,7 +5,7 @@ const Location = require('../models/location.model');
 const FinishedGood = require('../models/finishedGood.model');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
 const { isTenantAdmin } = require('../middlewares/rbac.middleware');
-const { resolveEmptyBagWeightGms } = require('../utils/bagWeightHelper');
+const { resolveEmptyBagWeightGms, resolveBagWeightSpec } = require('../utils/bagWeightHelper');
 
 /**
  * Helper to convert quantity between SO line UOM and Finished Good stock UOM
@@ -118,10 +118,11 @@ const getDispatchableSources = async (req, res) => {
         const BOM = require('../models/bom.model');
         const Customer = require('../models/customer.model');
 
-        // 1. Fetch active Sales Orders in CONFIRMED, READY_FOR_DISPATCH, or PARTIALLY_DISPATCHED
+        // 1. Fetch active, approved Sales Orders in CONFIRMED, READY_FOR_DISPATCH, or PARTIALLY_DISPATCHED
         const salesOrders = await SalesOrder.find({
             tenant: tenantId,
-            status: { $in: ['CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED'] }
+            status: { $in: ['CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED'] },
+            soApprovalStatus: { $nin: ['Pending Approval', 'Rejected'] }
         })
             .populate('customer', 'companyName name code contactPerson phone city state address gstin')
             .populate({
@@ -221,13 +222,23 @@ const getDispatchableSources = async (req, res) => {
                     finishedGood: { $in: fgIdArray },
                     isActive: true
                 })
-                    .select('finishedGood materials rawMaterials totalWeight')
+                    .populate({
+                        path: 'items.rawMaterial',
+                        select: 'name code uom',
+                        populate: { path: 'uom', select: 'name symbol abbreviation' }
+                    })
+                    .select('finishedGood items materials rawMaterials totalWeight isDefault')
                     .lean()
             ]);
 
             workOrders = woDocs || [];
             (bomDocs || []).forEach((b) => {
-                if (b.finishedGood) bomMap.set(String(b.finishedGood), b);
+                if (b.finishedGood) {
+                    const fgKey = String(b.finishedGood);
+                    if (!bomMap.has(fgKey) || b.isDefault) {
+                        bomMap.set(fgKey, b);
+                    }
+                }
             });
         }
 
@@ -243,11 +254,11 @@ const getDispatchableSources = async (req, res) => {
                 targetWos = matchingWos;
             }
 
-            // Step 1: Real Empty Bag Weight in Kg (Valid range: 15g to 500g -> 0.015kg to 0.500kg)
+            // Step 1: Real Empty Bag Weight in Kg (BOM -> Saved -> Estimated)
             let avgBagWeightKg = null;
-            const weightGms = resolveEmptyBagWeightGms(fgDoc, activeBom);
-            if (weightGms && weightGms >= 15 && weightGms <= 500) {
-                avgBagWeightKg = Number((weightGms / 1000).toFixed(4));
+            const weightSpec = resolveBagWeightSpec(fgDoc, activeBom);
+            if (weightSpec.weightKg && !weightSpec.isUnrealistic) {
+                avgBagWeightKg = Number(weightSpec.weightKg.toFixed(4));
             }
 
             // Step 2: Pcs per Bale must come from finished good or workorder baling specification
@@ -276,6 +287,8 @@ const getDispatchableSources = async (req, res) => {
 
             return {
                 avgBagWeightKg: avgBagWeightKg || null,
+                avgBagWeightGrams: weightSpec.weightGrams || null,
+                bagWeightSource: weightSpec.source || null,
                 pcsPerBale: pcsPerBale || null
             };
         };
@@ -305,6 +318,8 @@ const getDispatchableSources = async (req, res) => {
                     remainingQuantity: remainingQty,
                     currentStock: Number(fg.currentStock !== undefined && fg.currentStock !== null ? fg.currentStock : 0),
                     avgBagWeightKg: balingSpec.avgBagWeightKg,
+                    avgBagWeightGrams: balingSpec.avgBagWeightGrams,
+                    bagWeightSource: balingSpec.bagWeightSource,
                     pcsPerBale: balingSpec.pcsPerBale
                 };
             });
@@ -652,19 +667,8 @@ const createDispatch = async (req, res) => {
         const cleanedItems = [];
 
         // 4. Validate items against SalesOrder and Physical Current Stock
+        const BOM = require('../models/bom.model');
         for (const dispatchItem of items) {
-            const numQty = Number(dispatchItem.dispatchedQuantity);
-            if (!dispatchItem.finishedGood || isNaN(numQty) || numQty <= 0) {
-                if (useTransaction && session) {
-                    if (session.inTransaction()) await session.abortTransaction();
-                    session.endSession();
-                }
-                return res.status(400).json({
-                    success: false,
-                    message: 'Each dispatch item must have a valid finishedGood ObjectId and a positive dispatchedQuantity > 0.'
-                });
-            }
-
             const fgIdStr = String(dispatchItem.finishedGood);
             const soItem = soDoc.items.find((i) => String(i.finishedGood) === fgIdStr);
 
@@ -679,24 +683,7 @@ const createDispatch = async (req, res) => {
                 });
             }
 
-            // SO line item UOM is source of truth
-            const soLineUom = soItem.unit || 'Pcs';
-
-            const currentDispatched = Number(soItem.dispatchedQuantity || 0);
-            const remainingAllowed = Number(soItem.quantity || 0) - currentDispatched;
-
-            if (!isUserAdmin && numQty > remainingAllowed + 0.0001) {
-                if (useTransaction && session) {
-                    if (session.inTransaction()) await session.abortTransaction();
-                    session.endSession();
-                }
-                return res.status(400).json({
-                    success: false,
-                    message: `Cannot dispatch ${numQty} ${soLineUom} of item. Ordered: ${soItem.quantity} ${soLineUom}, Already dispatched: ${currentDispatched} ${soLineUom}, Remaining allowed: ${remainingAllowed} ${soLineUom}.`
-                });
-            }
-
-            // Verify physical sellable currentStock on FinishedGood
+            // Verify physical sellable currentStock on FinishedGood + active BOM
             const fgQuery = FinishedGood.findOne({ _id: dispatchItem.finishedGood, tenant: tenantId }).populate('uom');
             if (useTransaction && session) fgQuery.session(session);
             const fgDoc = await fgQuery;
@@ -709,6 +696,90 @@ const createDispatch = async (req, res) => {
                 return res.status(400).json({
                     success: false,
                     message: `Finished Good '${fgIdStr}' does not exist or does not belong to your organization.`
+                });
+            }
+
+            const activeBom = await BOM.findOne({ tenant: tenantId, finishedGood: fgDoc._id, isActive: true })
+                .populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } })
+                .lean();
+            const weightSpec = resolveBagWeightSpec(fgDoc, activeBom);
+            const weightGms = weightSpec.weightGrams && !weightSpec.isUnrealistic ? weightSpec.weightGrams : null;
+
+            // SO line item UOM is source of truth; server recomputes both Pcs & Kg
+            const soLineUom = soItem.unit || 'Pcs';
+            const soUomLower = String(soLineUom).trim().toLowerCase();
+            const isSoWeight = ['kg', 'kgs', 'kilogram', 'kilograms', 'kilo'].includes(soUomLower);
+            const isSoCount = ['pcs', 'pc', 'pieces', 'piece', 'bags', 'bag', 'nos', 'no', 'units', 'unit'].includes(soUomLower);
+
+            let numQty = Number(dispatchItem.dispatchedQuantity || 0);
+            let serverPcs = dispatchItem.dispatchedPcs !== undefined && dispatchItem.dispatchedPcs !== null && dispatchItem.dispatchedPcs !== ''
+                ? Math.floor(Number(dispatchItem.dispatchedPcs))
+                : null;
+            let serverKg = dispatchItem.dispatchedKg !== undefined && dispatchItem.dispatchedKg !== null && dispatchItem.dispatchedKg !== ''
+                ? Number(dispatchItem.dispatchedKg)
+                : null;
+            let isKgManual = false;
+
+            if (weightGms && weightGms > 0) {
+                if (isSoCount) {
+                    if (serverPcs !== null && serverPcs > 0) {
+                        numQty = serverPcs;
+                    } else if (numQty > 0) {
+                        serverPcs = Math.floor(numQty);
+                        numQty = serverPcs;
+                    } else if (serverKg !== null && serverKg > 0) {
+                        serverPcs = Math.floor((serverKg * 1000) / weightGms);
+                        numQty = serverPcs;
+                    }
+                    serverKg = serverPcs > 0 ? Number(((serverPcs * weightGms) / 1000).toFixed(2)) : null;
+                } else if (isSoWeight) {
+                    if (serverKg !== null && serverKg > 0) {
+                        serverPcs = Math.floor((serverKg * 1000) / weightGms);
+                        numQty = Number(((serverPcs * weightGms) / 1000).toFixed(2)) || serverKg;
+                        serverKg = numQty;
+                    } else if (serverPcs !== null && serverPcs > 0) {
+                        serverKg = Number(((serverPcs * weightGms) / 1000).toFixed(2));
+                        numQty = serverKg;
+                    } else if (numQty > 0) {
+                        serverPcs = Math.floor((numQty * 1000) / weightGms);
+                        serverKg = Number(numQty.toFixed(2));
+                    }
+                } else {
+                    serverPcs = serverPcs ?? Math.floor(numQty);
+                    serverKg = serverPcs > 0 ? Number(((serverPcs * weightGms) / 1000).toFixed(2)) : serverKg;
+                }
+            } else {
+                isKgManual = true;
+                if (isSoCount && (serverPcs === null || serverPcs <= 0)) {
+                    serverPcs = numQty > 0 ? Math.floor(numQty) : null;
+                }
+                if (isSoWeight && (serverKg === null || serverKg <= 0)) {
+                    serverKg = numQty > 0 ? Number(numQty.toFixed(2)) : null;
+                }
+            }
+
+            if (!dispatchItem.finishedGood || isNaN(numQty) || numQty <= 0) {
+                if (useTransaction && session) {
+                    if (session.inTransaction()) await session.abortTransaction();
+                    session.endSession();
+                }
+                return res.status(400).json({
+                    success: false,
+                    message: 'Each dispatch item must have a valid finishedGood ObjectId and a positive dispatchedQuantity > 0.'
+                });
+            }
+
+            const currentDispatched = Number(soItem.dispatchedQuantity || 0);
+            const remainingAllowed = Number(soItem.quantity || 0) - currentDispatched;
+
+            if (!isUserAdmin && numQty > remainingAllowed + 0.0001) {
+                if (useTransaction && session) {
+                    if (session.inTransaction()) await session.abortTransaction();
+                    session.endSession();
+                }
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot dispatch ${numQty} ${soLineUom} of item. Ordered: ${soItem.quantity} ${soLineUom}, Already dispatched: ${currentDispatched} ${soLineUom}, Remaining allowed: ${remainingAllowed} ${soLineUom}.`
                 });
             }
 
@@ -748,9 +819,9 @@ const createDispatch = async (req, res) => {
                 dispatchedQuantity: numQty,
                 unit: soLineUom,
                 stockDeductQty,
-                dispatchedKg: dispatchItem.dispatchedKg !== undefined && dispatchItem.dispatchedKg !== null && dispatchItem.dispatchedKg !== '' && !isNaN(Number(dispatchItem.dispatchedKg))
-                    ? Number(dispatchItem.dispatchedKg)
-                    : undefined,
+                dispatchedPcs: serverPcs !== null && !isNaN(serverPcs) ? serverPcs : undefined,
+                dispatchedKg: serverKg !== null && !isNaN(serverKg) ? serverKg : undefined,
+                isKgManual,
                 dispatchedBales: dispatchItem.dispatchedBales !== undefined && dispatchItem.dispatchedBales !== null && dispatchItem.dispatchedBales !== '' && !isNaN(Number(dispatchItem.dispatchedBales))
                     ? Number(dispatchItem.dispatchedBales)
                     : undefined,
@@ -1836,6 +1907,10 @@ const getDeliveryRegister = async (req, res) => {
                     size,
                     batchNumber,
                     dispatchedQuantity: dispatchedQty,
+                    dispatchedPcs: item.dispatchedPcs ?? null,
+                    dispatchedKg: item.dispatchedKg ?? null,
+                    dispatchedBales: item.dispatchedBales ?? null,
+                    isKgManual: Boolean(item.isKgManual),
                     unit: uom,
                     transporter,
                     vehicleNumber,

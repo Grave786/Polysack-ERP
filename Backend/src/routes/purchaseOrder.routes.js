@@ -9,6 +9,8 @@ const {
     updateStatus,
     deletePurchaseOrder,
     recordPoPayment,
+    recordSupplierAdvance,
+    getSupplierLedger,
     getPayablesSummary,
     getSupplierOutstanding
 } = require('../controllers/purchaseOrder.controller');
@@ -51,6 +53,8 @@ router.get('/payables-summary', authenticate, checkPermission('PROCUREMENT', 'RE
  * @access  Private (PROCUREMENT:READ)
  */
 router.get('/supplier-outstanding', authenticate, checkPermission('PROCUREMENT', 'READ'), getSupplierOutstanding);
+router.post('/supplier-advance', authenticate, checkPermission('PROCUREMENT', 'UPDATE'), recordSupplierAdvance);
+router.get('/supplier-ledger/:supplierId', authenticate, checkPermission('PROCUREMENT', 'READ'), getSupplierLedger);
 
 /**
  * @route   PATCH /api/purchase-orders/:id/payment

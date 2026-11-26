@@ -67,6 +67,11 @@ const CustomerSchema = new mongoose.Schema({
         default: 0,
         min: [0, 'Outstanding amount cannot be negative']
     },
+    advanceBalance: {
+        type: Number,
+        default: 0,
+        min: [0, 'Advance balance cannot be negative']
+    },
     status: {
         type: String,
         default: 'LEAD',

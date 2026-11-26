@@ -1,8 +1,8 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { isTenantModuleEnabled, checkIsSuperAdmin, checkIsTenantAdmin, isTenantAdmin } from '../utils/permissionUtils';
+import { isTenantModuleEnabled, checkIsSuperAdmin, checkIsTenantAdmin, isTenantAdmin, hasApprovalPermission } from '../utils/permissionUtils';
 
-export default function ProtectedRoute({ allowedRoles, requiredModule, requiredAction, requireTenantAdmin }) {
+export default function ProtectedRoute({ allowedRoles, requiredModule, requiredAction, requireTenantAdmin, requireApprovalPermission }) {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
     const isLoading = useAuthStore((state) => state.isLoading);
     const user = useAuthStore((state) => state.user);
@@ -22,6 +22,9 @@ export default function ProtectedRoute({ allowedRoles, requiredModule, requiredA
     if (user) {
         if (requireTenantAdmin && !isTenantAdmin(user)) {
             return <Navigate to="/403" state={{ message: "Only Tenant Admin can access this module." }} replace />;
+        }
+        if (requireApprovalPermission && !hasApprovalPermission(user)) {
+            return <Navigate to="/403" state={{ message: "You do not have approval permission to access this module." }} replace />;
         }
 
         const isSuperAdmin = checkIsSuperAdmin(user);

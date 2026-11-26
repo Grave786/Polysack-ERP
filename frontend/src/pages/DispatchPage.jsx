@@ -227,32 +227,51 @@ export default function DispatchPage() {
                 const remainingQty = Math.max(0, orderedQty - alreadyDispatched);
                 const currentStock = item.currentStock !== undefined && item.currentStock !== null ? Number(item.currentStock) : null;
                 const isOutOfStock = currentStock !== null && currentStock <= 0;
-                const maxAllowed = currentStock !== null ? Math.min(remainingQty, Math.max(0, currentStock)) : remainingQty;
-                const initialPcs = isOutOfStock ? 0 : (maxAllowed > 0 ? maxAllowed : (remainingQty > 0 ? remainingQty : orderedQty));
 
                 const avgBagWeightKg = item.avgBagWeightKg ?? null;
+                const avgWeightGrams = avgBagWeightKg ? Number((avgBagWeightKg * 1000).toFixed(2)) : 0;
+                const bagWeightSource = item.bagWeightSource ?? null;
                 const pcsPerBale = item.pcsPerBale ?? null;
+                const uom = item.uom || item.unit || 'Pcs';
+                const uomLower = String(uom).trim().toLowerCase();
+                const isSoWeight = ['kg', 'kgs', 'kilogram', 'kilograms', 'kilo'].includes(uomLower);
+                const isPos = src.sourceType === 'POS_INVOICE';
 
-                const initialKg = avgBagWeightKg && initialPcs > 0
-                    ? String(Number((initialPcs * avgBagWeightKg).toFixed(2)))
-                    : '';
+                const remainingPcs = isSoWeight && avgWeightGrams > 0
+                    ? Math.floor((remainingQty * 1000) / avgWeightGrams)
+                    : remainingQty;
+                const remainingKg = isSoWeight
+                    ? remainingQty
+                    : (avgWeightGrams > 0 ? Number(((remainingPcs * avgWeightGrams) / 1000).toFixed(2)) : null);
+
+                const maxPcsAllowed = isPos
+                    ? remainingPcs
+                    : (currentStock !== null ? Math.min(remainingPcs, Math.max(0, currentStock)) : remainingPcs);
+                const initialPcs = (!isPos && isOutOfStock) ? 0 : (maxPcsAllowed > 0 ? maxPcsAllowed : 0);
+
+                const initialKg = avgWeightGrams > 0 && initialPcs > 0
+                    ? String(Number(((initialPcs * avgWeightGrams) / 1000).toFixed(2)))
+                    : (isSoWeight && initialPcs > 0 ? String(remainingQty) : '');
 
                 const initialBales = pcsPerBale && pcsPerBale > 0 && initialPcs > 0
                     ? String(Math.ceil(initialPcs / pcsPerBale))
                     : '';
-
-                const uom = item.uom || item.unit || 'Pcs';
 
                 return {
                     finishedGood: fgId,
                     finishedGoodName: fgName,
                     orderedQuantity: orderedQty,
                     remainingQuantity: remainingQty,
+                    remainingPcs,
+                    remainingKg,
                     currentStock,
-                    dispatchedQuantity: initialPcs,
+                    isPos,
+                    dispatchedQuantity: isSoWeight ? (Number(initialKg) || 0) : initialPcs,
+                    dispatchedPcs: String(initialPcs),
                     dispatchedKg: initialKg,
                     dispatchedBales: initialBales,
                     avgBagWeightKg,
+                    bagWeightSource,
                     pcsPerBale,
                     uom,
                     unit: uom,
@@ -267,28 +286,27 @@ export default function DispatchPage() {
     };
 
     const handlePcsChange = (idx, val) => {
+        const cleanVal = val === '' ? '' : String(Math.max(0, Math.floor(Number(val) || 0)));
         setDispatchItems((prev) =>
             prev.map((it, i) => {
                 if (i !== idx) return it;
-                const next = { ...it, dispatchedQuantity: val };
-                const numPcs = Number(val);
+                const next = { ...it, dispatchedPcs: cleanVal, isBalesModified: false };
+                const numPcs = cleanVal === '' ? 0 : Number(cleanVal);
+                const avgWeightGrams = it.avgBagWeightKg ? Number((it.avgBagWeightKg * 1000).toFixed(2)) : 0;
+                const isSoWeight = ['kg', 'kgs', 'kilogram', 'kilograms', 'kilo'].includes(String(it.uom || it.unit || '').trim().toLowerCase());
 
-                // Auto-suggest Kg only if user hasn't manually modified Kg and ratio is known
-                if (!it.isKgModified) {
-                    if (it.avgBagWeightKg && numPcs > 0) {
-                        next.dispatchedKg = String(Number((numPcs * it.avgBagWeightKg).toFixed(2)));
-                    } else if (!val) {
-                        next.dispatchedKg = '';
-                    }
+                if (avgWeightGrams > 0) {
+                    const calcKg = cleanVal === '' ? '' : String(Number(((numPcs * avgWeightGrams) / 1000).toFixed(2)));
+                    next.dispatchedKg = calcKg;
+                    next.dispatchedQuantity = isSoWeight ? (Number(calcKg) || 0) : numPcs;
+                } else {
+                    next.dispatchedQuantity = numPcs;
                 }
 
-                // Auto-suggest Bales only if user hasn't manually modified Bales and ratio is known
-                if (!it.isBalesModified) {
-                    if (it.pcsPerBale && it.pcsPerBale > 0 && numPcs > 0) {
-                        next.dispatchedBales = String(Math.ceil(numPcs / it.pcsPerBale));
-                    } else if (!val) {
-                        next.dispatchedBales = '';
-                    }
+                if (it.pcsPerBale && it.pcsPerBale > 0 && numPcs > 0) {
+                    next.dispatchedBales = String(Math.ceil(numPcs / it.pcsPerBale));
+                } else {
+                    next.dispatchedBales = '';
                 }
 
                 return next;
@@ -298,7 +316,35 @@ export default function DispatchPage() {
 
     const handleKgChange = (idx, val) => {
         setDispatchItems((prev) =>
-            prev.map((it, i) => (i === idx ? { ...it, dispatchedKg: val, isKgModified: true } : it))
+            prev.map((it, i) => {
+                if (i !== idx) return it;
+                const next = { ...it, dispatchedKg: val, isBalesModified: false };
+                const numKg = Number(val);
+                const avgWeightGrams = it.avgBagWeightKg ? Number((it.avgBagWeightKg * 1000).toFixed(2)) : 0;
+                const isSoWeight = ['kg', 'kgs', 'kilogram', 'kilograms', 'kilo'].includes(String(it.uom || it.unit || '').trim().toLowerCase());
+
+                if (avgWeightGrams > 0) {
+                    if (val !== '' && Number.isFinite(numKg) && numKg >= 0) {
+                        const calcPcs = Math.floor((numKg * 1000) / avgWeightGrams);
+                        const consistentKg = Number(((calcPcs * avgWeightGrams) / 1000).toFixed(2));
+                        next.dispatchedPcs = String(calcPcs);
+                        next.dispatchedQuantity = isSoWeight ? (consistentKg || numKg) : calcPcs;
+                        if (it.pcsPerBale && it.pcsPerBale > 0 && calcPcs > 0) {
+                            next.dispatchedBales = String(Math.ceil(calcPcs / it.pcsPerBale));
+                        } else {
+                            next.dispatchedBales = '';
+                        }
+                    } else if (val === '') {
+                        next.dispatchedPcs = '';
+                        next.dispatchedQuantity = 0;
+                        next.dispatchedBales = '';
+                    }
+                } else if (isSoWeight) {
+                    next.dispatchedQuantity = Number.isFinite(numKg) && numKg >= 0 ? numKg : 0;
+                }
+
+                return next;
+            })
         );
     };
 
@@ -350,20 +396,27 @@ export default function DispatchPage() {
 
         // Validate quantities do not exceed remaining or available physical stock
         for (const it of dispatchItems) {
-            const numQty = Number(it.dispatchedQuantity || 0);
-            if (numQty <= 0) {
+            const numPcs = Number(it.dispatchedPcs ?? it.dispatchedQuantity ?? 0);
+            const numKg = Number(it.dispatchedKg || 0);
+            const hasStockCap = !it.isPos && it.currentStock !== null && it.currentStock !== undefined;
+            if (numPcs <= 0 && numKg <= 0) {
                 toast.error(`Please enter a valid quantity > 0 for '${it.finishedGoodName}'`);
                 return;
             }
-            if (it.currentStock !== null && it.currentStock !== undefined && it.currentStock <= 0) {
+            if (hasStockCap && it.currentStock <= 0) {
                 toast.error(`Cannot dispatch '${it.finishedGoodName}': Item is out of stock (0 available).`);
                 return;
             }
-            const maxAllowed = it.currentStock !== null && it.currentStock !== undefined
-                ? Math.min(it.remainingQuantity, it.currentStock)
-                : it.remainingQuantity;
-            if (!isTenantAdminUser && numQty > maxAllowed + 0.0001) {
-                toast.error(`Cannot dispatch ${numQty} ${it.uom} for '${it.finishedGoodName}' — maximum allowed is ${maxAllowed} ${it.uom}${it.currentStock !== null ? ` (Stock: ${it.currentStock})` : ''}`);
+            const remainingPcs = Number(it.remainingPcs ?? it.remainingQuantity ?? 0);
+            const maxAllowedPcs = hasStockCap
+                ? Math.min(remainingPcs, Math.max(0, it.currentStock))
+                : remainingPcs;
+            const avgWeightGrams = it.avgBagWeightKg ? Number((it.avgBagWeightKg * 1000).toFixed(2)) : 0;
+            const maxKg = avgWeightGrams > 0 ? Number(((maxAllowedPcs * avgWeightGrams) / 1000).toFixed(2)) : 0;
+            if (numPcs > maxAllowedPcs + 0.0001 || (avgWeightGrams > 0 && numKg > maxKg + 0.05)) {
+                toast.error(
+                    `Cannot dispatch ${numPcs} Pcs${avgWeightGrams > 0 ? ` (${numKg} Kg)` : ''} for '${it.finishedGoodName}' — maximum allowed is ${maxAllowedPcs} Pcs${avgWeightGrams > 0 ? ` (${maxKg} Kg)` : ''}`
+                );
                 return;
             }
         }
@@ -385,7 +438,8 @@ export default function DispatchPage() {
                 items: dispatchItems.map((item) => ({
                     finishedGood: item.finishedGood,
                     dispatchedQuantity: Number(item.dispatchedQuantity || 0),
-                    dispatchedKg: item.dispatchedKg ? Number(item.dispatchedKg) : undefined,
+                    dispatchedPcs: item.dispatchedPcs !== '' && item.dispatchedPcs !== undefined ? Number(item.dispatchedPcs) : undefined,
+                    dispatchedKg: item.dispatchedKg !== '' && item.dispatchedKg !== undefined ? Number(item.dispatchedKg) : undefined,
                     dispatchedBales: item.dispatchedBales ? Number(item.dispatchedBales) : undefined,
                     batchNumber: item.batchNumber || undefined
                 }))
@@ -525,7 +579,9 @@ export default function DispatchPage() {
                     acc[u] = (acc[u] || 0) + Number(i.dispatchedQuantity || i.quantity || 0);
                     return acc;
                 }, {});
-                return Object.entries(totals).map(([unit, qty]) => `${qty.toLocaleString()} ${unit}`).join(' + ') || '0';
+                const totalKg = itemsList.reduce((acc, i) => acc + (Number(i.dispatchedKg) || 0), 0);
+                const qtyStr = Object.entries(totals).map(([unit, qty]) => `${qty.toLocaleString('en-IN')} ${unit}`).join(' + ') || '0';
+                return totalKg > 0 && !totals.Kg ? `${qtyStr} / ${Number(totalKg.toFixed(2)).toLocaleString('en-IN')} Kg` : qtyStr;
             },
             render: (row) => {
                 const itemsList = row.items || [];
@@ -535,14 +591,20 @@ export default function DispatchPage() {
                     return acc;
                 }, {});
                 const totalEntries = Object.entries(totals);
+                const totalKg = itemsList.reduce((acc, i) => acc + (Number(i.dispatchedKg) || 0), 0);
+                const totalPcs = itemsList.reduce((acc, i) => acc + (Number(i.dispatchedPcs) || 0), 0);
                 const totalBalesRecorded = itemsList.reduce((acc, i) => acc + (i.dispatchedBales ? Number(i.dispatchedBales) : 0), 0);
+                const primaryStr = totalEntries.length > 0
+                    ? totalEntries.map(([unit, qty]) => `${qty.toLocaleString('en-IN')} ${unit}`).join(' + ')
+                    : '-';
+                const dualSuffix = !totals.Kg && totalKg > 0
+                    ? ` / ${Number(totalKg.toFixed(2)).toLocaleString('en-IN')} Kg`
+                    : (totals.Kg && totalPcs > 0 ? ` (${totalPcs.toLocaleString('en-IN')} Pcs)` : '');
 
                 return (
                     <div className="font-sans leading-tight">
                         <div className="font-extrabold text-text-main text-xs">
-                            {totalEntries.length > 0 
-                                ? totalEntries.map(([unit, qty]) => `${qty.toLocaleString()} ${unit}`).join(' + ')
-                                : '-'}
+                            {primaryStr}{dualSuffix}
                         </div>
                         {totalBalesRecorded > 0 && (
                             <div className="text-[10px] text-text-muted font-mono font-medium">
@@ -770,16 +832,23 @@ export default function DispatchPage() {
             header: 'QTY SHIPPED',
             exportValue: (row) => {
                 const unitName = (typeof row.unit === 'string' && !/^[0-9a-fA-F]{24}$/.test(row.unit.trim()) && !/^[0-9a-fA-F]{24}_.+/.test(row.unit.trim())) ? row.unit : 'Bags';
-                return `${Number(row.dispatchedQuantity || 0).toLocaleString('en-IN')} ${unitName}`;
+                const qtyStr = `${Number(row.dispatchedQuantity || 0).toLocaleString('en-IN')} ${unitName}`;
+                const kg = Number(row.dispatchedKg || 0);
+                return kg > 0 && unitName.toLowerCase() !== 'kg' ? `${qtyStr} / ${kg.toLocaleString('en-IN')} Kg` : qtyStr;
             },
             render: (row) => {
                 const bags = Number(row.dispatchedQuantity || 0);
-                const bales = bags > 0 ? Math.ceil(bags / 300) : 0;
+                const kg = Number(row.dispatchedKg || 0);
+                const pcs = Number(row.dispatchedPcs || 0);
+                const bales = row.dispatchedBales || (bags > 0 ? Math.ceil(bags / 300) : 0);
                 const unitName = (typeof row.unit === 'string' && !/^[0-9a-fA-F]{24}$/.test(row.unit.trim()) && !/^[0-9a-fA-F]{24}_.+/.test(row.unit.trim())) ? row.unit : 'Bags';
+                const dualStr = kg > 0 && unitName.toLowerCase() !== 'kg'
+                    ? ` / ${kg.toLocaleString('en-IN')} Kg`
+                    : (unitName.toLowerCase() === 'kg' && pcs > 0 ? ` / ${pcs.toLocaleString('en-IN')} Pcs` : '');
                 return (
                     <div className="font-sans leading-tight">
                         <div className="font-extrabold text-text-main text-xs">
-                            {bags > 0 ? `${bags.toLocaleString('en-IN')} ${unitName}` : '-'}
+                            {bags > 0 ? `${bags.toLocaleString('en-IN')} ${unitName}${dualStr}` : '-'}
                         </div>
                         {bags > 0 && (
                             <div className="text-[10px] text-text-muted font-mono font-medium">
@@ -1199,8 +1268,45 @@ export default function DispatchPage() {
                         ? `Update dispatch quantities, transporter, vehicle details, or date for ${editDispatch.dispatchNumber}`
                         : 'Select Sales Order or POS Sale, assign transporter carrier, vehicle number & quantity to ship'
                 }
+                footer={(() => {
+                    const hasInvalidItem = dispatchItems.some((it) => {
+                        const hasCap = !it.isPos && it.currentStock !== null && it.currentStock !== undefined;
+                        const isOos = hasCap && it.currentStock <= 0;
+                        const remPcs = Number(it.remainingPcs ?? it.remainingQuantity ?? 0);
+                        const maxPcs = hasCap ? Math.min(remPcs, Math.max(0, it.currentStock)) : remPcs;
+                        const avgG = it.avgBagWeightKg ? Number((it.avgBagWeightKg * 1000).toFixed(2)) : 0;
+                        const mKg = avgG > 0 ? Number(((maxPcs * avgG) / 1000).toFixed(2)) : 0;
+                        const nPcs = Number(it.dispatchedPcs || 0);
+                        const nKg = Number(it.dispatchedKg || 0);
+                        return isOos || nPcs > maxPcs + 0.0001 || (avgG > 0 && nKg > mKg + 0.05);
+                    });
+                    return (
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setIsDrawerOpen(false);
+                                    setEditDispatch(null);
+                                }}
+                                className="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                form="dispatch-plan-form"
+                                disabled={isSubmitting || isLoadingFormOptions || hasInvalidItem}
+                                title={hasInvalidItem ? 'Cannot dispatch: fix out-of-stock or over-limit quantities' : undefined}
+                                className="px-5 py-2.5 text-sm font-bold text-slate-950 bg-amber-500 hover:bg-amber-600 rounded-lg shadow-sm transition-colors flex items-center gap-2 cursor-pointer disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed disabled:shadow-none"
+                            >
+                                <Truck size={16} />
+                                <span>{isSubmitting ? (editDispatch ? 'Updating Dispatch...' : 'Processing Dispatch...') : (editDispatch ? 'Save & Update Dispatch' : 'Confirm & Plan Dispatch')}</span>
+                            </button>
+                        </>
+                    );
+                })()}
             >
-                <form onSubmit={handleSubmitDispatch} className="space-y-4 font-sans text-xs">
+                <form id="dispatch-plan-form" onSubmit={handleSubmitDispatch} className="space-y-4 font-sans text-xs">
                     {isLoadingFormOptions ? (
                         <div className="flex items-center justify-center py-12 text-text-muted gap-2">
                             <RefreshCw size={18} className="animate-spin text-primary" />
@@ -1276,7 +1382,19 @@ export default function DispatchPage() {
                                     <div className="flex justify-between items-center text-[11px] pt-1 border-t border-border/60">
                                         <span className="text-text-muted font-medium">Remaining to Ship:</span>
                                         <span className="font-mono font-extrabold text-primary">
-                                            {selectedSource.remainingLabel || `${selectedSource.remainingQuantity?.toLocaleString()} ${selectedSource.items?.[0]?.uom || 'Bags'}`}
+                                            {(() => {
+                                                if (dispatchItems.length > 0) {
+                                                    const totalRemPcs = dispatchItems.reduce((sum, it) => sum + Number(it.remainingPcs ?? it.remainingQuantity ?? 0), 0);
+                                                    const totalRemKg = Number(dispatchItems.reduce((sum, it) => sum + Number(it.remainingKg || 0), 0).toFixed(2));
+                                                    const primaryUom = String(dispatchItems[0]?.uom || 'Pcs').toUpperCase();
+                                                    if (totalRemKg > 0) {
+                                                        return primaryUom === 'KG'
+                                                            ? `${totalRemKg.toLocaleString('en-IN')} Kg (${totalRemPcs.toLocaleString('en-IN')} Pcs)`
+                                                            : `${totalRemPcs.toLocaleString('en-IN')} Pcs (${totalRemKg.toLocaleString('en-IN')} Kg)`;
+                                                    }
+                                                }
+                                                return selectedSource.remainingLabel || `${selectedSource.remainingQuantity?.toLocaleString('en-IN')} ${selectedSource.items?.[0]?.uom || 'Bags'}`;
+                                            })()}
                                         </span>
                                     </div>
                                 </div>
@@ -1379,10 +1497,15 @@ export default function DispatchPage() {
 
                             {/* Dispatch Quantities & Items */}
                             <div className="pt-2 border-t border-border space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
-                                        Quantity to Load & Baling
-                                    </label>
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
+                                            Quantity to Load & Baling
+                                        </label>
+                                        <p className="text-[11px] text-text-muted">
+                                            Edit either field, the other updates automatically
+                                        </p>
+                                    </div>
                                     {!isTenantAdminUser && (
                                         <span className="text-[10px] text-amber-500 font-medium">
                                             (Read-only: editing restricted to Tenant Admin)
@@ -1391,177 +1514,158 @@ export default function DispatchPage() {
                                 </div>
 
                                 {dispatchItems.map((item, idx) => {
-                                    const isOutOfStock = item.currentStock !== null && item.currentStock !== undefined && item.currentStock <= 0;
-                                    const maxAllowed = item.currentStock !== null && item.currentStock !== undefined
-                                        ? Math.min(item.remainingQuantity, Math.max(0, item.currentStock))
-                                        : item.remainingQuantity;
+                                    const hasStockCap = !item.isPos && item.currentStock !== null && item.currentStock !== undefined;
+                                    const isOutOfStock = hasStockCap && item.currentStock <= 0;
+                                    const remainingPcs = Number(item.remainingPcs ?? item.remainingQuantity ?? 0);
+                                    const maxAllowedPcs = hasStockCap
+                                        ? Math.min(remainingPcs, Math.max(0, item.currentStock))
+                                        : remainingPcs;
+                                    const avgWeightGrams = item.avgBagWeightKg ? Number((item.avgBagWeightKg * 1000).toFixed(2)) : 0;
+                                    const maxKg = avgWeightGrams > 0 ? Number(((maxAllowedPcs * avgWeightGrams) / 1000).toFixed(2)) : 0;
+                                    const numPcs = Number(item.dispatchedPcs || 0);
+                                    const numKg = Number(item.dispatchedKg || 0);
+                                    const exceedsMax = !isOutOfStock && (numPcs > maxAllowedPcs + 0.0001 || (avgWeightGrams > 0 && numKg > maxKg + 0.05));
+                                    const consistentKg = avgWeightGrams > 0 && item.dispatchedPcs !== '' && numPcs > 0
+                                        ? Number(((numPcs * avgWeightGrams) / 1000).toFixed(2))
+                                        : null;
 
                                     return (
-                                        <div key={idx} className={`shadow-sm space-y-2.5 ${isOutOfStock ? 'bg-red-50/40 border border-red-200 rounded-xl p-4' : 'bg-card-bg border border-border rounded-lg p-3'}`}>
-                                            <div className="flex flex-wrap items-center justify-between gap-1.5 pb-1 border-b border-border/50">
-                                                <div className="font-bold text-xs text-text-main flex items-center gap-2">
-                                                    <span>{item.finishedGoodName}</span>
+                                        <div key={idx} className={`shadow-sm space-y-2.5 ${isOutOfStock || exceedsMax ? 'bg-red-50/40 border border-red-200 rounded-xl p-4' : 'bg-card-bg border border-border rounded-lg p-3.5'}`}>
+                                            <div className="flex items-start justify-between gap-3 pb-2 border-b border-border/50">
+                                                <div className="font-bold text-xs text-text-main flex items-center gap-2 min-w-0 flex-wrap">
+                                                    <span className="truncate">{item.finishedGoodName}</span>
                                                     {isOutOfStock ? (
-                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold bg-red-100 text-red-700 border border-red-200 tracking-wide">
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-bold bg-red-100 text-red-700 border border-red-200 tracking-wide whitespace-nowrap shrink-0">
                                                             Out of Stock (0 Available)
                                                         </span>
                                                     ) : item.currentStock !== null && item.currentStock !== undefined ? (
-                                                        <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[10px] font-mono">
-                                                            Stock: {item.currentStock.toLocaleString('en-IN')} {item.uom || item.unit || 'Pcs'}
+                                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap shrink-0 font-mono">
+                                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                                            In Stock: {item.currentStock.toLocaleString('en-IN')} {item.uom || item.unit || 'Pcs'}
                                                         </span>
                                                     ) : null}
                                                 </div>
-                                                <div className="flex items-center gap-1.5">
-                                                    {item.avgBagWeightKg ? (
-                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 font-mono">
-                                                            Avg: {(item.avgBagWeightKg * 1000).toFixed(0)}g / bag
+                                                <div className="flex items-center gap-1.5 flex-wrap justify-end shrink-0">
+                                                    {avgWeightGrams > 0 ? (
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 font-mono whitespace-nowrap">
+                                                            Avg {Math.round(avgWeightGrams)} g / bag{item.bagWeightSource ? ` (${item.bagWeightSource})` : ''}
                                                         </span>
                                                     ) : (
-                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 font-mono">
-                                                            Avg: -
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">
+                                                            Kg conversion unavailable — manual entry
                                                         </span>
                                                     )}
                                                     {item.pcsPerBale ? (
-                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 font-mono">
-                                                            Bale: ~{item.pcsPerBale} pcs/bale
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 font-mono whitespace-nowrap">
+                                                            {item.pcsPerBale} pcs per bale
                                                         </span>
-                                                    ) : (
-                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 font-mono">
-                                                            Bales: -
-                                                        </span>
-                                                    )}
+                                                    ) : null}
+                                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-semibold font-mono whitespace-nowrap ${
+                                                        isOutOfStock || exceedsMax
+                                                            ? 'bg-red-50 text-red-600 border border-red-200'
+                                                            : 'bg-slate-100 text-slate-700 border border-slate-200'
+                                                    }`}>
+                                                        Max: {maxAllowedPcs.toLocaleString('en-IN')} Pcs{avgWeightGrams > 0 ? ` (${maxKg.toLocaleString('en-IN')} Kg)` : ''}
+                                                    </span>
                                                 </div>
                                             </div>
 
-                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                                                {/* Column 1: Quantity */}
+                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                                                {/* Column 1: Qty to Dispatch * */}
                                                 <div>
-                                                    <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
-                                                        <span className="font-semibold text-text-main">
-                                                            Qty to dispatch ({item.uom || item.unit || 'Pcs'}) *
-                                                        </span>
-                                                        <span className={isOutOfStock ? 'text-xs font-semibold text-red-600' : 'text-xs font-semibold text-primary'}>
-                                                            Max: {maxAllowed.toLocaleString('en-IN')} {item.uom || item.unit || 'Pcs'}
-                                                        </span>
-                                                    </div>
-                                                    <div className="flex items-center gap-1.5">
+                                                    <label className="text-xs font-semibold text-slate-700 whitespace-nowrap mb-1.5 block">
+                                                        Qty to Dispatch *
+                                                    </label>
+                                                    <div className={`flex items-center h-10 rounded-lg border overflow-hidden ${
+                                                        isOutOfStock || exceedsMax
+                                                            ? 'border-red-300 bg-white focus-within:ring-2 focus-within:ring-red-500/20 focus-within:border-red-500'
+                                                            : !isTenantAdminUser
+                                                            ? 'border-slate-200 bg-slate-100 opacity-80'
+                                                            : 'border-slate-300 bg-white focus-within:ring-2 focus-within:ring-amber-500/20 focus-within:border-amber-500'
+                                                    }`}>
                                                         <input
                                                             type="number"
                                                             required
                                                             disabled={!isTenantAdminUser || isOutOfStock}
-                                                            step="any"
+                                                            step="1"
                                                             min="0"
-                                                            max={isTenantAdminUser ? undefined : maxAllowed}
-                                                            value={item.dispatchedQuantity}
+                                                            value={item.dispatchedPcs ?? ''}
                                                             onChange={(e) => handlePcsChange(idx, e.target.value)}
-                                                            placeholder={isOutOfStock ? 'Out of stock' : `Enter ${item.uom || item.unit || 'Pcs'}`}
-                                                            className={`w-full p-2 text-xs font-mono font-bold focus:outline-none ${
-                                                                isOutOfStock
-                                                                    ? 'bg-white border border-red-300 text-slate-900 rounded-lg focus:ring-2 focus:ring-red-500/20 focus:border-red-500 cursor-not-allowed'
-                                                                    : !isTenantAdminUser
-                                                                    ? 'bg-border/20 cursor-not-allowed opacity-80 border-border rounded'
-                                                                    : 'bg-app-bg border border-border rounded focus:border-primary'
+                                                            placeholder={isOutOfStock ? '0' : 'Enter Pcs'}
+                                                            className={`w-full h-full px-3 text-sm font-medium text-slate-900 outline-none bg-transparent font-mono ${
+                                                                !isTenantAdminUser || isOutOfStock ? 'cursor-not-allowed' : ''
                                                             }`}
                                                         />
-                                                        <span className="px-2 py-2 bg-border/40 border border-border rounded text-xs font-bold text-text-muted select-none shrink-0">
-                                                            {item.uom || item.unit || 'Pcs'}
+                                                        <span className="h-full px-3 flex items-center text-xs font-semibold text-slate-500 bg-slate-50 border-l border-slate-200 select-none shrink-0">
+                                                            Pcs
                                                         </span>
                                                     </div>
                                                 </div>
 
-                                                {/* Column 2: Quantity (Kg) */}
+                                                {/* Column 2: Net Weight */}
                                                 <div>
-                                                    <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
-                                                        <span className="font-semibold text-text-main">Quantity (Kg)</span>
-                                                        {item.avgBagWeightKg && item.isKgModified ? (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleResetKgToAuto(idx)}
-                                                                disabled={!isTenantAdminUser}
-                                                                className="text-[9px] text-primary hover:underline cursor-pointer"
-                                                                title="Reset to ratio-based auto suggestion"
-                                                            >
-                                                                Reset Auto
-                                                            </button>
-                                                        ) : item.avgBagWeightKg ? (
-                                                            <span className="text-xs font-semibold text-amber-600">Auto</span>
-                                                        ) : (
-                                                            <span className="text-[9px] text-text-muted">Manual</span>
-                                                        )}
+                                                    <label className="text-xs font-semibold text-slate-700 whitespace-nowrap mb-1.5 block">
+                                                        Net Weight
+                                                    </label>
+                                                    <div className={`flex items-center h-10 rounded-lg border overflow-hidden ${
+                                                        isOutOfStock || exceedsMax
+                                                            ? 'border-red-300 bg-white focus-within:ring-2 focus-within:ring-red-500/20 focus-within:border-red-500'
+                                                            : !isTenantAdminUser
+                                                            ? 'border-slate-200 bg-slate-100 opacity-80'
+                                                            : 'border-slate-300 bg-white focus-within:ring-2 focus-within:ring-amber-500/20 focus-within:border-amber-500'
+                                                    }`}>
+                                                        <input
+                                                            type="number"
+                                                            disabled={!isTenantAdminUser || isOutOfStock}
+                                                            step="any"
+                                                            min="0"
+                                                            value={item.dispatchedKg ?? ''}
+                                                            onChange={(e) => handleKgChange(idx, e.target.value)}
+                                                            placeholder={isOutOfStock ? '0' : 'Enter Kg'}
+                                                            className={`w-full h-full px-3 text-sm font-medium text-slate-900 outline-none bg-transparent font-mono ${
+                                                                !isTenantAdminUser || isOutOfStock ? 'cursor-not-allowed' : ''
+                                                            }`}
+                                                        />
+                                                        <span className="h-full px-3 flex items-center text-xs font-semibold text-slate-500 bg-slate-50 border-l border-slate-200 select-none shrink-0">
+                                                            Kg
+                                                        </span>
                                                     </div>
-                                                    <input
-                                                        type="number"
-                                                        disabled={!isTenantAdminUser}
-                                                        step="any"
-                                                        min="0"
-                                                        value={item.dispatchedKg}
-                                                        onChange={(e) => handleKgChange(idx, e.target.value)}
-                                                        placeholder={item.avgBagWeightKg ? 'Net weight Kg' : '-'}
-                                                        className={`w-full p-2 text-xs font-mono font-bold bg-slate-50 border border-slate-200 text-slate-700 rounded-lg focus:outline-none focus:border-primary ${
-                                                            !isTenantAdminUser ? 'cursor-not-allowed opacity-80' : ''
-                                                        }`}
-                                                    />
                                                 </div>
 
                                                 {/* Column 3: Baling (Bales) */}
                                                 <div>
-                                                    <div className="flex justify-between items-center text-[10px] text-text-muted mb-1">
-                                                        <span className="font-semibold text-text-main">Baling (Bales)</span>
-                                                        {item.pcsPerBale && item.isBalesModified ? (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleResetBalesToAuto(idx)}
-                                                                disabled={!isTenantAdminUser}
-                                                                className="text-[9px] text-primary hover:underline cursor-pointer"
-                                                                title="Reset to ratio-based auto suggestion"
-                                                            >
-                                                                Reset Auto
-                                                            </button>
-                                                        ) : item.pcsPerBale ? (
-                                                            <span className="text-xs font-semibold text-amber-600">Auto</span>
-                                                        ) : (
-                                                            <span className="text-[9px] text-text-muted">Manual</span>
-                                                        )}
-                                                    </div>
+                                                    <label className="text-xs font-semibold text-slate-700 whitespace-nowrap mb-1.5 block">
+                                                        Baling (Bales)
+                                                    </label>
                                                     <input
                                                         type="number"
-                                                        disabled={!isTenantAdminUser}
+                                                        disabled={!isTenantAdminUser || isOutOfStock}
                                                         step="any"
                                                         min="0"
-                                                        value={item.dispatchedBales}
+                                                        value={item.dispatchedBales ?? ''}
                                                         onChange={(e) => handleBalesChange(idx, e.target.value)}
-                                                        placeholder={item.pcsPerBale ? 'No. of bales' : '-'}
-                                                        className={`w-full p-2 text-xs font-mono font-bold bg-slate-50 border border-slate-200 text-slate-700 rounded-lg focus:outline-none focus:border-primary ${
-                                                            !isTenantAdminUser ? 'cursor-not-allowed opacity-80' : ''
+                                                        placeholder={item.pcsPerBale ? 'No. of bales' : ''}
+                                                        className={`w-full h-10 px-3 text-sm font-mono font-medium bg-slate-50 border border-slate-300 text-slate-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 ${
+                                                            !isTenantAdminUser || isOutOfStock ? 'cursor-not-allowed opacity-80' : ''
                                                         }`}
                                                     />
                                                 </div>
                                             </div>
+
+                                            {consistentKg !== null && item.dispatchedKg !== '' && Math.abs(numKg - consistentKg) > 0.005 && (
+                                                <p className="text-[11px] text-text-muted font-mono">
+                                                    = {consistentKg.toLocaleString('en-IN')} Kg ({numPcs.toLocaleString('en-IN')} Pcs)
+                                                </p>
+                                            )}
+
+                                            {exceedsMax && (
+                                                <p className="text-xs font-semibold text-red-600">
+                                                    Exceeds maximum allowed: {maxAllowedPcs.toLocaleString('en-IN')} Pcs{avgWeightGrams > 0 ? ` (${maxKg.toLocaleString('en-IN')} Kg)` : ''}.
+                                                </p>
+                                            )}
                                         </div>
                                     );
                                 })}
-                            </div>
-
-                            <div className="pt-3 border-t border-border flex justify-end gap-3">
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setIsDrawerOpen(false);
-                                        setEditDispatch(null);
-                                    }}
-                                    className="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    type="submit"
-                                    disabled={isSubmitting || dispatchItems.some((it) => it.currentStock !== null && it.currentStock !== undefined && it.currentStock <= 0)}
-                                    title={dispatchItems.some((it) => it.currentStock !== null && it.currentStock !== undefined && it.currentStock <= 0) ? 'Cannot dispatch: item is out of stock' : undefined}
-                                    className="px-5 py-2.5 text-sm font-bold text-slate-950 bg-amber-500 hover:bg-amber-600 rounded-lg shadow-sm transition-colors flex items-center gap-2 cursor-pointer disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed disabled:shadow-none"
-                                >
-                                    <Truck size={16} />
-                                    <span>{isSubmitting ? (editDispatch ? 'Updating Dispatch...' : 'Processing Dispatch...') : (editDispatch ? 'Save & Update Dispatch' : 'Confirm & Plan Dispatch')}</span>
-                                </button>
                             </div>
                         </>
                     )}

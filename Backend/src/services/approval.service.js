@@ -44,6 +44,75 @@ const approvalRegistry = {
             } else {
                 await OrderEnquiry.updateOne(query, update);
             }
+            await notifyRequesterDecision(approval, 'Rejected');
+        }
+    },
+    SO: {
+        onApprove: async (approval, session) => {
+            const SalesOrder = require('../models/salesOrder.model');
+            const { notifyProductionOnSoConfirm } = require('./soProduction.service');
+            const deciderDoc = approval.decidedBy
+                ? await User.findById(approval.decidedBy).select('name email').lean()
+                : null;
+            const deciderName = deciderDoc?.name || deciderDoc?.email || 'Approver';
+            const query = { _id: approval.referenceId, tenant: approval.tenant };
+            const update = {
+                $set: {
+                    status: 'CONFIRMED',
+                    soApprovalStatus: 'Approved',
+                    approvedBy: approval.decidedBy || null,
+                    approvedAt: approval.decidedAt || new Date(),
+                    approvalRemarks: approval.remarks || 'Approved'
+                },
+                $push: {
+                    statusHistory: {
+                        from: 'Pending Approval',
+                        to: 'CONFIRMED',
+                        changedBy: approval.decidedBy || null,
+                        changedByName: deciderName,
+                        changedAt: approval.decidedAt || new Date(),
+                        remark: approval.remarks || 'Approved'
+                    }
+                }
+            };
+            const updatedSo = session
+                ? await SalesOrder.findOneAndUpdate(query, update, { new: true, session })
+                : await SalesOrder.findOneAndUpdate(query, update, { new: true });
+
+            if (updatedSo) {
+                await notifyProductionOnSoConfirm(updatedSo, String(approval.tenant));
+            }
+            await notifyRequesterDecision(approval, 'Approved');
+        },
+        onReject: async (approval, session) => {
+            const SalesOrder = require('../models/salesOrder.model');
+            const deciderDoc = approval.decidedBy
+                ? await User.findById(approval.decidedBy).select('name email').lean()
+                : null;
+            const deciderName = deciderDoc?.name || deciderDoc?.email || 'Approver';
+            const query = { _id: approval.referenceId, tenant: approval.tenant };
+            const update = {
+                $set: {
+                    soApprovalStatus: 'Rejected',
+                    approvalRemarks: approval.remarks || 'Rejected'
+                },
+                $push: {
+                    statusHistory: {
+                        from: 'Pending Approval',
+                        to: 'Rejected',
+                        changedBy: approval.decidedBy || null,
+                        changedByName: deciderName,
+                        changedAt: approval.decidedAt || new Date(),
+                        remark: approval.remarks || 'Rejected'
+                    }
+                }
+            };
+            if (session) {
+                await SalesOrder.updateOne(query, update, { session });
+            } else {
+                await SalesOrder.updateOne(query, update);
+            }
+            await notifyRequesterDecision(approval, 'Rejected');
         }
     },
     PO: {
@@ -151,11 +220,44 @@ const notifyApprovers = async (tenantId, approval) => {
 };
 
 /**
- * Notify the requester when their approval request has been decided (Disabled per Requirement 3)
+ * Notify the requester when their approval request has been approved or rejected
  */
-const notifyRequesterDecision = async () => {
-    // Disabled: No notification goes to the requester per Requirement 3
-    return;
+const notifyRequesterDecision = async (approval, decision = 'Approved') => {
+    try {
+        if (!approval || !approval.tenant) return;
+        const isRejected = String(decision).toLowerCase() === 'rejected';
+        const refLabel = approval.referenceNo || approval.approvalNo || 'Request';
+        const mod = approval.type === 'NSL' ? 'CRM' : approval.type === 'SO' ? 'SALES' : 'PROCUREMENT';
+        const link = approval.type === 'NSL'
+            ? `/customer-crm?tab=enquiries&id=${approval.referenceId}`
+            : approval.type === 'SO'
+                ? '/sales?tab=sales-orders'
+                : '/approvals';
+
+        await Notification.create({
+            tenant: new mongoose.Types.ObjectId(approval.tenant),
+            type: 'APPROVAL_DECISION',
+            module: mod,
+            title: `${approval.type === 'SO' ? 'Sales Order' : approval.type === 'NSL' ? 'Enquiry' : 'Request'} ${isRejected ? 'Rejected' : 'Approved'}: ${refLabel}`,
+            message: isRejected
+                ? `${refLabel} was rejected. Reason: ${approval.remarks || 'No remark provided'}`
+                : `${refLabel} has been approved${approval.remarks ? ` (${approval.remarks})` : ''}.`,
+            priority: isRejected ? 'HIGH' : 'MEDIUM',
+            link,
+            data: {
+                targetUserId: approval.requestedBy ? String(approval.requestedBy) : '',
+                approvalId: approval._id,
+                approvalNo: approval.approvalNo,
+                referenceId: approval.referenceId,
+                referenceNo: approval.referenceNo,
+                type: approval.type,
+                decision
+            },
+            isRead: false
+        });
+    } catch (err) {
+        console.error('[Approval Notification] Failed to notify requester:', err.message);
+    }
 };
 
 /**
@@ -492,14 +594,213 @@ const startApprovalReminderScheduler = () => {
     console.log('✅ Approval reminder scheduler initialized (every 5 minutes).');
 };
 
+/**
+ * Create or retrieve an approval request for an Order Enquiry (NSL / Website)
+ */
+const createNslApprovalRequest = async (enqDoc, creatorUser) => {
+    try {
+        if (!enqDoc || !enqDoc.tenant) return null;
+        const tenantId = enqDoc.tenant;
+
+        const existing = await Approval.findOne({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            type: 'NSL',
+            referenceId: new mongoose.Types.ObjectId(enqDoc._id),
+            status: 'Pending'
+        });
+        if (existing) return existing;
+
+        const custObj = typeof enqDoc.customer === 'object' && enqDoc.customer
+            ? enqDoc.customer
+            : (typeof enqDoc.customerRef === 'object' && enqDoc.customerRef ? enqDoc.customerRef : null);
+        const prospectName = enqDoc.newCustomerDetails?.company || enqDoc.newCustomerDetails?.name || custObj?.companyName || custObj?.name || 'Prospect';
+        const srcTag = enqDoc.source === 'Website' ? 'Website' : 'NSL';
+        const qtyVal = enqDoc.totalOrderQuantity || enqDoc.orderQuantity;
+        const qtyStr = qtyVal ? `${Number(qtyVal).toLocaleString('en-IN')} ${enqDoc.quantityUnit || 'Kg'}` : '';
+        const summary = [prospectName, srcTag, enqDoc.productCategory || 'Plain', qtyStr].filter(Boolean).join(' | ');
+
+        const approvalNo = await Approval.generateNextApprovalNo(tenantId);
+        let validRequester = creatorUser?._id || creatorUser?.id || enqDoc.createdBy;
+        if (!validRequester) {
+            const adminUser = await User.findOne({ tenant: tenantId, isActive: true }).sort({ createdAt: 1 }).lean();
+            validRequester = adminUser?._id;
+        }
+        if (!validRequester) return null;
+
+        const approval = await Approval.create({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            approvalNo,
+            type: 'NSL',
+            referenceModel: 'OrderEnquiry',
+            referenceId: enqDoc._id,
+            referenceNo: enqDoc.nslNumber || enqDoc.enquiryNumber || String(enqDoc._id).slice(-6).toUpperCase(),
+            title: `${enqDoc.source === 'Website' ? 'Website Lead' : 'NSL'} Approval: ${enqDoc.nslNumber || enqDoc.enquiryNumber || ''}`.trim(),
+            summary,
+            requestedBy: validRequester,
+            status: 'Pending',
+            reminderCount: 0,
+            nextReminderAt: new Date(Date.now() + REMINDER_INTERVAL_HOURS * 60 * 60 * 1000)
+        });
+
+        await notifyApprovers(tenantId, approval);
+        return approval;
+    } catch (err) {
+        if (err.code === 11000) {
+            return Approval.findOne({
+                tenant: new mongoose.Types.ObjectId(enqDoc.tenant),
+                type: 'NSL',
+                referenceId: new mongoose.Types.ObjectId(enqDoc._id),
+                status: 'Pending'
+            });
+        }
+        console.error('[Approval Service] Error creating NSL approval request:', err.message);
+        return null;
+    }
+};
+
+/**
+ * Idempotent function to sync missing Approval records for OrderEnquiries in Pending Approval state.
+ */
+const syncPendingNslApprovals = async (tenantId) => {
+    try {
+        if (!tenantId) return;
+        const tenantObjId = new mongoose.Types.ObjectId(tenantId);
+        const pendingEnquiries = await OrderEnquiry.find({
+            tenant: tenantObjId,
+            isActive: { $ne: false },
+            $or: [
+                { status: 'Pending Approval' },
+                { soApprovalStatus: 'Pending Approval' }
+            ]
+        })
+            .populate('customer', 'companyName name')
+            .populate('customerRef', 'companyName name')
+            .lean();
+
+        for (const enq of pendingEnquiries) {
+            const hasPending = await Approval.findOne({
+                tenant: tenantObjId,
+                type: 'NSL',
+                referenceId: enq._id,
+                status: 'Pending'
+            }).select('_id').lean();
+            if (!hasPending) {
+                await createNslApprovalRequest(enq, null);
+            }
+        }
+    } catch (err) {
+        console.error('[Approval Service] Error syncing pending NSL approvals:', err.message);
+    }
+};
+
+/**
+ * Create or retrieve an approval request for a Sales Order
+ */
+const createSalesOrderApprovalRequest = async (soDoc, creatorUser) => {
+    try {
+        if (!soDoc || !soDoc.tenant) return null;
+        const tenantId = soDoc.tenant;
+
+        const existing = await Approval.findOne({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            type: 'SO',
+            referenceId: new mongoose.Types.ObjectId(soDoc._id),
+            status: 'Pending'
+        });
+        if (existing) return existing;
+
+        const SalesOrder = require('../models/salesOrder.model');
+        const populatedSo = await SalesOrder.findById(soDoc._id)
+            .populate('customer', 'companyName name')
+            .lean();
+        const custName = populatedSo?.customer?.companyName || populatedSo?.customer?.name || 'Customer';
+        const totalQty = (populatedSo?.items || []).reduce((s, it) => s + Number(it.quantity || 0), 0);
+        const primaryUnit = populatedSo?.items?.[0]?.unit || 'Pcs';
+        const formattedGrand = Number(populatedSo?.grandTotal ?? soDoc.grandTotal ?? soDoc.totalValue ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+        const summary = `${custName} | ${totalQty.toLocaleString('en-IN')} ${primaryUnit} | ₹${formattedGrand}`;
+
+        const approvalNo = await Approval.generateNextApprovalNo(tenantId);
+        let validRequester = soDoc.createdBy || creatorUser?._id || creatorUser?.id;
+        if (!validRequester) {
+            const adminUser = await User.findOne({ tenant: tenantId, isActive: true }).sort({ createdAt: 1 }).lean();
+            validRequester = adminUser?._id;
+        }
+        if (!validRequester) return null;
+
+        const approval = await Approval.create({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            approvalNo,
+            type: 'SO',
+            referenceModel: 'SalesOrder',
+            referenceId: soDoc._id,
+            referenceNo: soDoc.soNumber,
+            title: `Sales Order Approval: ${soDoc.soNumber}`,
+            summary,
+            requestedBy: validRequester,
+            status: 'Pending',
+            reminderCount: 0,
+            nextReminderAt: new Date(Date.now() + REMINDER_INTERVAL_HOURS * 60 * 60 * 1000)
+        });
+
+        await notifyApprovers(tenantId, approval);
+        return approval;
+    } catch (err) {
+        if (err.code === 11000) {
+            return Approval.findOne({
+                tenant: new mongoose.Types.ObjectId(soDoc.tenant),
+                type: 'SO',
+                referenceId: new mongoose.Types.ObjectId(soDoc._id),
+                status: 'Pending'
+            });
+        }
+        console.error('[Approval Service] Error creating Sales Order approval request:', err.message);
+        return null;
+    }
+};
+
+/**
+ * Idempotent function to sync missing Approval records for Sales Orders in Pending Approval state.
+ */
+const syncPendingSalesOrderApprovals = async (tenantId) => {
+    try {
+        if (!tenantId) return;
+        const tenantObjId = new mongoose.Types.ObjectId(tenantId);
+        const SalesOrder = require('../models/salesOrder.model');
+        const pendingSos = await SalesOrder.find({
+            tenant: tenantObjId,
+            isActive: { $ne: false },
+            soApprovalStatus: 'Pending Approval',
+            status: { $ne: 'CANCELLED' }
+        }).lean();
+
+        for (const so of pendingSos) {
+            const hasPending = await Approval.findOne({
+                tenant: tenantObjId,
+                type: 'SO',
+                referenceId: so._id,
+                status: 'Pending'
+            }).select('_id').lean();
+            if (!hasPending) {
+                await createSalesOrderApprovalRequest(so, null);
+            }
+        }
+    } catch (err) {
+        console.error('[Approval Service] Error syncing pending Sales Order approvals:', err.message);
+    }
+};
+
 module.exports = {
     REMINDER_INTERVAL_HOURS,
     approvalRegistry,
     registerApprovalHandler,
     getApprovalHandler,
     createPoApprovalRequest,
+    createNslApprovalRequest,
+    createSalesOrderApprovalRequest,
     createContinuationWoApprovalRequest,
     syncPendingPurchaseOrderApprovals,
+    syncPendingNslApprovals,
+    syncPendingSalesOrderApprovals,
     syncPendingContinuationWoApprovals,
     notifyApprovers,
     notifyRequesterDecision,

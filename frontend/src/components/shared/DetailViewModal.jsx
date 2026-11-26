@@ -319,11 +319,12 @@ function PoAttachmentViewer({ images = [], pdfs = [], others = [] }) {
  * and Running Remaining Balance.
  */
 function PoReceiptHistoryViewer({ record }) {
-    const [grns, setGrns] = useState(record?.receiptHistory || []);
-    const [loading, setLoading] = useState(!record?.receiptHistory && Boolean(record?._id));
+    const initialHistory = Array.isArray(record?.receiptHistory) ? record.receiptHistory : [];
+    const [grns, setGrns] = useState(initialHistory);
+    const [loading, setLoading] = useState(initialHistory.length === 0 && Boolean(record?._id));
 
     useEffect(() => {
-        if (record?.receiptHistory && Array.isArray(record.receiptHistory) && record.receiptHistory.length > 0) {
+        if (Array.isArray(record?.receiptHistory) && record.receiptHistory.length > 0) {
             setGrns(record.receiptHistory);
             setLoading(false);
             return;
@@ -337,6 +338,7 @@ function PoReceiptHistoryViewer({ record }) {
                 })
                 .catch((err) => {
                     console.error('Failed to load receipt history for PO:', err);
+                    setGrns([]);
                 })
                 .finally(() => setLoading(false));
         }
@@ -1092,7 +1094,7 @@ const MASTER_SCHEMAS = {
                                 <tr>
                                     <th className="px-3 py-2 border-b border-border">#</th>
                                     <th className="px-3 py-2 border-b border-border">Raw Material Ingredient</th>
-                                    <th className="px-3 py-2 border-b border-border text-right">Qty Per Unit Bag</th>
+                                    <th className="px-3 py-2 border-b border-border text-right">Qty per unit bag (Kg)</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-border bg-card-bg">
@@ -1546,8 +1548,8 @@ const MASTER_SCHEMAS = {
                                     const recvDisplay = item.receivedQuantity != null
                                         ? `${item.receivedQuantity} ${item.unit || item.uom || ''}`.trim()
                                         : '0';
-                                    const rateDisplay = item.ratePerUnit != null ? item.ratePerUnit : (item.unitPrice != null ? item.unitPrice : (item.rate || 0));
-                                    const amountDisplay = ((item.orderedQuantity != null && item.ratePerUnit != null) ? (item.orderedQuantity * item.ratePerUnit) : (item.totalAmount || 0));
+                                    const rateDisplay = Number(item.ratePerUnit != null ? item.ratePerUnit : (item.unitPrice != null ? item.unitPrice : (item.rate || 0))) || 0;
+                                    const amountDisplay = Number((item.orderedQuantity != null && item.ratePerUnit != null) ? (Number(item.orderedQuantity) * Number(item.ratePerUnit)) : (item.totalAmount || 0)) || 0;
 
                                     return (
                                         <tr key={idx} className="hover:bg-app-bg/50">
@@ -1850,8 +1852,8 @@ export default function DetailViewModal({
         }
     }
 
-    const titleText = record.workOrderNumber || record.name || record.companyName || record.code || `${tabLabel} Details`;
-    const codeBadge = record.code || record.workOrderNumber || record.itemCode || record.customerCode || record.supplierCode || record.employeeCode || record.machineCode;
+    const titleText = record.poNumber || record.grnNumber || record.workOrderNumber || record.name || record.companyName || record.code || `${tabLabel} Details`;
+    const codeBadge = record.poNumber || record.grnNumber || record.code || record.workOrderNumber || record.itemCode || record.customerCode || record.supplierCode || record.employeeCode || record.machineCode;
 
     const activeContext = (resourceType || type || endpoint || tabKey || '').toLowerCase().replace(/[-_/]/g, '');
     const isWorkOrder =

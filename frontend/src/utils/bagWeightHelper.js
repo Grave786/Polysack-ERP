@@ -1,10 +1,12 @@
 /**
  * Shared Finished Bag Weight & Unit Conversion Helper (Frontend)
  * Mirrors Backend/src/utils/bagWeightHelper.js so Sales Order, Work Order, and Dispatch
- * display identical conversions. Never uses bagCapacity (fill capacity) for bag weight.
+ * display identical conversions.
+ * Priority: (a) Finished Good BOM (Kg/g materials), (b) Saved bag weight, (c) Size x GSM estimate.
+ * Never uses bagCapacity (fill capacity) for bag weight.
  */
 
-export const DEFAULT_ALLOWANCE_PCT = 0.05; // 5% stitching & margin allowance
+export const DEFAULT_ALLOWANCE_PCT = 0;
 
 const ALL_SO_UNITS = ['Pcs', 'Kg', 'Roll', 'Bags'];
 
@@ -35,8 +37,45 @@ const toMeters = (val, unit = 'cm') => {
     return n * 0.01;
 };
 
+const computeBomWeightKg = (bomDoc, fg = null) => {
+    const mats =
+        (bomDoc && Array.isArray(bomDoc.items) && bomDoc.items.length > 0 ? bomDoc.items : null) ||
+        (bomDoc && Array.isArray(bomDoc.materials) && bomDoc.materials.length > 0 ? bomDoc.materials : null) ||
+        (bomDoc && Array.isArray(bomDoc.rawMaterials) && bomDoc.rawMaterials.length > 0 ? bomDoc.rawMaterials : null) ||
+        (fg && Array.isArray(fg.materialRequirements) && fg.materialRequirements.length > 0 ? fg.materialRequirements : null) ||
+        (fg && Array.isArray(fg.bomItems) && fg.bomItems.length > 0 ? fg.bomItems : null);
+
+    if (!mats || mats.length === 0) return null;
+
+    let totalKg = 0;
+    let hasWeightItem = false;
+
+    for (const m of mats) {
+        const qty = Number(m?.quantityPerUnit ?? m?.quantity ?? 0);
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+
+        const rm = m?.rawMaterial && typeof m.rawMaterial === 'object' ? m.rawMaterial : null;
+        const rawUnit =
+            (rm?.uom && typeof rm.uom === 'object' ? (rm.uom.symbol || rm.uom.abbreviation || rm.uom.name) : rm?.uom) ||
+            m?.unit ||
+            m?.uom ||
+            'kg';
+
+        const u = String(rawUnit || 'kg').trim().toLowerCase();
+        if (['kg', 'kgs', 'kilogram', 'kilograms', 'kilo'].includes(u)) {
+            totalKg += qty;
+            hasWeightItem = true;
+        } else if (['g', 'gm', 'gms', 'gram', 'grams'].includes(u)) {
+            totalKg += qty / 1000;
+            hasWeightItem = true;
+        }
+    }
+
+    return hasWeightItem && totalKg > 0 ? totalKg : null;
+};
+
 /**
- * Resolve physical empty bag weight in grams + sanity guard metadata.
+ * Resolve physical empty bag weight in grams + source + sanity guard metadata.
  */
 export const resolveBagWeightSpec = (fg, options = {}) => {
     if (!fg || typeof fg !== 'object') {
@@ -50,18 +89,29 @@ export const resolveBagWeightSpec = (fg, options = {}) => {
     let weightGrams = null;
     let source = null;
 
-    const savedWeight = Number(
-        fg.bagWeightGms ||
-        fg.tareWeightGram ||
-        fg.weightPerBagGrams ||
-        fg.avgBagWeightGms ||
-        0
-    );
-    if (Number.isFinite(savedWeight) && savedWeight > 0) {
-        weightGrams = Number(savedWeight.toFixed(2));
-        source = 'saved';
+    // 1. (a) Finished Good BOM (single source of truth)
+    const bomKg = computeBomWeightKg(options.bom || fg.bom || fg.activeBom || null, fg);
+    if (bomKg !== null && bomKg > 0) {
+        weightGrams = Number((bomKg * 1000).toFixed(2));
+        source = 'BOM';
     }
 
+    // 2. (b) Saved finished good weight
+    if (weightGrams === null) {
+        const savedWeight = Number(
+            fg.bagWeightGms ||
+            fg.tareWeightGram ||
+            fg.weightPerBagGrams ||
+            fg.avgBagWeightGms ||
+            0
+        );
+        if (Number.isFinite(savedWeight) && savedWeight > 0) {
+            weightGrams = Number(savedWeight.toFixed(2));
+            source = 'Saved';
+        }
+    }
+
+    // 3. (c) Computed estimate from dimensions and fabric GSM
     if (weightGrams === null) {
         const gsm = Number(fg.fabricGSM || fg.gsm || fg.fabricGsm || 0);
         const rawW = Number(fg.dimensions?.width || 0);
@@ -82,7 +132,7 @@ export const resolveBagWeightSpec = (fg, options = {}) => {
                 const totalGrams = Number((withAllowanceGrams + linerWeightGms + extraLaminationGrams).toFixed(2));
                 if (totalGrams > 0) {
                     weightGrams = totalGrams;
-                    source = 'spec';
+                    source = 'Estimated';
                 }
             }
         }
@@ -97,7 +147,7 @@ export const resolveBagWeightSpec = (fg, options = {}) => {
         weightGrams,
         weightKg: Number((weightGrams / 1000).toFixed(6)),
         isUnrealistic,
-        warning: isUnrealistic ? 'Please check the bag size, GSM or weight in Master Data' : null,
+        warning: isUnrealistic ? 'Please check the BOM or bag weight in Master Data' : null,
         source
     };
 };
@@ -108,9 +158,6 @@ export const resolveEmptyBagWeightGms = (fg, options = {}) => {
 
 /**
  * Evaluate live unit conversion feedback under a Sales Order line item.
- * - Pcs / Bags -> shows approx. X Kg (Y g per bag), or "Weight not available for this product"
- * - Kg -> shows approx. X Pcs (Y g per bag), or "Weight not available for this product"
- * - Roll -> keeps Roll warning if FG UOM is not Roll
  */
 export const getUnitConversionFeedback = (selectedFg, lineUnit, lineQuantity) => {
     if (!selectedFg) return null;

@@ -304,7 +304,11 @@ const getFinishedGoods = async (req, res) => {
         // Attach linked active default BOM recipe items to each Finished Good
         const fgIds = items.map((f) => f._id);
         const boms = await BOM.find({ finishedGood: { $in: fgIds }, tenant: tenantId, isActive: true })
-            .populate('items.rawMaterial', 'name code uom currentStock materialGrade color pricePerUnit');
+            .populate({
+                path: 'items.rawMaterial',
+                select: 'name code uom currentStock materialGrade color pricePerUnit',
+                populate: { path: 'uom', select: 'name symbol abbreviation' }
+            });
 
         const bomMap = new Map();
         boms.forEach((b) => {

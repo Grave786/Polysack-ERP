@@ -20,11 +20,13 @@ export default function GenerateInvoiceModal({ isOpen, onClose, onSuccess }) {
                 setIsLoading(true);
                 const res = await axiosInstance.get('/sales-orders?limit=100');
                 if (res.data?.success && Array.isArray(res.data.data)) {
-                    // Filter orders that are CONFIRMED or READY_FOR_DISPATCH or DISPATCHED
+                    // Filter orders that are approved and CONFIRMED or READY_FOR_DISPATCH or DISPATCHED
                     const eligible = res.data.data.filter(
-                        (so) => so.status === 'CONFIRMED' || so.status === 'READY_FOR_DISPATCH' || so.status === 'DISPATCHED'
+                        (so) =>
+                            !['Pending Approval', 'Rejected'].includes(so.soApprovalStatus) &&
+                            (so.status === 'CONFIRMED' || so.status === 'READY_FOR_DISPATCH' || so.status === 'DISPATCHED')
                     );
-                    setSalesOrders(eligible.length > 0 ? eligible : res.data.data);
+                    setSalesOrders(eligible);
                     if (eligible.length > 0) {
                         setSelectedSoId(eligible[0]._id);
                     }

@@ -62,7 +62,9 @@ export default function PosPage() {
                 ]);
 
                 if (fgRes.data?.success) {
-                    const products = fgRes.data.data || [];
+                    const products = (fgRes.data.data || []).filter(
+                        (fg) => fg.isActive !== false && String(fg.status || 'Active').toLowerCase() === 'active'
+                    );
                     setFinishedGoods(products);
 
                     // Revalidate rehydrated cart items against live available stock

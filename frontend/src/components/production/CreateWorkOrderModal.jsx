@@ -6,6 +6,7 @@ import InlineLookupSelect from '../shared/InlineLookupSelect';
 import SearchableSelect from '../shared/SearchableSelect';
 import { getTodayLocalDateString, formatDate } from '../../utils/dateUtils';
 import { formatGsmDisplay } from '../../utils/gsmUtils';
+import { resolveBagWeightSpec } from '../../utils/bagWeightHelper';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../store/authStore';
 import { isTenantAdmin, checkIsSuperAdmin } from '../../utils/permissionUtils';
@@ -1204,6 +1205,20 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                                     Max remaining to plan: <strong>{Number(selectedSoLine.remainingQuantity || 0).toLocaleString('en-IN')} {totalOrderQuantityUnit || 'Bags'}</strong>
                                 </p>
                             )}
+                            {(() => {
+                                const fgObj = finishedGoods.find((fg) => String(fg._id) === String(finishedGood));
+                                const qtyNum = Number(targetQuantity || 0);
+                                if (!fgObj || qtyNum <= 0) return null;
+                                const spec = resolveBagWeightSpec(fgObj);
+                                if (!spec?.weightKg) return null;
+                                const reqKg = Number((qtyNum * spec.weightKg).toFixed(2));
+                                return (
+                                    <p className={`text-[10px] mt-1 font-mono ${spec.isUnrealistic ? 'text-amber-700 font-semibold' : 'text-primary font-semibold'}`}>
+                                        Material required for {qtyNum.toLocaleString('en-IN')} bags: <strong>{reqKg.toLocaleString('en-IN')} Kg</strong> ({spec.weightGrams} g/bag{spec.source ? ` • ${spec.source}` : ''})
+                                        {spec.warning ? ` — ${spec.warning}` : ''}
+                                    </p>
+                                );
+                            })()}
                         </div>
 
                         <div>

@@ -92,9 +92,14 @@ export default function ViewInvoiceModal({ isOpen, invoice, onClose, onRecordPay
                         <div className="text-[11px] text-text-muted">
                             Invoice Date: <span className="font-mono font-bold text-text-main">{formatDate(invoice.invoiceDate)}</span>
                         </div>
-                        {invoice.dueDate && (
+                        {(invoice.effectiveDueDate || invoice.dueDate) && (
                             <div className="text-[11px] text-text-muted">
-                                Due Date: <span className="font-mono font-bold text-rose-600">{formatDate(invoice.dueDate)}</span>
+                                Due Date: <span className={`font-mono font-bold ${invoice.isOverdue ? 'text-rose-600' : 'text-text-main'}`}>{formatDate(invoice.effectiveDueDate || invoice.dueDate)}</span>
+                                {invoice.isOverdue && invoice.daysOverdue > 0 && (
+                                    <span className="ml-1.5 text-[10px] font-extrabold text-rose-600">
+                                        ({invoice.daysOverdue}d overdue)
+                                    </span>
+                                )}
                             </div>
                         )}
                         {invoice.salesOrder && (
@@ -135,42 +140,75 @@ export default function ViewInvoiceModal({ isOpen, invoice, onClose, onRecordPay
                 </div>
 
                 {/* Financial Summary */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg border border-border rounded-xl p-3.5">
-                    <div className="space-y-1 text-xs">
-                        {isExempt ? (
-                            <>
-                                <div className="font-bold text-emerald-800">
-                                    GST (Exempt): <span className="font-mono font-semibold text-text-main">₹0</span>
-                                </div>
-                                {invoice.exemptionReason && (
-                                    <div className="text-[11px] text-text-muted">
-                                        Reason: <span className="font-semibold text-text-main">{invoice.exemptionReason}</span>
-                                    </div>
+                {(() => {
+                    const computedItemsSum = items.reduce((s, it) => s + Number(it.taxableValue ?? (Number(it.quantity || 0) * Number(it.ratePerUnit || 0))), 0);
+                    const itemsSubtotal = Number(invoice.itemsSubtotal || computedItemsSum || 0);
+                    const discountAmount = Number(invoice.discountAmount || 0);
+                    const freightAmount = Number(invoice.freightAmount || 0);
+                    const insuranceAmount = Number(invoice.insuranceAmount || 0);
+                    const otherChargesAmount = Number(invoice.otherChargesAmount || 0);
+                    const otherChargesLabel = invoice.otherChargesLabel || '';
+                    const taxableValue = Number(invoice.taxableValue || Math.max(0, itemsSubtotal - discountAmount + freightAmount + insuranceAmount + otherChargesAmount));
+                    const roundOff = Number(invoice.roundOff || 0);
+                    return (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg border border-border rounded-xl p-3.5">
+                            <div className="space-y-1 text-xs">
+                                <div className="text-text-muted">Items Subtotal: <span className="font-mono font-semibold text-text-main">₹{itemsSubtotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                                {discountAmount > 0 && (
+                                    <div className="text-emerald-700">Less: Discount{invoice.discountType === 'PERCENT' ? ` (${invoice.discountValue}%)` : ''}: <span className="font-mono font-semibold">-₹{discountAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
                                 )}
-                            </>
-                        ) : (
-                            <>
-                                <div className="text-text-muted">CGST (9%): <span className="font-mono font-semibold text-text-main">₹{(invoice.cgstAmount || 0).toLocaleString()}</span></div>
-                                <div className="text-text-muted">SGST (9%): <span className="font-mono font-semibold text-text-main">₹{(invoice.sgstAmount || 0).toLocaleString()}</span></div>
-                                {invoice.igstAmount > 0 && (
-                                    <div className="text-text-muted">IGST (18%): <span className="font-mono font-semibold text-text-main">₹{invoice.igstAmount.toLocaleString()}</span></div>
+                                {freightAmount > 0 && (
+                                    <div className="text-text-muted">Freight / Transport: <span className="font-mono font-semibold text-text-main">+₹{freightAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
                                 )}
-                            </>
-                        )}
-                    </div>
+                                {insuranceAmount > 0 && (
+                                    <div className="text-text-muted">Insurance Charges: <span className="font-mono font-semibold text-text-main">+₹{insuranceAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                                )}
+                                {otherChargesAmount > 0 && (
+                                    <div className="text-text-muted">{otherChargesLabel ? `Other (${otherChargesLabel}):` : 'Other Charges:'} <span className="font-mono font-semibold text-text-main">+₹{otherChargesAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                                )}
+                                <div className="text-text-muted font-semibold pt-0.5 border-t border-border/50">Taxable Value: <span className="font-mono font-bold text-text-main">₹{taxableValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                                {isExempt ? (
+                                    <>
+                                        <div className="font-bold text-emerald-800">
+                                            GST (Exempt): <span className="font-mono font-semibold text-text-main">₹0</span>
+                                        </div>
+                                        {invoice.exemptionReason && (
+                                            <div className="text-[11px] text-text-muted">
+                                                Reason: <span className="font-semibold text-text-main">{invoice.exemptionReason}</span>
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    <>
+                                        {invoice.igstAmount > 0 ? (
+                                            <div className="text-text-muted">IGST ({invoice.gstRate ?? 18}%): <span className="font-mono font-semibold text-text-main">₹{Number(invoice.igstAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                                        ) : (
+                                            <>
+                                                <div className="text-text-muted">CGST ({(invoice.gstRate ?? 18) / 2}%): <span className="font-mono font-semibold text-text-main">₹{Number(invoice.cgstAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                                                <div className="text-text-muted">SGST ({(invoice.gstRate ?? 18) / 2}%): <span className="font-mono font-semibold text-text-main">₹{Number(invoice.sgstAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                                            </>
+                                        )}
+                                    </>
+                                )}
+                                {roundOff !== 0 && (
+                                    <div className="text-text-muted">Round Off: <span className="font-mono font-semibold text-text-main">{roundOff > 0 ? `+₹${roundOff.toFixed(2)}` : `-₹${Math.abs(roundOff).toFixed(2)}`}</span></div>
+                                )}
+                            </div>
 
-                    <div className="space-y-1 sm:text-right">
-                        <div className="text-xs font-bold text-text-main">
-                            Grand Total: <span className="font-mono font-extrabold text-sm text-primary">₹{grandTotal.toLocaleString()}</span>
+                            <div className="space-y-1 sm:text-right">
+                                <div className="text-xs font-bold text-text-main">
+                                    Grand Total: <span className="font-mono font-extrabold text-sm text-primary">₹{grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                </div>
+                                <div className="text-[11px] text-emerald-700">
+                                    Paid: <span className="font-mono font-bold">₹{paidAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                </div>
+                                <div className="text-[11px] text-rose-600 font-bold">
+                                    Balance Due: <span className="font-mono">₹{balanceAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                </div>
+                            </div>
                         </div>
-                        <div className="text-[11px] text-emerald-700">
-                            Paid: <span className="font-mono font-bold">₹{paidAmount.toLocaleString()}</span>
-                        </div>
-                        <div className="text-[11px] text-rose-600 font-bold">
-                            Balance Due: <span className="font-mono">₹{balanceAmount.toLocaleString()}</span>
-                        </div>
-                    </div>
-                </div>
+                    );
+                })()}
 
                 {/* Payment History */}
                 {Array.isArray(invoice.payments) && invoice.payments.length > 0 && (

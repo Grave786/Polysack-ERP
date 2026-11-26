@@ -102,6 +102,12 @@ const TenantSchema = new mongoose.Schema({
             stageName: { type: String, required: true },
             isEnabled: { type: Boolean, default: true }
         }]
+    },
+    approvalSettings: {
+        autoApproveSalesOrdersByApprover: {
+            type: Boolean,
+            default: false
+        }
     }
 }, { timestamps: true });
 

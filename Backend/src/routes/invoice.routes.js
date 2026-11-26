@@ -5,6 +5,8 @@ const {
     getInvoices,
     getInvoiceById,
     recordPayment,
+    recordCustomerAdvance,
+    getCustomerLedger,
     getReceivablesSummary,
     getCustomerOutstanding
 } = require('../controllers/invoice.controller');
@@ -40,6 +42,8 @@ router.get('/receivables-summary', authenticate, checkPermission('SALES', 'READ'
  * @access  Private (SALES:READ)
  */
 router.get('/customer-outstanding', authenticate, checkPermission('SALES', 'READ'), getCustomerOutstanding);
+router.post('/customer-advance', authenticate, checkPermission('SALES', 'UPDATE'), recordCustomerAdvance);
+router.get('/customer-ledger/:customerId', authenticate, checkPermission('SALES', 'READ'), getCustomerLedger);
 
 /**
  * @route   GET /api/invoices/:id

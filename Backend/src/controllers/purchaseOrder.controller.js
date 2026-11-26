@@ -2,9 +2,12 @@ const PurchaseOrder = require('../models/purchaseOrder.model');
 const Supplier = require('../models/supplier.model');
 const Location = require('../models/location.model');
 const RawMaterial = require('../models/rawMaterial.model');
+const PartyAdvance = require('../models/partyAdvance.model');
 const { createPoApprovalNotification, resolvePoApprovalNotification } = require('../services/notification.service');
 const { createPoApprovalRequest } = require('../services/approval.service');
 const { isTenantAdmin } = require('../middlewares/rbac.middleware');
+const { computeDocumentTotals } = require('../utils/gstHelper');
+const { computeOverdueInfo, computePoPayableValues } = require('../utils/overdueHelper');
 
 /**
  * Safely parses any date representation (Date obj, timestamp, ISO string, DD/MM/YYYY, DD-MM-YYYY)
@@ -95,7 +98,16 @@ const createPurchaseOrder = async (req, res) => {
             items,
             deliveryLocation,
             notes,
-            status
+            status,
+            discountType,
+            discountValue,
+            freightAmount,
+            insuranceAmount,
+            otherChargesAmount,
+            otherChargesLabel,
+            gstTreatment,
+            gstRate,
+            autoRoundOff
         } = req.body;
 
         // 1. Validation
@@ -182,6 +194,22 @@ const createPurchaseOrder = async (req, res) => {
         }
         const initialStatus = (status === 'DRAFT') ? 'DRAFT' : 'PENDING_APPROVAL';
 
+        const totalsCalc = computeDocumentTotals({
+            itemsSubtotal: computedTotalValue,
+            discountType,
+            discountValue,
+            freightAmount,
+            insuranceAmount,
+            otherChargesAmount,
+            otherChargesLabel,
+            gstTreatment: gstTreatment || 'TAXABLE',
+            gstRate: gstRate !== undefined ? gstRate : 18,
+            autoRoundOff
+        });
+        if (totalsCalc.error) {
+            return res.status(400).json({ success: false, message: totalsCalc.error });
+        }
+
         const purchaseOrder = new PurchaseOrder({
             tenant: tenantId,
             poNumber,
@@ -189,9 +217,25 @@ const createPurchaseOrder = async (req, res) => {
             poDate: poDate ? new Date(poDate) : new Date(),
             expectedDelivery: expectedDelivery ? new Date(expectedDelivery) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
             items: cleanedItems,
-            totalValue: computedTotalValue,
+            itemsSubtotal: totalsCalc.itemsSubtotal,
+            discountType: totalsCalc.discountType,
+            discountValue: totalsCalc.discountValue,
+            discountAmount: totalsCalc.discountAmount,
+            freightAmount: totalsCalc.freightAmount,
+            insuranceAmount: totalsCalc.insuranceAmount,
+            otherChargesAmount: totalsCalc.otherChargesAmount,
+            otherChargesLabel: totalsCalc.otherChargesLabel,
+            taxableValue: totalsCalc.taxableValue,
+            gstTreatment: totalsCalc.gstTreatment,
+            gstRate: totalsCalc.gstRate,
+            gstAmount: totalsCalc.gstAmount,
+            taxAmount: totalsCalc.taxAmount,
+            autoRoundOff: totalsCalc.autoRoundOff,
+            roundOff: totalsCalc.roundOff,
+            grandTotal: totalsCalc.grandTotal,
+            totalValue: totalsCalc.grandTotal,
             paidAmount: 0,
-            balanceAmount: computedTotalValue,
+            balanceAmount: totalsCalc.grandTotal,
             dueDate: req.body.dueDate || (expectedDelivery ? new Date(expectedDelivery) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
             paymentStatus: 'UNPAID',
             payments: [],
@@ -291,7 +335,7 @@ const getPurchaseOrders = async (req, res) => {
 
         const [purchaseOrders, total] = await Promise.all([
             PurchaseOrder.find(filter)
-                .populate('supplier', 'name code contactPerson phone email address city gstin paymentTerms')
+                .populate('supplier', 'name code contactPerson phone email address city gstin paymentTerms advanceBalance')
                 .populate('deliveryLocation', 'name code type')
                 .populate({
                     path: 'items.rawMaterial',
@@ -306,25 +350,43 @@ const getPurchaseOrders = async (req, res) => {
         const now = new Date();
         const enrichedPOs = purchaseOrders.map((po) => {
             const poObj = po.toObject ? po.toObject() : { ...po };
-            const total = Number(poObj.totalValue !== undefined ? poObj.totalValue : (poObj.totalAmount || 0));
-            const paid = Number(poObj.paidAmount || 0);
-            const balance = Math.max(0, total - paid);
+            const payable = computePoPayableValues(poObj);
+            const payableBase = Math.max(Number(poObj.grandTotal || poObj.totalValue || poObj.totalAmount || 0), payable.receivedValue);
+            const totalPaid = Math.min(payableBase, Number(poObj.paidAmount || poObj.amountPaid || 0));
+            const balanceDue = Math.max(0, Number((payableBase - totalPaid).toFixed(2)));
+            const overdue = computeOverdueInfo({
+                totalAmount: payableBase,
+                paidAmount: totalPaid,
+                docDate: poObj.poDate || poObj.createdAt,
+                docDueDate: poObj.dueDate || null,
+                paymentTerms: poObj.supplier?.paymentTerms,
+                now
+            });
 
-            poObj.paidAmount = paid;
-            poObj.balanceAmount = balance;
-            poObj.dueDate = poObj.dueDate || poObj.expectedDelivery || poObj.poDate || poObj.createdAt;
-
-            const isOverdue = isDateOverdue(poObj.dueDate, now);
-
-            if (balance <= 0.0001 && (paid > 0 || total > 0)) {
-                poObj.paymentStatus = 'PAID';
-            } else if (isOverdue || poObj.paymentStatus === 'OVERDUE') {
-                poObj.paymentStatus = 'OVERDUE';
-            } else if (paid > 0) {
-                poObj.paymentStatus = 'PARTIALLY_PAID';
-            } else {
-                poObj.paymentStatus = 'UNPAID';
+            let computedPaymentStatus = overdue.paymentStatus;
+            if (payableBase > 0) {
+                if (balanceDue <= 0.01) {
+                    computedPaymentStatus = 'PAID';
+                } else if (overdue.isOverdue) {
+                    computedPaymentStatus = 'OVERDUE';
+                } else if (totalPaid > 0) {
+                    computedPaymentStatus = 'PARTIALLY_PAID';
+                } else {
+                    computedPaymentStatus = 'UNPAID';
+                }
             }
+
+            poObj.poValue = payable.poValue;
+            poObj.receivedValue = payable.receivedValue;
+            poObj.payableBalance = payable.payableBalance;
+            poObj.paidAmount = totalPaid;
+            poObj.balanceAmount = balanceDue;
+            poObj.balanceDue = balanceDue;
+            poObj.effectiveDueDate = overdue.effectiveDueDate;
+            poObj.dueDate = overdue.effectiveDueDate;
+            poObj.isOverdue = balanceDue > 0.01 ? overdue.isOverdue : false;
+            poObj.daysOverdue = balanceDue > 0.01 ? overdue.daysOverdue : 0;
+            poObj.paymentStatus = computedPaymentStatus;
 
             return poObj;
         });
@@ -469,7 +531,16 @@ const updatePurchaseOrder = async (req, res) => {
             items,
             deliveryLocation,
             notes,
-            status
+            status,
+            discountType,
+            discountValue,
+            freightAmount,
+            insuranceAmount,
+            otherChargesAmount,
+            otherChargesLabel,
+            gstTreatment,
+            gstRate,
+            autoRoundOff
         } = req.body;
 
         if (supplier) {
@@ -573,9 +644,43 @@ const updatePurchaseOrder = async (req, res) => {
             }
 
             purchaseOrder.items = cleanedItems;
-            purchaseOrder.totalValue = computedTotalValue;
-            purchaseOrder.totalAmount = computedTotalValue;
+            purchaseOrder.itemsSubtotal = computedTotalValue;
         }
+
+        const existingItemsSubtotal = (purchaseOrder.items || []).reduce((s, it) => s + (Number(it.orderedQuantity || 0) * Number(it.ratePerUnit || 0)), 0);
+        const totalsCalc = computeDocumentTotals({
+            itemsSubtotal: purchaseOrder.itemsSubtotal > 0 ? purchaseOrder.itemsSubtotal : existingItemsSubtotal,
+            discountType: discountType !== undefined ? discountType : (purchaseOrder.discountType || 'FIXED'),
+            discountValue: discountValue !== undefined ? discountValue : (purchaseOrder.discountValue || 0),
+            freightAmount: freightAmount !== undefined ? freightAmount : (purchaseOrder.freightAmount || 0),
+            insuranceAmount: insuranceAmount !== undefined ? insuranceAmount : (purchaseOrder.insuranceAmount || 0),
+            otherChargesAmount: otherChargesAmount !== undefined ? otherChargesAmount : (purchaseOrder.otherChargesAmount || 0),
+            otherChargesLabel: otherChargesLabel !== undefined ? otherChargesLabel : (purchaseOrder.otherChargesLabel || ''),
+            gstTreatment: gstTreatment !== undefined ? gstTreatment : (purchaseOrder.gstTreatment || 'TAXABLE'),
+            gstRate: gstRate !== undefined ? gstRate : (purchaseOrder.gstRate ?? 18),
+            autoRoundOff: autoRoundOff !== undefined ? autoRoundOff : (purchaseOrder.autoRoundOff !== false)
+        });
+        if (totalsCalc.error) {
+            return res.status(400).json({ success: false, message: totalsCalc.error });
+        }
+        purchaseOrder.itemsSubtotal = totalsCalc.itemsSubtotal;
+        purchaseOrder.discountType = totalsCalc.discountType;
+        purchaseOrder.discountValue = totalsCalc.discountValue;
+        purchaseOrder.discountAmount = totalsCalc.discountAmount;
+        purchaseOrder.freightAmount = totalsCalc.freightAmount;
+        purchaseOrder.insuranceAmount = totalsCalc.insuranceAmount;
+        purchaseOrder.otherChargesAmount = totalsCalc.otherChargesAmount;
+        purchaseOrder.otherChargesLabel = totalsCalc.otherChargesLabel;
+        purchaseOrder.taxableValue = totalsCalc.taxableValue;
+        purchaseOrder.gstTreatment = totalsCalc.gstTreatment;
+        purchaseOrder.gstRate = totalsCalc.gstRate;
+        purchaseOrder.gstAmount = totalsCalc.gstAmount;
+        purchaseOrder.taxAmount = totalsCalc.taxAmount;
+        purchaseOrder.autoRoundOff = totalsCalc.autoRoundOff;
+        purchaseOrder.roundOff = totalsCalc.roundOff;
+        purchaseOrder.grandTotal = totalsCalc.grandTotal;
+        purchaseOrder.totalValue = totalsCalc.grandTotal;
+        purchaseOrder.balanceAmount = Math.max(0, totalsCalc.grandTotal - Number(purchaseOrder.paidAmount || 0));
 
         await purchaseOrder.save();
 
@@ -957,42 +1062,141 @@ const recordPoPayment = async (req, res) => {
         }
 
         const rawAmt = req.body.amount !== undefined ? req.body.amount : (req.body.paymentAmount !== undefined ? req.body.paymentAmount : req.body.paidAmount);
-        const numAmount = Number(rawAmt);
+        const numAmount = Number(rawAmt || 0);
+        const applyAdvanceReq = Math.max(0, Number(req.body.applyAdvanceAmount || 0));
 
-        if (rawAmt === undefined || rawAmt === null || isNaN(numAmount) || numAmount <= 0) {
-            return res.status(400).json({ success: false, message: 'Please provide a valid payment amount greater than 0.' });
+        if ((isNaN(numAmount) || numAmount <= 0) && applyAdvanceReq <= 0) {
+            return res.status(400).json({ success: false, message: 'Please provide a valid payment amount or advance amount greater than 0.' });
         }
 
-        const po = await PurchaseOrder.findOne({ _id: req.params.id, tenant: tenantId });
+        const po = await PurchaseOrder.findOne({ _id: req.params.id, tenant: tenantId }).populate('supplier', 'name paymentTerms advanceBalance');
         if (!po) {
             return res.status(404).json({ success: false, message: 'Purchase Order not found.' });
         }
 
-        const totalValue = Number(po.totalValue !== undefined ? po.totalValue : (po.totalAmount || 0));
-        const currentPaid = Number(po.paidAmount || 0);
-        const currentBalance = Math.max(0, totalValue - currentPaid);
-
-        if (currentBalance <= 0 || po.paymentStatus === 'PAID') {
-            return res.status(400).json({ success: false, message: 'Purchase Order is already fully paid.' });
-        }
-
-        if (numAmount > currentBalance + 0.001) {
+        const poStatusUpper = String(po.status || '').trim().toUpperCase().replace(/\s+/g, '_');
+        if (['PENDING_APPROVAL', 'DRAFT', 'REJECTED', 'CANCELLED'].includes(poStatusUpper)) {
             return res.status(400).json({
                 success: false,
-                message: `Payment amount (₹${numAmount}) exceeds remaining balance (₹${currentBalance.toFixed(2)}).`
+                message: 'Cannot record payment for an unapproved Purchase Order. Please approve the PO first.'
             });
         }
 
-        const newPaidAmount = currentPaid + numAmount;
-        po.paidAmount = newPaidAmount;
-        po.balanceAmount = Math.max(0, totalValue - newPaidAmount);
+        const totalValue = Number(po.grandTotal ?? po.totalValue ?? po.totalAmount ?? 0);
+        const currentPaid = Number(po.paidAmount || 0);
+        let remainingBalance = Math.max(0, Math.round((totalValue - currentPaid) * 100) / 100);
 
-        const dueD = po.dueDate || po.expectedDelivery || po.poDate || po.createdAt;
-        const now = new Date();
+        if (remainingBalance <= 0.0001 && applyAdvanceReq > 0) {
+            return res.status(400).json({ success: false, message: 'Purchase Order is already fully paid.' });
+        }
 
-        if (po.balanceAmount <= 0.0001) {
+        const payDate = req.body.paymentDate ? new Date(req.body.paymentDate) : new Date();
+        const payRef = String(req.body.reference || '').trim();
+        const payNotes = String(req.body.notes || '').trim();
+        if (!Array.isArray(po.payments)) po.payments = [];
+
+        let appliedFromAdvance = 0;
+        const supplierDoc = po.supplier?._id ? await Supplier.findOne({ _id: po.supplier._id, tenant: tenantId }) : null;
+
+        if (applyAdvanceReq > 0) {
+            if (!supplierDoc) {
+                return res.status(400).json({ success: false, message: 'Supplier record not found for advance adjustment.' });
+            }
+            const availableAdv = Number(supplierDoc.advanceBalance || 0);
+            if (applyAdvanceReq > availableAdv + 0.001) {
+                return res.status(400).json({ success: false, message: `Requested advance (₹${applyAdvanceReq}) exceeds available supplier advance (₹${availableAdv.toFixed(2)}).` });
+            }
+            appliedFromAdvance = Math.min(applyAdvanceReq, remainingBalance);
+            if (appliedFromAdvance > 0) {
+                supplierDoc.advanceBalance = Math.max(0, Math.round((availableAdv - appliedFromAdvance) * 100) / 100);
+                remainingBalance = Math.max(0, Math.round((remainingBalance - appliedFromAdvance) * 100) / 100);
+                const adjPaymentId = `SUPP-ADJ-${Date.now()}`;
+                po.payments.push({
+                    amount: appliedFromAdvance,
+                    paymentDate: payDate,
+                    paymentMode: 'ADVANCE_ADJUSTMENT',
+                    reference: payRef || adjPaymentId,
+                    notes: payNotes || 'Adjusted from Supplier Advance',
+                    recordedBy: req.user?._id || req.user?.id || null,
+                    recordedAt: new Date()
+                });
+                await PartyAdvance.create({
+                    tenant: tenantId,
+                    partyType: 'SUPPLIER',
+                    partyId: supplierDoc._id,
+                    entryType: 'ADJUSTMENT',
+                    amount: appliedFromAdvance,
+                    date: payDate,
+                    paymentMode: 'ADVANCE_ADJUSTMENT',
+                    reference: payRef || adjPaymentId,
+                    notes: payNotes || `Applied to PO ${po.poNumber}`,
+                    paymentId: adjPaymentId,
+                    documentModel: 'PurchaseOrder',
+                    documentId: po._id,
+                    documentNumber: po.poNumber,
+                    recordedBy: req.user?._id || req.user?.id || null
+                });
+            }
+        }
+
+        let appliedCashToDoc = 0;
+        let excessToAdvance = 0;
+        if (numAmount > 0) {
+            appliedCashToDoc = Math.min(numAmount, remainingBalance);
+            excessToAdvance = Math.max(0, Math.round((numAmount - appliedCashToDoc) * 100) / 100);
+
+            if (appliedCashToDoc > 0) {
+                po.payments.push({
+                    amount: appliedCashToDoc,
+                    paymentDate: payDate,
+                    paymentMode: req.body.paymentMode || 'UPI',
+                    reference: payRef,
+                    notes: payNotes,
+                    recordedBy: req.user?._id || req.user?.id || null,
+                    recordedAt: new Date()
+                });
+            }
+
+            if (excessToAdvance > 0 && supplierDoc) {
+                supplierDoc.advanceBalance = Math.round((Number(supplierDoc.advanceBalance || 0) + excessToAdvance) * 100) / 100;
+                const advPayId = `SUPP-CR-${Date.now()}`;
+                await PartyAdvance.create({
+                    tenant: tenantId,
+                    partyType: 'SUPPLIER',
+                    partyId: supplierDoc._id,
+                    entryType: 'CREDIT',
+                    amount: excessToAdvance,
+                    date: payDate,
+                    paymentMode: req.body.paymentMode || 'UPI',
+                    reference: payRef || advPayId,
+                    notes: payNotes || `Excess payment from PO ${po.poNumber}`,
+                    paymentId: advPayId,
+                    documentModel: 'PurchaseOrder',
+                    documentId: po._id,
+                    documentNumber: po.poNumber,
+                    recordedBy: req.user?._id || req.user?.id || null
+                });
+            }
+        }
+
+        if (supplierDoc) {
+            await supplierDoc.save();
+        }
+
+        const totalApplied = Math.round((appliedFromAdvance + appliedCashToDoc) * 100) / 100;
+        po.paidAmount = Math.min(totalValue, Math.round((currentPaid + totalApplied) * 100) / 100);
+        po.balanceAmount = Math.max(0, Number((totalValue - po.paidAmount).toFixed(2)));
+
+        const overdue = computeOverdueInfo({
+            totalAmount: totalValue,
+            paidAmount: po.paidAmount,
+            docDate: po.poDate || po.createdAt,
+            docDueDate: po.dueDate || null,
+            paymentTerms: supplierDoc?.paymentTerms || po.supplier?.paymentTerms
+        });
+        if (totalValue > 0 && po.balanceAmount <= 0.01) {
             po.paymentStatus = 'PAID';
-        } else if (isDateOverdue(dueD, now) || po.paymentStatus === 'OVERDUE') {
+        } else if (overdue.isOverdue) {
             po.paymentStatus = 'OVERDUE';
         } else if (po.paidAmount > 0) {
             po.paymentStatus = 'PARTIALLY_PAID';
@@ -1000,27 +1204,21 @@ const recordPoPayment = async (req, res) => {
             po.paymentStatus = 'UNPAID';
         }
 
-        if (!Array.isArray(po.payments)) po.payments = [];
-        po.payments.push({
-            amount: numAmount,
-            paymentDate: req.body.paymentDate ? new Date(req.body.paymentDate) : new Date(),
-            paymentMode: req.body.paymentMode || 'UPI',
-            reference: req.body.reference || '',
-            notes: req.body.notes || '',
-            recordedBy: req.user?._id || req.user?.id || null,
-            recordedAt: new Date()
-        });
-
         await po.save();
 
         await po.populate([
-            { path: 'supplier', select: 'name code contactPerson phone email' },
+            { path: 'supplier', select: 'name code contactPerson phone email paymentTerms advanceBalance' },
             { path: 'deliveryLocation', select: 'name code' }
         ]);
 
         return res.status(200).json({
             success: true,
-            message: `Payment of ₹${numAmount} recorded successfully. Remaining balance: ₹${po.balanceAmount.toFixed(2)}.`,
+            message: excessToAdvance > 0
+                ? `Applied ₹${appliedCashToDoc.toLocaleString('en-IN')} to ${po.poNumber} and saved ₹${excessToAdvance.toLocaleString('en-IN')} as Supplier Advance.`
+                : `Payment recorded successfully. Remaining balance: ₹${po.balanceAmount.toFixed(2)}.`,
+            appliedAmount: totalApplied,
+            appliedFromAdvance,
+            excessToAdvance,
             data: po
         });
     } catch (error) {
@@ -1041,13 +1239,19 @@ const getPayablesSummary = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
         }
 
-        const pos = await PurchaseOrder.find({
-            tenant: tenantId,
-            isActive: true,
-            status: { $nin: ['CANCELLED', 'REJECTED'] }
-        })
-            .select('totalValue paidAmount balanceAmount dueDate expectedDelivery paymentStatus supplier')
-            .lean();
+        const [pos, suppliersWithAdv] = await Promise.all([
+            PurchaseOrder.find({
+                tenant: tenantId,
+                isActive: true,
+                status: { $nin: ['CANCELLED', 'REJECTED'] }
+            })
+                .populate('supplier', 'paymentTerms advanceBalance')
+                .select('status items totalValue grandTotal paidAmount balanceAmount dueDate poDate createdAt paymentStatus supplier')
+                .lean(),
+            Supplier.find({ tenant: tenantId, isActive: true, advanceBalance: { $gt: 0 } })
+                .select('advanceBalance')
+                .lean()
+        ]);
 
         let totalPayable = 0;
         let overdueAmount = 0;
@@ -1055,21 +1259,28 @@ const getPayablesSummary = async (req, res) => {
         const now = new Date();
 
         pos.forEach((po) => {
-            const total = Number(po.totalValue !== undefined ? po.totalValue : (po.totalAmount || 0));
-            const paid = Number(po.paidAmount || 0);
-            const balance = Math.max(0, total - paid);
+            const payable = computePoPayableValues(po);
+            const overdue = computeOverdueInfo({
+                totalAmount: payable.receivedValue,
+                paidAmount: payable.paidAmount,
+                docDate: po.poDate || po.createdAt,
+                docDueDate: po.dueDate || null,
+                paymentTerms: po.supplier?.paymentTerms,
+                now
+            });
 
-            if (balance > 0.0001) {
-                totalPayable += balance;
+            if (payable.payableBalance > 0.0001) {
+                totalPayable += payable.payableBalance;
                 if (po.supplier) {
-                    suppliersWithDues.add(String(po.supplier));
+                    suppliersWithDues.add(String(po.supplier._id || po.supplier));
                 }
-                const dueD = po.dueDate || po.expectedDelivery || po.poDate || po.createdAt;
-                if (po.paymentStatus === 'OVERDUE' || isDateOverdue(dueD, now)) {
-                    overdueAmount += balance;
+                if (overdue.isOverdue) {
+                    overdueAmount += payable.payableBalance;
                 }
             }
         });
+
+        const totalAdvance = suppliersWithAdv.reduce((s, sup) => s + Number(sup.advanceBalance || 0), 0);
 
         return res.status(200).json({
             success: true,
@@ -1077,6 +1288,7 @@ const getPayablesSummary = async (req, res) => {
                 totalPayable: Math.round(totalPayable * 100) / 100,
                 overduePayable: Math.round(overdueAmount * 100) / 100,
                 overdueAmount: Math.round(overdueAmount * 100) / 100,
+                totalAdvance: Math.round(totalAdvance * 100) / 100,
                 suppliersWithDues: suppliersWithDues.size
             }
         });
@@ -1098,31 +1310,34 @@ const getSupplierOutstanding = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
         }
 
-        const pos = await PurchaseOrder.find({
-            tenant: tenantId,
-            isActive: true,
-            status: { $nin: ['CANCELLED', 'REJECTED'] }
-        })
-            .populate('supplier', 'name code contactPerson phone email')
-            .sort({ poDate: -1, createdAt: -1 })
-            .lean();
+        const [pos, advanceSuppliers] = await Promise.all([
+            PurchaseOrder.find({
+                tenant: tenantId,
+                isActive: true,
+                status: { $nin: ['CANCELLED', 'REJECTED'] }
+            })
+                .populate('supplier', 'name code contactPerson phone email paymentTerms advanceBalance')
+                .sort({ poDate: -1, createdAt: -1 })
+                .lean(),
+            Supplier.find({ tenant: tenantId, isActive: true, advanceBalance: { $gt: 0 } })
+                .select('name code contactPerson phone email paymentTerms advanceBalance')
+                .lean()
+        ]);
 
         const supplierMap = {};
         const now = new Date();
 
-        pos.forEach((po) => {
-            const suppId = po.supplier ? String(po.supplier._id || po.supplier) : 'Unknown';
-            const suppName = po.supplier?.name || po.supplier?.companyName || 'Unknown Supplier';
-            const suppCode = po.supplier?.code || '-';
-            const phone = po.supplier?.phone || '-';
-
+        const ensureSuppEntry = (suppId, suppObj) => {
             if (!supplierMap[suppId]) {
                 supplierMap[suppId] = {
-                    supplierId: po.supplier?._id || suppId,
-                    supplierName: suppName,
-                    supplierCode: suppCode,
-                    phone: phone,
+                    supplierId: suppObj?._id || suppId,
+                    supplierName: suppObj?.name || suppObj?.companyName || 'Unknown Supplier',
+                    supplierCode: suppObj?.code || '-',
+                    phone: suppObj?.phone || '-',
+                    paymentTerms: suppObj?.paymentTerms || '',
+                    advanceBalance: Number(suppObj?.advanceBalance || 0),
                     totalPurchased: 0,
+                    totalReceived: 0,
                     totalPaid: 0,
                     balance: 0,
                     overdueAmount: 0,
@@ -1130,32 +1345,47 @@ const getSupplierOutstanding = async (req, res) => {
                     unpaidPoCount: 0
                 };
             }
+        };
 
-            const total = Number(po.totalValue !== undefined ? po.totalValue : (po.totalAmount || 0));
-            const paid = Number(po.paidAmount || 0);
-            const balance = Math.max(0, total - paid);
+        advanceSuppliers.forEach((s) => ensureSuppEntry(String(s._id), s));
 
-            supplierMap[suppId].totalPurchased += total;
-            supplierMap[suppId].totalPaid += paid;
-            supplierMap[suppId].balance += balance;
+        pos.forEach((po) => {
+            const suppId = po.supplier ? String(po.supplier._id || po.supplier) : 'Unknown';
+            ensureSuppEntry(suppId, po.supplier);
+
+            const payable = computePoPayableValues(po);
+            const overdue = computeOverdueInfo({
+                totalAmount: payable.receivedValue,
+                paidAmount: payable.paidAmount,
+                docDate: po.poDate || po.createdAt,
+                docDueDate: po.dueDate || null,
+                paymentTerms: po.supplier?.paymentTerms,
+                now
+            });
+
+            supplierMap[suppId].totalPurchased += payable.poValue;
+            supplierMap[suppId].totalReceived += payable.receivedValue;
+            supplierMap[suppId].totalPaid += payable.paidAmount;
+            supplierMap[suppId].balance += payable.payableBalance;
             supplierMap[suppId].poCount += 1;
 
-            if (balance > 0.0001) {
+            if (payable.payableBalance > 0.0001) {
                 supplierMap[suppId].unpaidPoCount += 1;
-                const dueD = po.dueDate || po.expectedDelivery || po.poDate || po.createdAt;
-                if (po.paymentStatus === 'OVERDUE' || isDateOverdue(dueD, now)) {
-                    supplierMap[suppId].overdueAmount += balance;
+                if (overdue.isOverdue) {
+                    supplierMap[suppId].overdueAmount += payable.payableBalance;
                 }
             }
         });
 
         let list = Object.values(supplierMap).map((s) => ({
             ...s,
+            advanceBalance: Math.round(s.advanceBalance * 100) / 100,
             totalPurchased: Math.round(s.totalPurchased * 100) / 100,
+            totalReceived: Math.round(s.totalReceived * 100) / 100,
             totalPaid: Math.round(s.totalPaid * 100) / 100,
             balance: Math.round(s.balance * 100) / 100,
             overdueAmount: Math.round(s.overdueAmount * 100) / 100
-        })).sort((a, b) => b.balance - a.balance);
+        })).sort((a, b) => (b.balance - a.balance) || (b.advanceBalance - a.advanceBalance));
 
         const searchQ = (req.query.search || '').trim().toLowerCase();
         if (searchQ) {
@@ -1194,6 +1424,93 @@ const getSupplierOutstanding = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Record an Advance Payment to a Supplier (without a specific PO)
+ * @route   POST /api/purchase-orders/supplier-advance
+ * @access  Private (PROCUREMENT:UPDATE permission)
+ */
+const recordSupplierAdvance = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
+
+        const { supplierId, amount, paymentDate, paymentMode, reference, notes } = req.body;
+        const numAmt = Number(amount || 0);
+        if (!supplierId || isNaN(numAmt) || numAmt <= 0) {
+            return res.status(400).json({ success: false, message: 'Please provide supplierId and a positive amount.' });
+        }
+
+        const supplier = await Supplier.findOne({ _id: supplierId, tenant: tenantId });
+        if (!supplier) {
+            return res.status(404).json({ success: false, message: 'Supplier not found.' });
+        }
+
+        supplier.advanceBalance = Math.round((Number(supplier.advanceBalance || 0) + numAmt) * 100) / 100;
+        await supplier.save();
+
+        const paymentId = `SUPP-ADV-${Date.now()}`;
+        const entry = await PartyAdvance.create({
+            tenant: tenantId,
+            partyType: 'SUPPLIER',
+            partyId: supplier._id,
+            entryType: 'CREDIT',
+            amount: numAmt,
+            date: paymentDate ? new Date(paymentDate) : new Date(),
+            paymentMode: paymentMode || 'UPI',
+            reference: String(reference || paymentId).trim(),
+            notes: String(notes || 'Supplier Advance Payment').trim(),
+            paymentId,
+            documentModel: null,
+            documentId: null,
+            documentNumber: '',
+            recordedBy: req.user?._id || req.user?.id || null
+        });
+
+        return res.status(201).json({
+            success: true,
+            message: `Supplier advance of ₹${numAmt.toLocaleString('en-IN')} recorded.`,
+            data: { supplier, entry }
+        });
+    } catch (error) {
+        console.error('Error in recordSupplierAdvance:', error);
+        return res.status(500).json({ success: false, message: 'Failed to record supplier advance.', error: error.message });
+    }
+};
+
+/**
+ * @desc    Get Supplier Advance & Payment Ledger
+ * @route   GET /api/purchase-orders/supplier-ledger/:supplierId
+ * @access  Private (PROCUREMENT:READ permission)
+ */
+const getSupplierLedger = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
+
+        const { supplierId } = req.params;
+        const [supplier, ledger, purchaseOrders] = await Promise.all([
+            Supplier.findOne({ _id: supplierId, tenant: tenantId }).select('name code phone email paymentTerms advanceBalance').lean(),
+            PartyAdvance.find({ tenant: tenantId, partyType: 'SUPPLIER', partyId: supplierId }).sort({ date: -1, createdAt: -1 }).lean(),
+            PurchaseOrder.find({ tenant: tenantId, supplier: supplierId, isActive: true, status: { $nin: ['CANCELLED', 'REJECTED'] } }).select('poNumber poDate dueDate totalValue grandTotal paidAmount balanceAmount paymentStatus status payments items').sort({ poDate: -1 }).lean()
+        ]);
+
+        if (!supplier) return res.status(404).json({ success: false, message: 'Supplier not found.' });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                supplier,
+                advanceBalance: Number(supplier.advanceBalance || 0),
+                ledger,
+                purchaseOrders
+            }
+        });
+    } catch (error) {
+        console.error('Error in getSupplierLedger:', error);
+        return res.status(500).json({ success: false, message: 'Failed to fetch supplier ledger.', error: error.message });
+    }
+};
+
 module.exports = {
     createPurchaseOrder,
     getPurchaseOrders,
@@ -1204,6 +1521,8 @@ module.exports = {
     updateStatus,
     deletePurchaseOrder,
     recordPoPayment,
+    recordSupplierAdvance,
+    getSupplierLedger,
     getPayablesSummary,
     getSupplierOutstanding
 };

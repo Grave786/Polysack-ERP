@@ -8,9 +8,9 @@ const {
     rejectApproval,
     cancelApproval
 } = require('../controllers/approval.controller');
-const { authenticate, requireTenantAdmin } = require('../middlewares/rbac.middleware');
+const { authenticate, requireApprovalPermission } = require('../middlewares/rbac.middleware');
 
-router.use(authenticate, requireTenantAdmin);
+router.use(authenticate, requireApprovalPermission);
 
 // ── GET routes ──────────────────────────────────────────────────────────────
 router.get('/', getApprovals);

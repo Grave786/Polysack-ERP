@@ -1,6 +1,6 @@
 const Notification = require('../models/notification.model');
 const { syncLowStockNotifications } = require('../services/notification.service');
-const { isTenantAdmin } = require('../middlewares/rbac.middleware');
+const { isTenantAdmin, hasApprovalPermission } = require('../middlewares/rbac.middleware');
 
 /**
  * @desc    Get all notifications for the tenant (with on-the-fly sync of low-stock & pending POs)
@@ -21,7 +21,7 @@ const getNotifications = async (req, res) => {
         }
 
         const { type, isRead, limit = 50 } = req.query;
-        const isAdmin = await isTenantAdmin(req.user);
+        const canApprove = await hasApprovalPermission(req.user);
 
         // Auto-sync unalerted low stock raw materials
         await syncLowStockNotifications(tenantId);
@@ -32,10 +32,19 @@ const getNotifications = async (req, res) => {
             filter.isRead = isRead === 'true' || isRead === true;
         }
 
-        // Non Tenant Admin users must never receive approval-related notifications (Requirement 3)
-        if (!isAdmin) {
-            filter.module = { $ne: 'APPROVALS' };
-            filter.type = { $nin: ['APPROVAL_REQUEST', 'APPROVAL_REMINDER', 'PO_APPROVAL', 'APPROVAL_DECISION'] };
+        // Non-approver users only receive their own APPROVAL_DECISION notifications, never pending approval requests
+        if (!canApprove) {
+            const userIdStr = String(req.user?._id || req.user?.id || '');
+            filter.$and = filter.$and || [];
+            filter.$and.push({
+                $or: [
+                    {
+                        module: { $ne: 'APPROVALS' },
+                        type: { $nin: ['APPROVAL_REQUEST', 'APPROVAL_REMINDER', 'PO_APPROVAL', 'APPROVAL_DECISION'] }
+                    },
+                    ...(userIdStr ? [{ type: 'APPROVAL_DECISION', 'data.targetUserId': userIdStr }] : [])
+                ]
+            });
         }
 
         const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
@@ -80,15 +89,25 @@ const getUnreadCount = async (req, res) => {
             });
         }
 
-        const isAdmin = await isTenantAdmin(req.user);
+        const canApprove = await hasApprovalPermission(req.user);
         const countFilter = {
             tenant: tenantId,
             isRead: false
         };
 
-        if (!isAdmin) {
-            countFilter.module = { $ne: 'APPROVALS' };
-            countFilter.type = { $nin: ['APPROVAL_REQUEST', 'APPROVAL_REMINDER', 'PO_APPROVAL', 'APPROVAL_DECISION'] };
+        if (!canApprove) {
+            const userIdStr = String(req.user?._id || req.user?.id || '');
+            countFilter.$and = [
+                {
+                    $or: [
+                        {
+                            module: { $ne: 'APPROVALS' },
+                            type: { $nin: ['APPROVAL_REQUEST', 'APPROVAL_REMINDER', 'PO_APPROVAL', 'APPROVAL_DECISION'] }
+                        },
+                        ...(userIdStr ? [{ type: 'APPROVAL_DECISION', 'data.targetUserId': userIdStr }] : [])
+                    ]
+                }
+            ];
         }
 
         const unreadCount = await Notification.countDocuments(countFilter);

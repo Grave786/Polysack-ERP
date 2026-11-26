@@ -16,7 +16,7 @@ const getSoLineId = (item, idx) => {
  * Convert an SO line quantity & unit into Work Order counting units (Bags/Pcs).
  * Pcs and Bags are treated 1:1. Kg uses bag weight if available. Roll returns null if no conversion.
  */
-const convertSoQtyToBags = (qty, unit, finishedGood) => {
+const convertSoQtyToBags = (qty, unit, finishedGood, bomDoc = null) => {
     const numQty = Number(qty || 0);
     const u = String(unit || 'Pcs').trim().toLowerCase();
 
@@ -30,7 +30,7 @@ const convertSoQtyToBags = (qty, unit, finishedGood) => {
     }
 
     if (['kg', 'kgs', 'kilogram', 'kilograms'].includes(u)) {
-        const avgKg = getAvgBagWeightKg(finishedGood);
+        const avgKg = getAvgBagWeightKg(finishedGood, bomDoc);
         if (avgKg && avgKg > 0) {
             return {
                 convertedBags: Math.ceil(numQty / avgKg),
@@ -160,7 +160,8 @@ const getPendingProductionLinesCore = async (tenantId, queryParams = {}) => {
     const soFilter = {
         tenant: tenantId,
         isActive: true,
-        status: { $in: ['CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED'] }
+        status: { $in: ['CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED'] },
+        soApprovalStatus: { $nin: ['Pending Approval', 'Rejected'] }
     };
 
     if (customer) soFilter.customer = customer;
@@ -197,6 +198,21 @@ const getPendingProductionLinesCore = async (tenantId, queryParams = {}) => {
             .sort({ createdAt: -1 })
             .lean()
         : [];
+
+    const BOM = require('../models/bom.model');
+    const soFgIds = Array.from(new Set(
+        salesOrders.flatMap((so) => (so.items || []).map((it) => String(it.finishedGood?._id || it.finishedGood || '')).filter(Boolean))
+    ));
+    const activeBoms = soFgIds.length > 0
+        ? await BOM.find({ tenant: tenantId, finishedGood: { $in: soFgIds }, isActive: true })
+            .populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } })
+            .lean()
+        : [];
+    const bomByFgId = new Map();
+    activeBoms.forEach((b) => {
+        const k = String(b.finishedGood);
+        if (!bomByFgId.has(k) || b.isDefault) bomByFgId.set(k, b);
+    });
 
     const now = new Date();
     const todayStart = new Date(now);
@@ -241,7 +257,7 @@ const getPendingProductionLinesCore = async (tenantId, queryParams = {}) => {
 
             const orderedQty = Number(item.quantity || 0);
             const unit = item.unit || fg.uom?.symbol || fg.uom?.name || 'Pcs';
-            const conv = convertSoQtyToBags(orderedQty, unit, fg);
+            const conv = convertSoQtyToBags(orderedQty, unit, fg, bomByFgId.get(String(fg._id)) || null);
             const orderedBags = conv.hasConversion && conv.convertedBags !== null ? conv.convertedBags : orderedQty;
             const remainingQty = Math.max(0, Number((orderedBags - plannedQty).toFixed(3)));
 

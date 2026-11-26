@@ -20,7 +20,7 @@ import {
     X
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
-import { hasModulePermission, checkIsSuperAdmin, isTenantAdmin } from '../../utils/permissionUtils';
+import { hasModulePermission, checkIsSuperAdmin, hasApprovalPermission } from '../../utils/permissionUtils';
 import axiosInstance from '../../api/axiosInstance';
 
 const SIDEBAR_SECTIONS = [
@@ -79,10 +79,10 @@ export default function Sidebar({ isOpen, onClose }) {
     const [pendingCount, setPendingCount] = useState(0);
 
     const isSuperAdmin = checkIsSuperAdmin(user);
-    const isAdmin = isTenantAdmin(user);
+    const canApprove = hasApprovalPermission(user);
 
     const fetchPendingCount = useCallback(() => {
-        if (!isAdmin || !user) return;
+        if (!canApprove || !user) return;
         axiosInstance.get('/approvals/pending-count')
             .then((res) => {
                 if (res.data?.success) {
@@ -90,10 +90,10 @@ export default function Sidebar({ isOpen, onClose }) {
                 }
             })
             .catch(() => {});
-    }, [isAdmin, user]);
+    }, [canApprove, user]);
 
     useEffect(() => {
-        if (!isAdmin) {
+        if (!canApprove) {
             setPendingCount(0);
             return;
         }
@@ -107,7 +107,7 @@ export default function Sidebar({ isOpen, onClose }) {
             window.removeEventListener('approval-count-changed', handleCountChanged);
             window.removeEventListener('notification-read', handleCountChanged);
         };
-    }, [isAdmin, fetchPendingCount]);
+    }, [canApprove, fetchPendingCount]);
 
     const isItemVisible = (item) => {
         // Super Admin sees ONLY System Dashboard and Tenant Accounts
@@ -116,7 +116,7 @@ export default function Sidebar({ isOpen, onClose }) {
         }
 
         if (item.path === '/approvals') {
-            return isAdmin;
+            return canApprove;
         }
 
         if (item.path === '/dashboard') {

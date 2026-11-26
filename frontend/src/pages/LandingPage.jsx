@@ -50,10 +50,13 @@ import {
     INDUSTRIES_SERVED,
     QUALITY_STANDARDS,
     ORDERING_STEPS,
-    FAQS
+    FAQS,
+    FACTORY_VIDEOS
 } from '../config/landingConfig';
 import ProductImage from '../components/landing/ProductImage';
 import ProductDetailModal from '../components/landing/ProductDetailModal';
+import HeroVideoPlaylist from '../components/landing/HeroVideoPlaylist';
+import InsideFactorySection from '../components/landing/InsideFactorySection';
 
 // ── Lightweight IntersectionObserver Count-Up Component ─────────────────────
 function CountUpNumber({ end, suffix = '', duration = 1600 }) {
@@ -692,6 +695,8 @@ export default function LandingPage() {
     const [companyInfo, setCompanyInfo] = useState(null);
     const [isLoadingCompany, setIsLoadingCompany] = useState(true);
     const [logoError, setLogoError] = useState(false);
+    const [isSectionVideoPlaying, setIsSectionVideoPlaying] = useState(false);
+    const heroRef = useRef(null);
 
     // Fetch whitelisted company profile once on load (with silent single retry on failure)
     useEffect(() => {
@@ -973,6 +978,9 @@ export default function LandingPage() {
                         <a href="#process" onClick={(e) => scrollToSection(e, 'process')} className="hover:text-amber-600 transition-colors">
                             Process
                         </a>
+                        <a href="#factory" onClick={(e) => scrollToSection(e, 'factory')} className="hover:text-amber-600 transition-colors">
+                            Our Factory
+                        </a>
                         <a href="#why-us" onClick={(e) => scrollToSection(e, 'why-us')} className="hover:text-amber-600 transition-colors">
                             Why Us
                         </a>
@@ -1033,6 +1041,7 @@ export default function LandingPage() {
                         <a href="#about" onClick={(e) => scrollToSection(e, 'about')} className="block px-3 py-2 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50">About Company</a>
                         <a href="#products" onClick={(e) => scrollToSection(e, 'products')} className="block px-3 py-2 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50">Packaging Products</a>
                         <a href="#process" onClick={(e) => scrollToSection(e, 'process')} className="block px-3 py-2 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50">Manufacturing Process</a>
+                        <a href="#factory" onClick={(e) => scrollToSection(e, 'factory')} className="block px-3 py-2 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50">Inside Our Factory</a>
                         <a href="#why-us" onClick={(e) => scrollToSection(e, 'why-us')} className="block px-3 py-2 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50">Why Choose Us</a>
                         <a href="#industries" onClick={(e) => scrollToSection(e, 'industries')} className="block px-3 py-2 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50">Industries Served</a>
                         <a href="#quality" onClick={(e) => scrollToSection(e, 'quality')} className="block px-3 py-2 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50">Quality Checks</a>
@@ -1066,7 +1075,14 @@ export default function LandingPage() {
             {/* ================================================================= */}
             {/* 2. HERO SECTION WITH WOVEN PATTERN & PRODUCT SHOWCASE             */}
             {/* ================================================================= */}
-            <section className="relative z-10 bg-gradient-to-br from-[#0a1128] via-[#101b3b] to-[#0a1128] text-white pt-14 pb-20 sm:pt-18 sm:pb-24 lg:pt-22 lg:pb-30 overflow-hidden">
+            <section ref={heroRef} className="relative z-10 bg-gradient-to-br from-[#0a1128] via-[#101b3b] to-[#0a1128] text-white pt-14 pb-20 sm:pt-18 sm:pb-24 lg:pt-22 lg:pb-30 overflow-hidden">
+                {/* Seamless Background Video Playlist */}
+                <HeroVideoPlaylist
+                    videos={FACTORY_VIDEOS}
+                    heroRef={heroRef}
+                    isExternallyPaused={isSectionVideoPlaying}
+                />
+
                 {/* Subtle Woven Fabric Pattern SVG Overlay */}
                 <div
                     className="absolute inset-0 opacity-[0.04] pointer-events-none"
@@ -1352,6 +1368,14 @@ export default function LandingPage() {
                     </div>
                 </div>
             </section>
+
+            {/* ================================================================= */}
+            {/* 4B. INSIDE OUR FACTORY (Video Showcase Section)                   */}
+            {/* ================================================================= */}
+            <InsideFactorySection
+                videos={FACTORY_VIDEOS}
+                onPlayStateChange={setIsSectionVideoPlaying}
+            />
 
             {/* ================================================================= */}
             {/* 5. PRODUCTS SHOWCASE (Filterable + Real Specs + Get Quote)        */}

@@ -191,6 +191,15 @@ const directCheckout = async (req, res) => {
                 });
             }
 
+            if (fgDoc.isActive === false || String(fgDoc.status || 'Active').toLowerCase() !== 'active') {
+                await session.abortTransaction();
+                session.endSession();
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot sell inactive Finished Good: ${fgDoc.name} (${fgDoc.code}). Please activate it in Master Data first.`
+                });
+            }
+
             if (fgDoc.currentStock < numQty) {
                 await session.abortTransaction();
                 session.endSession();

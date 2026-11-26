@@ -4201,7 +4201,7 @@ export default function TabbedResourcePage({
                         <div className="flex items-center justify-between">
                             <div>
                                 <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
-                                    Raw Materials Required (per bag) *
+                                    Raw Materials Required — Qty per unit bag (Kg) *
                                 </label>
                                 <p className="text-[11px] text-text-muted mt-0.5">
                                     Define the raw material ingredients and quantities needed to produce 1 bag.

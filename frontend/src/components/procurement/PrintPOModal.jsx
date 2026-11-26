@@ -78,9 +78,18 @@ export default function PrintPOModal({ isOpen, onClose, po }) {
         };
     });
 
-    const subtotal = itemsSubtotal > 0 ? itemsSubtotal : (activePo.totalValue || 0);
-    const gstTax = subtotal * 0.18;
-    const grandTotal = subtotal + gstTax;
+    const subtotal = Number(activePo.itemsSubtotal || itemsSubtotal || activePo.totalValue || 0);
+    const discountAmount = Number(activePo.discountAmount || 0);
+    const freightAmount = Number(activePo.freightAmount || 0);
+    const insuranceAmount = Number(activePo.insuranceAmount || 0);
+    const otherChargesAmount = Number(activePo.otherChargesAmount || 0);
+    const otherChargesLabel = activePo.otherChargesLabel || '';
+    const isExempt = activePo.gstTreatment === 'EXEMPT';
+    const gstRate = isExempt ? 0 : (activePo.gstRate !== undefined ? Number(activePo.gstRate) : 18);
+    const taxableValue = Number(activePo.taxableValue || Math.max(0, subtotal - discountAmount + freightAmount + insuranceAmount + otherChargesAmount));
+    const gstTax = isExempt ? 0 : Number(activePo.taxAmount ?? activePo.gstAmount ?? (taxableValue * (gstRate / 100)));
+    const roundOff = Number(activePo.roundOff || 0);
+    const grandTotal = Number(activePo.grandTotal ?? activePo.totalValue ?? (taxableValue + gstTax + roundOff));
 
     const handlePrint = () => {
         window.print();
@@ -262,15 +271,49 @@ export default function PrintPOModal({ isOpen, onClose, po }) {
                                 )}
                             </div>
 
-                            <div className="w-64 bg-slate-50 p-3 rounded border border-slate-200 space-y-1 text-right text-xs print:text-sm">
+                            <div className="w-72 bg-slate-50 p-3 rounded border border-slate-200 space-y-1 text-right text-xs print:text-sm">
                                 <div className="flex justify-between text-slate-600">
-                                    <span>Subtotal:</span>
+                                    <span>Items Subtotal:</span>
                                     <span className="font-mono font-semibold">₹{subtotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                                 </div>
+                                {discountAmount > 0 && (
+                                    <div className="flex justify-between text-emerald-700">
+                                        <span>Less: Discount{activePo.discountType === 'PERCENT' ? ` (${activePo.discountValue}%)` : ''}:</span>
+                                        <span className="font-mono font-semibold">-₹{discountAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                )}
+                                {freightAmount > 0 && (
+                                    <div className="flex justify-between text-slate-600">
+                                        <span>Freight / Transport:</span>
+                                        <span className="font-mono">+₹{freightAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                )}
+                                {insuranceAmount > 0 && (
+                                    <div className="flex justify-between text-slate-600">
+                                        <span>Insurance Charges:</span>
+                                        <span className="font-mono">+₹{insuranceAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                )}
+                                {otherChargesAmount > 0 && (
+                                    <div className="flex justify-between text-slate-600">
+                                        <span>{otherChargesLabel ? `Other (${otherChargesLabel}):` : 'Other Charges:'}</span>
+                                        <span className="font-mono">+₹{otherChargesAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                )}
+                                <div className="flex justify-between text-slate-700 font-semibold border-t border-slate-200 pt-1">
+                                    <span>Taxable Value:</span>
+                                    <span className="font-mono">₹{taxableValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                </div>
                                 <div className="flex justify-between text-slate-600">
-                                    <span>GST (18%):</span>
+                                    <span>{isExempt ? 'GST (Exempt):' : `GST (${gstRate}%):`}</span>
                                     <span className="font-mono">₹{gstTax.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                                 </div>
+                                {roundOff !== 0 && (
+                                    <div className="flex justify-between text-slate-600">
+                                        <span>Round Off:</span>
+                                        <span className="font-mono">{roundOff > 0 ? `+₹${roundOff.toFixed(2)}` : `-₹${Math.abs(roundOff).toFixed(2)}`}</span>
+                                    </div>
+                                )}
                                 <div className="flex justify-between font-extrabold text-slate-900 border-t border-slate-300 pt-1 text-sm print:text-base">
                                     <span>PO Grand Total:</span>
                                     <span className="font-mono text-primary">₹{grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>

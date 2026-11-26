@@ -1,16 +1,29 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ShoppingCart, Plus, FileText, CreditCard, Eye, Pencil, Receipt, CheckCircle2, DollarSign, AlertCircle, Users, Wallet } from 'lucide-react';
+import { ShoppingCart, Plus, FileText, CreditCard, Eye, Pencil, Receipt, CheckCircle2, DollarSign, AlertCircle, Users, Wallet, Check, X } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import CreateSalesOrderModal from '../components/sales/CreateSalesOrderModal';
 import GenerateInvoiceModal from '../components/sales/GenerateInvoiceModal';
 import RecordPaymentModal from '../components/sales/RecordPaymentModal';
 import ViewSalesOrderModal from '../components/sales/ViewSalesOrderModal';
 import ViewInvoiceModal from '../components/sales/ViewInvoiceModal';
+import PartyAdvanceModal from '../components/shared/PartyAdvanceModal';
 import { formatDate, isDateOverdue } from '../utils/dateUtils';
 import axiosInstance from '../api/axiosInstance';
+import { useAuthStore } from '../store/authStore';
+import { hasApprovalPermission } from '../utils/permissionUtils';
+import toast from 'react-hot-toast';
 
 export default function SalesPage() {
+    const user = useAuthStore((state) => state.user);
+    const canApprove = hasApprovalPermission(user);
+    const [approvingSoId, setApprovingSoId] = useState(null);
+    const [rejectSoModal, setRejectSoModal] = useState({
+        isOpen: false,
+        salesOrder: null,
+        remark: '',
+        isSubmitting: false
+    });
     const [searchParams, setSearchParams] = useSearchParams();
     const [activeTabKey, setActiveTabKey] = useState('sales-orders');
     const [appliedDashboardFilter, setAppliedDashboardFilter] = useState(null);
@@ -84,6 +97,12 @@ export default function SalesPage() {
     const [isGenerateInvoiceOpen, setIsGenerateInvoiceOpen] = useState(false);
     const [recordingPaymentInvoice, setRecordingPaymentInvoice] = useState(null);
     const [viewingInvoiceData, setViewingInvoiceData] = useState(null);
+    const [partyAdvanceModal, setPartyAdvanceModal] = useState({
+        isOpen: false,
+        partyId: null,
+        partyName: '',
+        mode: 'RECORD'
+    });
     const [statusActionModal, setStatusActionModal] = useState({
         isOpen: false,
         salesOrder: null,
@@ -94,6 +113,50 @@ export default function SalesPage() {
         requiresWoDecision: false,
         isSubmitting: false
     });
+
+    const handleQuickApproveSo = async (so) => {
+        if (!so?._id) return;
+        try {
+            setApprovingSoId(so._id);
+            const res = await axiosInstance.post(`/approvals/${so._id}/approve`, { remarks: 'Approved' });
+            if (res.data?.success) {
+                toast.success(`Sales Order ${so.soNumber || ''} approved!`);
+                window.dispatchEvent(new CustomEvent('approval-count-changed'));
+                window.dispatchEvent(new CustomEvent('notification-read'));
+                setViewingSoData(null);
+                setRefreshKey((k) => k + 1);
+            }
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to approve Sales Order');
+        } finally {
+            setApprovingSoId(null);
+        }
+    };
+
+    const handleQuickRejectSo = async (e) => {
+        e.preventDefault();
+        const { salesOrder, remark } = rejectSoModal;
+        if (!salesOrder?._id) return;
+        if (!remark.trim()) {
+            toast.error('Rejection remark is mandatory.');
+            return;
+        }
+        try {
+            setRejectSoModal((p) => ({ ...p, isSubmitting: true }));
+            const res = await axiosInstance.post(`/approvals/${salesOrder._id}/reject`, { remarks: remark.trim() });
+            if (res.data?.success) {
+                toast.success(`Sales Order ${salesOrder.soNumber || ''} rejected.`);
+                window.dispatchEvent(new CustomEvent('approval-count-changed'));
+                window.dispatchEvent(new CustomEvent('notification-read'));
+                setRejectSoModal({ isOpen: false, salesOrder: null, remark: '', isSubmitting: false });
+                setViewingSoData(null);
+                setRefreshKey((k) => k + 1);
+            }
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to reject Sales Order');
+            setRejectSoModal((p) => ({ ...p, isSubmitting: false }));
+        }
+    };
 
     const openStatusActionModal = (so, targetStatus) => {
         setStatusActionModal({
@@ -274,8 +337,26 @@ export default function SalesPage() {
         },
         {
             header: 'STATUS',
-            exportValue: (row) => row.status || 'CONFIRMED',
+            exportValue: (row) => {
+                if (row.soApprovalStatus === 'Pending Approval') return 'Pending Approval';
+                if (row.soApprovalStatus === 'Rejected') return 'Rejected';
+                return row.status || 'CONFIRMED';
+            },
             render: (row) => {
+                if (row.soApprovalStatus === 'Pending Approval') {
+                    return (
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider inline-block bg-amber-100 text-amber-800 border border-amber-300">
+                            Pending Approval
+                        </span>
+                    );
+                }
+                if (row.soApprovalStatus === 'Rejected') {
+                    return (
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider inline-block bg-rose-100 text-rose-800 border border-rose-300" title={row.approvalRemarks || ''}>
+                            Rejected
+                        </span>
+                    );
+                }
                 const st = row.status || 'CONFIRMED';
                 const isConfirmed = st === 'CONFIRMED';
                 const isDraft = st === 'DRAFT';
@@ -352,7 +433,44 @@ export default function SalesPage() {
                         </button>
                     )}
 
-                    {row.status === 'CONFIRMED' && (
+                    {row.soApprovalStatus === 'Pending Approval' && canApprove && (
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => handleQuickApproveSo(row)}
+                                disabled={approvingSoId === row._id}
+                                className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                title="Approve Sales Order"
+                            >
+                                <Check size={12} />
+                                <span>Approve</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setRejectSoModal({ isOpen: true, salesOrder: row, remark: '', isSubmitting: false })}
+                                className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                                title="Reject Sales Order"
+                            >
+                                <X size={12} />
+                                <span>Reject</span>
+                            </button>
+                            {/* Modal 6: Customer Advance & Ledger */}
+            <PartyAdvanceModal
+                isOpen={partyAdvanceModal.isOpen}
+                partyType="CUSTOMER"
+                partyId={partyAdvanceModal.partyId}
+                partyName={partyAdvanceModal.partyName}
+                initialMode={partyAdvanceModal.mode}
+                onClose={() => setPartyAdvanceModal((p) => ({ ...p, isOpen: false }))}
+                onSuccess={() => setRefreshKey((prev) => prev + 1)}
+            />
+        </>
+                    )}
+
+                    {row.status === 'CONFIRMED' &&
+                        !['Pending Approval', 'Rejected'].includes(row.soApprovalStatus) &&
+                        (['Production Completed', 'Completed', 'Produced'].includes(row.productionStatus) ||
+                            ['Production Completed', 'Completed', 'Produced'].includes(row.productionSummary?.status)) && (
                         <button
                             type="button"
                             onClick={() => openStatusActionModal(row, 'READY_FOR_DISPATCH')}
@@ -374,7 +492,7 @@ export default function SalesPage() {
                         </button>
                     )}
 
-                    {row.status !== 'DRAFT' && row.status !== 'CANCELLED' && (
+                    {row.status !== 'DRAFT' && row.status !== 'CANCELLED' && !['Pending Approval', 'Rejected'].includes(row.soApprovalStatus) && (
                         <button
                             type="button"
                             onClick={() => {
@@ -451,14 +569,22 @@ export default function SalesPage() {
         },
         {
             header: 'DUE DATE',
-            exportValue: (row) => formatDate(row.dueDate || row.invoiceDate),
+            exportValue: (row) => (row.effectiveDueDate || row.dueDate) ? formatDate(row.effectiveDueDate || row.dueDate) : '-',
             render: (row) => {
-                const dueD = row.dueDate || row.invoiceDate;
-                const isOverdue = row.paymentStatus === 'OVERDUE' || (row.paymentStatus !== 'PAID' && isDateOverdue(dueD));
+                const dueD = row.effectiveDueDate || row.dueDate;
+                if (!dueD) return <span className="font-mono text-xs text-text-muted">-</span>;
+                const isOverdue = Boolean(row.isOverdue || row.paymentStatus === 'OVERDUE');
                 return (
-                    <span className={`font-mono text-xs ${isOverdue ? 'text-danger font-bold' : 'text-text-muted'}`}>
-                        {formatDate(dueD)}
-                    </span>
+                    <div className="flex flex-col">
+                        <span className={`font-mono text-xs ${isOverdue ? 'text-rose-600 font-bold' : 'text-text-muted'}`}>
+                            {formatDate(dueD)}
+                        </span>
+                        {isOverdue && row.daysOverdue > 0 && (
+                            <span className="text-[10px] font-extrabold text-rose-600">
+                                {row.daysOverdue} day{row.daysOverdue === 1 ? '' : 's'} overdue
+                            </span>
+                        )}
+                    </div>
                 );
             }
         },
@@ -623,6 +749,17 @@ export default function SalesPage() {
             )
         },
         {
+            header: 'ADVANCE (₹)',
+            align: 'right',
+            sortable: true,
+            exportValue: (row) => row.advanceBalance || 0,
+            render: (row) => (
+                <span className={`font-mono font-bold text-xs ${(row.advanceBalance || 0) > 0 ? 'text-emerald-700' : 'text-text-muted'}`}>
+                    ₹{(row.advanceBalance || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                </span>
+            )
+        },
+        {
             header: 'UNPAID INVOICES',
             align: 'center',
             exportValue: (row) => `${row.unpaidInvoiceCount || 0} / ${row.invoiceCount || 0}`,
@@ -636,7 +773,37 @@ export default function SalesPage() {
             header: 'ACTIONS',
             align: 'right',
             render: (row) => (
-                <div className="flex items-center justify-end">
+                <div className="flex items-center justify-end gap-1.5">
+                    {row.customerId && String(row.customerId).length === 24 && (
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => setPartyAdvanceModal({ isOpen: true, partyId: row.customerId, partyName: row.customerName, mode: 'RECORD' })}
+                                className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold cursor-pointer whitespace-nowrap"
+                                title="Record Customer Advance"
+                            >
+                                + Advance
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setPartyAdvanceModal({ isOpen: true, partyId: row.customerId, partyName: row.customerName, mode: 'LEDGER' })}
+                                className="px-2 py-1 bg-app-bg hover:bg-card-bg border border-border text-text-muted hover:text-text-main rounded text-[10px] font-semibold cursor-pointer"
+                                title="View Advance & Payment Ledger"
+                            >
+                                Ledger
+                            </button>
+                            {/* Modal 6: Customer Advance & Ledger */}
+            <PartyAdvanceModal
+                isOpen={partyAdvanceModal.isOpen}
+                partyType="CUSTOMER"
+                partyId={partyAdvanceModal.partyId}
+                partyName={partyAdvanceModal.partyName}
+                initialMode={partyAdvanceModal.mode}
+                onClose={() => setPartyAdvanceModal((p) => ({ ...p, isOpen: false }))}
+                onSuccess={() => setRefreshKey((prev) => prev + 1)}
+            />
+        </>
+                    )}
                     <button
                         type="button"
                         onClick={() => {
@@ -845,6 +1012,8 @@ export default function SalesPage() {
                 }}
                 onQuickStatusChange={(so, target) => openStatusActionModal(so, target)}
                 onCancelOrder={(so) => openStatusActionModal(so, 'CANCELLED')}
+                onApproveSo={(so) => handleQuickApproveSo(so)}
+                onRejectSo={(so) => setRejectSoModal({ isOpen: true, salesOrder: so, remark: '', isSubmitting: false })}
                 onGenerateInvoice={() => {
                     setIsGenerateInvoiceOpen(true);
                 }}
@@ -959,6 +1128,65 @@ export default function SalesPage() {
                     </form>
                 </div>
             )}
+
+            {/* Quick Reject Sales Order Modal */}
+            {rejectSoModal.isOpen && (
+                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+                    <form onSubmit={handleQuickRejectSo} className="bg-card-bg border border-border rounded-xl shadow-xl w-full max-w-md p-5 space-y-4 font-sans text-xs">
+                        <div className="flex justify-between items-center pb-2 border-b border-border">
+                            <h3 className="font-bold text-sm text-text-main">
+                                Reject Sales Order {rejectSoModal.salesOrder?.soNumber || ''}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setRejectSoModal({ isOpen: false, salesOrder: null, remark: '', isSubmitting: false })}
+                                className="text-text-muted hover:text-text-main text-xs font-bold cursor-pointer"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                        <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
+                                Rejection Remark *
+                            </label>
+                            <textarea
+                                rows={3}
+                                required
+                                placeholder="Enter mandatory reason for rejecting this Sales Order..."
+                                value={rejectSoModal.remark}
+                                onChange={(e) => setRejectSoModal((p) => ({ ...p, remark: e.target.value }))}
+                                className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-rose-500"
+                            />
+                        </div>
+                        <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                            <button
+                                type="button"
+                                onClick={() => setRejectSoModal({ isOpen: false, salesOrder: null, remark: '', isSubmitting: false })}
+                                className="px-3.5 py-2 border border-border rounded-lg text-xs font-bold text-text-muted hover:text-text-main cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={rejectSoModal.isSubmitting || !rejectSoModal.remark.trim()}
+                                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-extrabold cursor-pointer disabled:opacity-50"
+                            >
+                                {rejectSoModal.isSubmitting ? 'Rejecting...' : 'Confirm Reject'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            )}
+            {/* Modal 6: Customer Advance & Ledger */}
+            <PartyAdvanceModal
+                isOpen={partyAdvanceModal.isOpen}
+                partyType="CUSTOMER"
+                partyId={partyAdvanceModal.partyId}
+                partyName={partyAdvanceModal.partyName}
+                initialMode={partyAdvanceModal.mode}
+                onClose={() => setPartyAdvanceModal((p) => ({ ...p, isOpen: false }))}
+                onSuccess={() => setRefreshKey((prev) => prev + 1)}
+            />
         </>
     );
 }

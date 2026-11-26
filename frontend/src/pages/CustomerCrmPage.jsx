@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
     PhoneCall, AlertTriangle, Plus, RefreshCw, ClipboardList,
     CheckCircle2, XCircle, Eye, Pencil, Trash2, AlertCircle,
-    Upload, X as XIcon, FileText, Package, ShoppingCart, Clock
+    Upload, X as XIcon, FileText, Package, ShoppingCart, Clock, Check
 } from 'lucide-react';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import SearchableSelect from '../components/shared/SearchableSelect';
@@ -16,7 +16,7 @@ import LogInteractionModal from '../components/crm/LogInteractionModal';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
-import { isTenantAdmin, checkIsSuperAdmin } from '../utils/permissionUtils';
+import { isTenantAdmin, checkIsSuperAdmin, hasApprovalPermission } from '../utils/permissionUtils';
 import { formatDate } from '../utils/dateUtils';
 
 // ── Attribute type keys matching rawMaterialAttributes.constants.js ──────────
@@ -148,6 +148,14 @@ export default function CustomerCrmPage() {
     const userRole = rawUser?.role?.name || rawUser?.roleName || (typeof rawUser?.role === 'string' ? rawUser.role : '');
     const user = useMemo(() => (rawUser ? { ...rawUser, role: userRole } : null), [rawUser, userRole]);
     const isUserAdmin = isTenantAdmin(rawUser) || checkIsSuperAdmin(rawUser);
+    const canApprove = hasApprovalPermission(rawUser);
+    const [approvingEnquiryId, setApprovingEnquiryId] = useState(null);
+    const [rejectEnquiryModal, setRejectEnquiryModal] = useState({
+        isOpen: false,
+        enquiry: null,
+        remarks: '',
+        isSubmitting: false
+    });
 
     const [activeTab, setActiveTab] = useState('enquiries');
     const [sourceFilter, setSourceFilter] = useState('');
@@ -171,6 +179,50 @@ export default function CustomerCrmPage() {
 
     // View-detail modal
     const [viewingEnquiry, setViewingEnquiry] = useState(null);
+
+    const handleQuickApproveEnquiry = async (row) => {
+        if (!row?._id) return;
+        try {
+            setApprovingEnquiryId(row._id);
+            const res = await axiosInstance.post(`/approvals/${row._id}/approve`, { remarks: 'Approved' });
+            if (res.data?.success) {
+                toast.success(`Enquiry ${row.nslNumber || ''} approved! Generate SO is now enabled.`);
+                window.dispatchEvent(new CustomEvent('approval-count-changed'));
+                window.dispatchEvent(new CustomEvent('notification-read'));
+                setViewingEnquiry((prev) => (prev && prev._id === row._id ? { ...prev, status: 'Approved', soApprovalStatus: 'Approved' } : prev));
+                setRefreshKey((p) => p + 1);
+            }
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to approve enquiry');
+        } finally {
+            setApprovingEnquiryId(null);
+        }
+    };
+
+    const handleQuickRejectEnquiry = async (e) => {
+        e.preventDefault();
+        const { enquiry, remarks } = rejectEnquiryModal;
+        if (!enquiry?._id) return;
+        if (!remarks.trim()) {
+            toast.error('Rejection remark is mandatory.');
+            return;
+        }
+        try {
+            setRejectEnquiryModal((p) => ({ ...p, isSubmitting: true }));
+            const res = await axiosInstance.post(`/approvals/${enquiry._id}/reject`, { remarks: remarks.trim() });
+            if (res.data?.success) {
+                toast.success(`Enquiry ${enquiry.nslNumber || ''} rejected.`);
+                window.dispatchEvent(new CustomEvent('approval-count-changed'));
+                window.dispatchEvent(new CustomEvent('notification-read'));
+                setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false });
+                setViewingEnquiry((prev) => (prev && prev._id === enquiry._id ? { ...prev, status: 'Rejected', soApprovalStatus: 'Rejected', approvalRemarks: remarks.trim() } : prev));
+                setRefreshKey((p) => p + 1);
+            }
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to reject enquiry');
+            setRejectEnquiryModal((p) => ({ ...p, isSubmitting: false }));
+        }
+    };
 
     // Fetch full order enquiry details when opening view modal to ensure latest followUps
     useEffect(() => {
@@ -1335,6 +1387,179 @@ export default function CustomerCrmPage() {
                                 GENERATE SO
                             </button>
                         )}
+                        {isNslPending && canApprove && (
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={() => handleQuickApproveEnquiry(row)}
+                                    disabled={approvingEnquiryId === row._id}
+                                    className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                    title="Approve Enquiry"
+                                >
+                                    <Check size={11} />
+                                    <span>Approve</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setRejectEnquiryModal({ isOpen: true, enquiry: row, remarks: '', isSubmitting: false })}
+                                    className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                                    title="Reject Enquiry"
+                                >
+                                    <XIcon size={11} />
+                                    <span>Reject</span>
+                                </button>
+                                {/* ─── View Order Enquiry Modal ──────────────────────────────────── */}
+            {viewingEnquiry && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="fixed inset-0" onClick={() => setViewingEnquiry(null)} />
+                    <div className="relative z-10 w-full max-w-2xl bg-card-bg border border-border rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+                        <div className="px-5 py-4 bg-sidebar-bg text-sidebar-text-active border-b border-sidebar-hover flex items-center justify-between shrink-0">
+                            <div>
+                                <h3 className="text-sm font-extrabold flex items-center gap-2">
+                                    <span>{viewingEnquiry.nslNumber || viewingEnquiry.enquiryNumber || 'Order Enquiry'}</span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary-light">
+                                        {viewingEnquiry.source === 'Website' ? 'Website' : 'NSL'}
+                                    </span>
+                                </h3>
+                                <p className="text-[11px] text-sidebar-text">
+                                    Enquiry Date: {formatDate(viewingEnquiry.enquiryDate || viewingEnquiry.createdAt)} • Status: {viewingEnquiry.status || 'Open'}
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="p-1.5 text-sidebar-text hover:text-white rounded-lg cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-5 overflow-y-auto space-y-4 text-xs flex-1">
+                            {viewingEnquiry.approvalRemarks && (
+                                <div className={`p-3 rounded-xl border ${viewingEnquiry.status === 'Rejected' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`}>
+                                    <span className="text-[10px] font-extrabold uppercase block mb-0.5">
+                                        {viewingEnquiry.status === 'Rejected' ? 'Rejection Reason' : 'Approval Remarks'}:
+                                    </span>
+                                    <p className="font-semibold">{viewingEnquiry.approvalRemarks}</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg p-3.5 rounded-xl border border-border">
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Customer / Prospect</span>
+                                    <span className="font-extrabold text-text-main text-sm">
+                                        {viewingEnquiry.customer?.companyName || viewingEnquiry.customerRef?.companyName || viewingEnquiry.newCustomerDetails?.company || viewingEnquiry.newCustomerDetails?.name || 'Prospect'}
+                                    </span>
+                                    {(viewingEnquiry.contactPerson || viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone) && (
+                                        <div className="text-[11px] text-text-muted">
+                                            {viewingEnquiry.contactPerson || viewingEnquiry.newCustomerDetails?.name} {viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone ? `(${viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone})` : ''}
+                                        </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Product & Quantity</span>
+                                    <span className="font-bold text-text-main">
+                                        {viewingEnquiry.productCategory || 'N/A'} • {viewingEnquiry.totalOrderQuantity != null ? Number(viewingEnquiry.totalOrderQuantity).toLocaleString('en-IN') : '-'} {viewingEnquiry.quantityUnit || 'Kg'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Material & Lamination</span>
+                                    <span className="font-semibold text-text-main">
+                                        {[viewingEnquiry.materialQualityFabric, viewingEnquiry.fabricLaminationType, viewingEnquiry.fabricGrammage ? `${viewingEnquiry.fabricGrammage} GSM` : ''].filter(Boolean).join(' | ') || '-'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Status</span>
+                                    <span className="font-extrabold text-text-main">{viewingEnquiry.status || 'Open'}</span>
+                                </div>
+                            </div>
+
+                            {(viewingEnquiry.description || viewingEnquiry.remarks) && (
+                                <div className="bg-app-bg p-3 rounded-xl border border-border">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Requirement Summary</span>
+                                    <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="px-4 py-2 border border-border rounded-lg text-xs font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                Close
+                            </button>
+                            <div className="flex items-center gap-2">
+                                {(viewingEnquiry.status === 'Pending Approval' || viewingEnquiry.soApprovalStatus === 'Pending Approval') && canApprove && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRejectEnquiryModal({ isOpen: true, enquiry: viewingEnquiry, remarks: '', isSubmitting: false })}
+                                            className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                        >
+                                            <XIcon size={13} />
+                                            <span>Reject</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={approvingEnquiryId === viewingEnquiry._id}
+                                            onClick={() => handleQuickApproveEnquiry(viewingEnquiry)}
+                                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                        >
+                                            <Check size={13} />
+                                            <span>Approve</span>
+                                        </button>
+                                    </>
+                                )}
+                                {(viewingEnquiry.status === 'Approved' || viewingEnquiry.soApprovalStatus === 'Approved') && !viewingEnquiry.orderConfirmed && !viewingEnquiry.salesOrder && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const enq = viewingEnquiry;
+                                            setViewingEnquiry(null);
+                                            handleGenerateSO(enq);
+                                        }}
+                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                    >
+                                        <ShoppingCart size={13} />
+                                        <span>Generate SO</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ─── Quick Reject Enquiry Modal ─────────────────────────────────── */}
+            {rejectEnquiryModal.isOpen && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="bg-card-bg border border-border rounded-xl shadow-2xl w-full max-w-md p-5 space-y-4 text-xs">
+                        <div className="flex items-center justify-between pb-2 border-b border-border">
+                            <h3 className="text-sm font-extrabold text-text-main">Reject Enquiry {rejectEnquiryModal.enquiry?.nslNumber || ''}</h3>
+                            <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="text-text-muted hover:text-text-main cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+                        <form onSubmit={handleQuickRejectEnquiry} className="space-y-3">
+                            <div>
+                                <label className="block text-[11px] font-bold uppercase text-text-main mb-1">Rejection Remark *</label>
+                                <textarea
+                                    required
+                                    rows={3}
+                                    placeholder="Enter mandatory reason for rejecting this enquiry..."
+                                    value={rejectEnquiryModal.remarks}
+                                    onChange={(e) => setRejectEnquiryModal((p) => ({ ...p, remarks: e.target.value }))}
+                                    className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-rose-500"
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                                <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="px-3.5 py-2 border border-border rounded-lg font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                    Cancel
+                                </button>
+                                <button type="submit" disabled={rejectEnquiryModal.isSubmitting || !rejectEnquiryModal.remarks.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg cursor-pointer disabled:opacity-50">
+                                    {rejectEnquiryModal.isSubmitting ? 'Rejecting...' : 'Confirm Reject'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </>
+                        )}
                         {!['Converted', 'SO Created', 'Closed - Won', 'Confirmed', 'Rejected'].includes(row.status) && !row.orderConfirmed && (
                             <button
                                 type="button"
@@ -1466,7 +1691,7 @@ export default function CustomerCrmPage() {
                         handleEditEnquiry(rec);
                     }
                 }}
-                externalViewRecord={viewingEnquiry}
+                externalViewRecord={null}
                 onClearExternalViewRecord={() => setViewingEnquiry(null)}
             />
 
@@ -1542,7 +1767,157 @@ export default function CustomerCrmPage() {
                                     <PhoneCall size={15} /><span>{isSubmitting ? 'Saving...' : (editingInteraction ? 'Update Interaction' : 'Save Interaction Log')}</span>
                                 </button>
                             </div>
-                        </>
+                            {/* ─── View Order Enquiry Modal ──────────────────────────────────── */}
+            {viewingEnquiry && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="fixed inset-0" onClick={() => setViewingEnquiry(null)} />
+                    <div className="relative z-10 w-full max-w-2xl bg-card-bg border border-border rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+                        <div className="px-5 py-4 bg-sidebar-bg text-sidebar-text-active border-b border-sidebar-hover flex items-center justify-between shrink-0">
+                            <div>
+                                <h3 className="text-sm font-extrabold flex items-center gap-2">
+                                    <span>{viewingEnquiry.nslNumber || viewingEnquiry.enquiryNumber || 'Order Enquiry'}</span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary-light">
+                                        {viewingEnquiry.source === 'Website' ? 'Website' : 'NSL'}
+                                    </span>
+                                </h3>
+                                <p className="text-[11px] text-sidebar-text">
+                                    Enquiry Date: {formatDate(viewingEnquiry.enquiryDate || viewingEnquiry.createdAt)} • Status: {viewingEnquiry.status || 'Open'}
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="p-1.5 text-sidebar-text hover:text-white rounded-lg cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-5 overflow-y-auto space-y-4 text-xs flex-1">
+                            {viewingEnquiry.approvalRemarks && (
+                                <div className={`p-3 rounded-xl border ${viewingEnquiry.status === 'Rejected' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`}>
+                                    <span className="text-[10px] font-extrabold uppercase block mb-0.5">
+                                        {viewingEnquiry.status === 'Rejected' ? 'Rejection Reason' : 'Approval Remarks'}:
+                                    </span>
+                                    <p className="font-semibold">{viewingEnquiry.approvalRemarks}</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg p-3.5 rounded-xl border border-border">
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Customer / Prospect</span>
+                                    <span className="font-extrabold text-text-main text-sm">
+                                        {viewingEnquiry.customer?.companyName || viewingEnquiry.customerRef?.companyName || viewingEnquiry.newCustomerDetails?.company || viewingEnquiry.newCustomerDetails?.name || 'Prospect'}
+                                    </span>
+                                    {(viewingEnquiry.contactPerson || viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone) && (
+                                        <div className="text-[11px] text-text-muted">
+                                            {viewingEnquiry.contactPerson || viewingEnquiry.newCustomerDetails?.name} {viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone ? `(${viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone})` : ''}
+                                        </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Product & Quantity</span>
+                                    <span className="font-bold text-text-main">
+                                        {viewingEnquiry.productCategory || 'N/A'} • {viewingEnquiry.totalOrderQuantity != null ? Number(viewingEnquiry.totalOrderQuantity).toLocaleString('en-IN') : '-'} {viewingEnquiry.quantityUnit || 'Kg'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Material & Lamination</span>
+                                    <span className="font-semibold text-text-main">
+                                        {[viewingEnquiry.materialQualityFabric, viewingEnquiry.fabricLaminationType, viewingEnquiry.fabricGrammage ? `${viewingEnquiry.fabricGrammage} GSM` : ''].filter(Boolean).join(' | ') || '-'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Status</span>
+                                    <span className="font-extrabold text-text-main">{viewingEnquiry.status || 'Open'}</span>
+                                </div>
+                            </div>
+
+                            {(viewingEnquiry.description || viewingEnquiry.remarks) && (
+                                <div className="bg-app-bg p-3 rounded-xl border border-border">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Requirement Summary</span>
+                                    <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="px-4 py-2 border border-border rounded-lg text-xs font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                Close
+                            </button>
+                            <div className="flex items-center gap-2">
+                                {(viewingEnquiry.status === 'Pending Approval' || viewingEnquiry.soApprovalStatus === 'Pending Approval') && canApprove && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRejectEnquiryModal({ isOpen: true, enquiry: viewingEnquiry, remarks: '', isSubmitting: false })}
+                                            className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                        >
+                                            <XIcon size={13} />
+                                            <span>Reject</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={approvingEnquiryId === viewingEnquiry._id}
+                                            onClick={() => handleQuickApproveEnquiry(viewingEnquiry)}
+                                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                        >
+                                            <Check size={13} />
+                                            <span>Approve</span>
+                                        </button>
+                                    </>
+                                )}
+                                {(viewingEnquiry.status === 'Approved' || viewingEnquiry.soApprovalStatus === 'Approved') && !viewingEnquiry.orderConfirmed && !viewingEnquiry.salesOrder && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const enq = viewingEnquiry;
+                                            setViewingEnquiry(null);
+                                            handleGenerateSO(enq);
+                                        }}
+                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                    >
+                                        <ShoppingCart size={13} />
+                                        <span>Generate SO</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ─── Quick Reject Enquiry Modal ─────────────────────────────────── */}
+            {rejectEnquiryModal.isOpen && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="bg-card-bg border border-border rounded-xl shadow-2xl w-full max-w-md p-5 space-y-4 text-xs">
+                        <div className="flex items-center justify-between pb-2 border-b border-border">
+                            <h3 className="text-sm font-extrabold text-text-main">Reject Enquiry {rejectEnquiryModal.enquiry?.nslNumber || ''}</h3>
+                            <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="text-text-muted hover:text-text-main cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+                        <form onSubmit={handleQuickRejectEnquiry} className="space-y-3">
+                            <div>
+                                <label className="block text-[11px] font-bold uppercase text-text-main mb-1">Rejection Remark *</label>
+                                <textarea
+                                    required
+                                    rows={3}
+                                    placeholder="Enter mandatory reason for rejecting this enquiry..."
+                                    value={rejectEnquiryModal.remarks}
+                                    onChange={(e) => setRejectEnquiryModal((p) => ({ ...p, remarks: e.target.value }))}
+                                    className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-rose-500"
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                                <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="px-3.5 py-2 border border-border rounded-lg font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                    Cancel
+                                </button>
+                                <button type="submit" disabled={rejectEnquiryModal.isSubmitting || !rejectEnquiryModal.remarks.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg cursor-pointer disabled:opacity-50">
+                                    {rejectEnquiryModal.isSubmitting ? 'Rejecting...' : 'Confirm Reject'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </>
                     )}
                 </form>
             </SlideOverPanel>
@@ -1614,7 +1989,157 @@ export default function CustomerCrmPage() {
                                     <AlertTriangle size={15} /><span>{isSubmitting ? 'Saving...' : (editingComplaint ? 'Update Ticket' : 'File Complaint Ticket')}</span>
                                 </button>
                             </div>
-                        </>
+                            {/* ─── View Order Enquiry Modal ──────────────────────────────────── */}
+            {viewingEnquiry && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="fixed inset-0" onClick={() => setViewingEnquiry(null)} />
+                    <div className="relative z-10 w-full max-w-2xl bg-card-bg border border-border rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+                        <div className="px-5 py-4 bg-sidebar-bg text-sidebar-text-active border-b border-sidebar-hover flex items-center justify-between shrink-0">
+                            <div>
+                                <h3 className="text-sm font-extrabold flex items-center gap-2">
+                                    <span>{viewingEnquiry.nslNumber || viewingEnquiry.enquiryNumber || 'Order Enquiry'}</span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary-light">
+                                        {viewingEnquiry.source === 'Website' ? 'Website' : 'NSL'}
+                                    </span>
+                                </h3>
+                                <p className="text-[11px] text-sidebar-text">
+                                    Enquiry Date: {formatDate(viewingEnquiry.enquiryDate || viewingEnquiry.createdAt)} • Status: {viewingEnquiry.status || 'Open'}
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="p-1.5 text-sidebar-text hover:text-white rounded-lg cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-5 overflow-y-auto space-y-4 text-xs flex-1">
+                            {viewingEnquiry.approvalRemarks && (
+                                <div className={`p-3 rounded-xl border ${viewingEnquiry.status === 'Rejected' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`}>
+                                    <span className="text-[10px] font-extrabold uppercase block mb-0.5">
+                                        {viewingEnquiry.status === 'Rejected' ? 'Rejection Reason' : 'Approval Remarks'}:
+                                    </span>
+                                    <p className="font-semibold">{viewingEnquiry.approvalRemarks}</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg p-3.5 rounded-xl border border-border">
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Customer / Prospect</span>
+                                    <span className="font-extrabold text-text-main text-sm">
+                                        {viewingEnquiry.customer?.companyName || viewingEnquiry.customerRef?.companyName || viewingEnquiry.newCustomerDetails?.company || viewingEnquiry.newCustomerDetails?.name || 'Prospect'}
+                                    </span>
+                                    {(viewingEnquiry.contactPerson || viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone) && (
+                                        <div className="text-[11px] text-text-muted">
+                                            {viewingEnquiry.contactPerson || viewingEnquiry.newCustomerDetails?.name} {viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone ? `(${viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone})` : ''}
+                                        </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Product & Quantity</span>
+                                    <span className="font-bold text-text-main">
+                                        {viewingEnquiry.productCategory || 'N/A'} • {viewingEnquiry.totalOrderQuantity != null ? Number(viewingEnquiry.totalOrderQuantity).toLocaleString('en-IN') : '-'} {viewingEnquiry.quantityUnit || 'Kg'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Material & Lamination</span>
+                                    <span className="font-semibold text-text-main">
+                                        {[viewingEnquiry.materialQualityFabric, viewingEnquiry.fabricLaminationType, viewingEnquiry.fabricGrammage ? `${viewingEnquiry.fabricGrammage} GSM` : ''].filter(Boolean).join(' | ') || '-'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Status</span>
+                                    <span className="font-extrabold text-text-main">{viewingEnquiry.status || 'Open'}</span>
+                                </div>
+                            </div>
+
+                            {(viewingEnquiry.description || viewingEnquiry.remarks) && (
+                                <div className="bg-app-bg p-3 rounded-xl border border-border">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Requirement Summary</span>
+                                    <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="px-4 py-2 border border-border rounded-lg text-xs font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                Close
+                            </button>
+                            <div className="flex items-center gap-2">
+                                {(viewingEnquiry.status === 'Pending Approval' || viewingEnquiry.soApprovalStatus === 'Pending Approval') && canApprove && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRejectEnquiryModal({ isOpen: true, enquiry: viewingEnquiry, remarks: '', isSubmitting: false })}
+                                            className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                        >
+                                            <XIcon size={13} />
+                                            <span>Reject</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={approvingEnquiryId === viewingEnquiry._id}
+                                            onClick={() => handleQuickApproveEnquiry(viewingEnquiry)}
+                                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                        >
+                                            <Check size={13} />
+                                            <span>Approve</span>
+                                        </button>
+                                    </>
+                                )}
+                                {(viewingEnquiry.status === 'Approved' || viewingEnquiry.soApprovalStatus === 'Approved') && !viewingEnquiry.orderConfirmed && !viewingEnquiry.salesOrder && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const enq = viewingEnquiry;
+                                            setViewingEnquiry(null);
+                                            handleGenerateSO(enq);
+                                        }}
+                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                    >
+                                        <ShoppingCart size={13} />
+                                        <span>Generate SO</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ─── Quick Reject Enquiry Modal ─────────────────────────────────── */}
+            {rejectEnquiryModal.isOpen && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="bg-card-bg border border-border rounded-xl shadow-2xl w-full max-w-md p-5 space-y-4 text-xs">
+                        <div className="flex items-center justify-between pb-2 border-b border-border">
+                            <h3 className="text-sm font-extrabold text-text-main">Reject Enquiry {rejectEnquiryModal.enquiry?.nslNumber || ''}</h3>
+                            <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="text-text-muted hover:text-text-main cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+                        <form onSubmit={handleQuickRejectEnquiry} className="space-y-3">
+                            <div>
+                                <label className="block text-[11px] font-bold uppercase text-text-main mb-1">Rejection Remark *</label>
+                                <textarea
+                                    required
+                                    rows={3}
+                                    placeholder="Enter mandatory reason for rejecting this enquiry..."
+                                    value={rejectEnquiryModal.remarks}
+                                    onChange={(e) => setRejectEnquiryModal((p) => ({ ...p, remarks: e.target.value }))}
+                                    className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-rose-500"
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                                <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="px-3.5 py-2 border border-border rounded-lg font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                    Cancel
+                                </button>
+                                <button type="submit" disabled={rejectEnquiryModal.isSubmitting || !rejectEnquiryModal.remarks.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg cursor-pointer disabled:opacity-50">
+                                    {rejectEnquiryModal.isSubmitting ? 'Rejecting...' : 'Confirm Reject'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </>
                     )}
                 </form>
             </SlideOverPanel>
@@ -1707,7 +2232,157 @@ export default function CustomerCrmPage() {
                                                 <input type="text" placeholder="e.g. Purchase Manager" value={enquiryForm.contactDesignation} onChange={(e) => setEnquiryForm((p) => ({ ...p, contactDesignation: e.target.value }))} className={inp} />
                                             </div>
                                         </div>
+                                        {/* ─── View Order Enquiry Modal ──────────────────────────────────── */}
+            {viewingEnquiry && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="fixed inset-0" onClick={() => setViewingEnquiry(null)} />
+                    <div className="relative z-10 w-full max-w-2xl bg-card-bg border border-border rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+                        <div className="px-5 py-4 bg-sidebar-bg text-sidebar-text-active border-b border-sidebar-hover flex items-center justify-between shrink-0">
+                            <div>
+                                <h3 className="text-sm font-extrabold flex items-center gap-2">
+                                    <span>{viewingEnquiry.nslNumber || viewingEnquiry.enquiryNumber || 'Order Enquiry'}</span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary-light">
+                                        {viewingEnquiry.source === 'Website' ? 'Website' : 'NSL'}
+                                    </span>
+                                </h3>
+                                <p className="text-[11px] text-sidebar-text">
+                                    Enquiry Date: {formatDate(viewingEnquiry.enquiryDate || viewingEnquiry.createdAt)} • Status: {viewingEnquiry.status || 'Open'}
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="p-1.5 text-sidebar-text hover:text-white rounded-lg cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-5 overflow-y-auto space-y-4 text-xs flex-1">
+                            {viewingEnquiry.approvalRemarks && (
+                                <div className={`p-3 rounded-xl border ${viewingEnquiry.status === 'Rejected' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`}>
+                                    <span className="text-[10px] font-extrabold uppercase block mb-0.5">
+                                        {viewingEnquiry.status === 'Rejected' ? 'Rejection Reason' : 'Approval Remarks'}:
+                                    </span>
+                                    <p className="font-semibold">{viewingEnquiry.approvalRemarks}</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg p-3.5 rounded-xl border border-border">
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Customer / Prospect</span>
+                                    <span className="font-extrabold text-text-main text-sm">
+                                        {viewingEnquiry.customer?.companyName || viewingEnquiry.customerRef?.companyName || viewingEnquiry.newCustomerDetails?.company || viewingEnquiry.newCustomerDetails?.name || 'Prospect'}
+                                    </span>
+                                    {(viewingEnquiry.contactPerson || viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone) && (
+                                        <div className="text-[11px] text-text-muted">
+                                            {viewingEnquiry.contactPerson || viewingEnquiry.newCustomerDetails?.name} {viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone ? `(${viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone})` : ''}
+                                        </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Product & Quantity</span>
+                                    <span className="font-bold text-text-main">
+                                        {viewingEnquiry.productCategory || 'N/A'} • {viewingEnquiry.totalOrderQuantity != null ? Number(viewingEnquiry.totalOrderQuantity).toLocaleString('en-IN') : '-'} {viewingEnquiry.quantityUnit || 'Kg'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Material & Lamination</span>
+                                    <span className="font-semibold text-text-main">
+                                        {[viewingEnquiry.materialQualityFabric, viewingEnquiry.fabricLaminationType, viewingEnquiry.fabricGrammage ? `${viewingEnquiry.fabricGrammage} GSM` : ''].filter(Boolean).join(' | ') || '-'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Status</span>
+                                    <span className="font-extrabold text-text-main">{viewingEnquiry.status || 'Open'}</span>
+                                </div>
+                            </div>
+
+                            {(viewingEnquiry.description || viewingEnquiry.remarks) && (
+                                <div className="bg-app-bg p-3 rounded-xl border border-border">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Requirement Summary</span>
+                                    <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="px-4 py-2 border border-border rounded-lg text-xs font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                Close
+                            </button>
+                            <div className="flex items-center gap-2">
+                                {(viewingEnquiry.status === 'Pending Approval' || viewingEnquiry.soApprovalStatus === 'Pending Approval') && canApprove && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRejectEnquiryModal({ isOpen: true, enquiry: viewingEnquiry, remarks: '', isSubmitting: false })}
+                                            className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                        >
+                                            <XIcon size={13} />
+                                            <span>Reject</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={approvingEnquiryId === viewingEnquiry._id}
+                                            onClick={() => handleQuickApproveEnquiry(viewingEnquiry)}
+                                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                        >
+                                            <Check size={13} />
+                                            <span>Approve</span>
+                                        </button>
                                     </>
+                                )}
+                                {(viewingEnquiry.status === 'Approved' || viewingEnquiry.soApprovalStatus === 'Approved') && !viewingEnquiry.orderConfirmed && !viewingEnquiry.salesOrder && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const enq = viewingEnquiry;
+                                            setViewingEnquiry(null);
+                                            handleGenerateSO(enq);
+                                        }}
+                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                    >
+                                        <ShoppingCart size={13} />
+                                        <span>Generate SO</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ─── Quick Reject Enquiry Modal ─────────────────────────────────── */}
+            {rejectEnquiryModal.isOpen && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="bg-card-bg border border-border rounded-xl shadow-2xl w-full max-w-md p-5 space-y-4 text-xs">
+                        <div className="flex items-center justify-between pb-2 border-b border-border">
+                            <h3 className="text-sm font-extrabold text-text-main">Reject Enquiry {rejectEnquiryModal.enquiry?.nslNumber || ''}</h3>
+                            <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="text-text-muted hover:text-text-main cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+                        <form onSubmit={handleQuickRejectEnquiry} className="space-y-3">
+                            <div>
+                                <label className="block text-[11px] font-bold uppercase text-text-main mb-1">Rejection Remark *</label>
+                                <textarea
+                                    required
+                                    rows={3}
+                                    placeholder="Enter mandatory reason for rejecting this enquiry..."
+                                    value={rejectEnquiryModal.remarks}
+                                    onChange={(e) => setRejectEnquiryModal((p) => ({ ...p, remarks: e.target.value }))}
+                                    className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-rose-500"
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                                <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="px-3.5 py-2 border border-border rounded-lg font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                    Cancel
+                                </button>
+                                <button type="submit" disabled={rejectEnquiryModal.isSubmitting || !rejectEnquiryModal.remarks.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg cursor-pointer disabled:opacity-50">
+                                    {rejectEnquiryModal.isSubmitting ? 'Rejecting...' : 'Confirm Reject'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </>
                                 ) : (
                                     <>
                                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1772,7 +2447,157 @@ export default function CustomerCrmPage() {
                                                 />
                                             </div>
                                         </div>
+                                        {/* ─── View Order Enquiry Modal ──────────────────────────────────── */}
+            {viewingEnquiry && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="fixed inset-0" onClick={() => setViewingEnquiry(null)} />
+                    <div className="relative z-10 w-full max-w-2xl bg-card-bg border border-border rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+                        <div className="px-5 py-4 bg-sidebar-bg text-sidebar-text-active border-b border-sidebar-hover flex items-center justify-between shrink-0">
+                            <div>
+                                <h3 className="text-sm font-extrabold flex items-center gap-2">
+                                    <span>{viewingEnquiry.nslNumber || viewingEnquiry.enquiryNumber || 'Order Enquiry'}</span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary-light">
+                                        {viewingEnquiry.source === 'Website' ? 'Website' : 'NSL'}
+                                    </span>
+                                </h3>
+                                <p className="text-[11px] text-sidebar-text">
+                                    Enquiry Date: {formatDate(viewingEnquiry.enquiryDate || viewingEnquiry.createdAt)} • Status: {viewingEnquiry.status || 'Open'}
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="p-1.5 text-sidebar-text hover:text-white rounded-lg cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-5 overflow-y-auto space-y-4 text-xs flex-1">
+                            {viewingEnquiry.approvalRemarks && (
+                                <div className={`p-3 rounded-xl border ${viewingEnquiry.status === 'Rejected' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`}>
+                                    <span className="text-[10px] font-extrabold uppercase block mb-0.5">
+                                        {viewingEnquiry.status === 'Rejected' ? 'Rejection Reason' : 'Approval Remarks'}:
+                                    </span>
+                                    <p className="font-semibold">{viewingEnquiry.approvalRemarks}</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg p-3.5 rounded-xl border border-border">
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Customer / Prospect</span>
+                                    <span className="font-extrabold text-text-main text-sm">
+                                        {viewingEnquiry.customer?.companyName || viewingEnquiry.customerRef?.companyName || viewingEnquiry.newCustomerDetails?.company || viewingEnquiry.newCustomerDetails?.name || 'Prospect'}
+                                    </span>
+                                    {(viewingEnquiry.contactPerson || viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone) && (
+                                        <div className="text-[11px] text-text-muted">
+                                            {viewingEnquiry.contactPerson || viewingEnquiry.newCustomerDetails?.name} {viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone ? `(${viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone})` : ''}
+                                        </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Product & Quantity</span>
+                                    <span className="font-bold text-text-main">
+                                        {viewingEnquiry.productCategory || 'N/A'} • {viewingEnquiry.totalOrderQuantity != null ? Number(viewingEnquiry.totalOrderQuantity).toLocaleString('en-IN') : '-'} {viewingEnquiry.quantityUnit || 'Kg'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Material & Lamination</span>
+                                    <span className="font-semibold text-text-main">
+                                        {[viewingEnquiry.materialQualityFabric, viewingEnquiry.fabricLaminationType, viewingEnquiry.fabricGrammage ? `${viewingEnquiry.fabricGrammage} GSM` : ''].filter(Boolean).join(' | ') || '-'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Status</span>
+                                    <span className="font-extrabold text-text-main">{viewingEnquiry.status || 'Open'}</span>
+                                </div>
+                            </div>
+
+                            {(viewingEnquiry.description || viewingEnquiry.remarks) && (
+                                <div className="bg-app-bg p-3 rounded-xl border border-border">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Requirement Summary</span>
+                                    <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="px-4 py-2 border border-border rounded-lg text-xs font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                Close
+                            </button>
+                            <div className="flex items-center gap-2">
+                                {(viewingEnquiry.status === 'Pending Approval' || viewingEnquiry.soApprovalStatus === 'Pending Approval') && canApprove && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRejectEnquiryModal({ isOpen: true, enquiry: viewingEnquiry, remarks: '', isSubmitting: false })}
+                                            className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                        >
+                                            <XIcon size={13} />
+                                            <span>Reject</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={approvingEnquiryId === viewingEnquiry._id}
+                                            onClick={() => handleQuickApproveEnquiry(viewingEnquiry)}
+                                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                        >
+                                            <Check size={13} />
+                                            <span>Approve</span>
+                                        </button>
                                     </>
+                                )}
+                                {(viewingEnquiry.status === 'Approved' || viewingEnquiry.soApprovalStatus === 'Approved') && !viewingEnquiry.orderConfirmed && !viewingEnquiry.salesOrder && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const enq = viewingEnquiry;
+                                            setViewingEnquiry(null);
+                                            handleGenerateSO(enq);
+                                        }}
+                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                    >
+                                        <ShoppingCart size={13} />
+                                        <span>Generate SO</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ─── Quick Reject Enquiry Modal ─────────────────────────────────── */}
+            {rejectEnquiryModal.isOpen && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="bg-card-bg border border-border rounded-xl shadow-2xl w-full max-w-md p-5 space-y-4 text-xs">
+                        <div className="flex items-center justify-between pb-2 border-b border-border">
+                            <h3 className="text-sm font-extrabold text-text-main">Reject Enquiry {rejectEnquiryModal.enquiry?.nslNumber || ''}</h3>
+                            <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="text-text-muted hover:text-text-main cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+                        <form onSubmit={handleQuickRejectEnquiry} className="space-y-3">
+                            <div>
+                                <label className="block text-[11px] font-bold uppercase text-text-main mb-1">Rejection Remark *</label>
+                                <textarea
+                                    required
+                                    rows={3}
+                                    placeholder="Enter mandatory reason for rejecting this enquiry..."
+                                    value={rejectEnquiryModal.remarks}
+                                    onChange={(e) => setRejectEnquiryModal((p) => ({ ...p, remarks: e.target.value }))}
+                                    className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-rose-500"
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                                <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="px-3.5 py-2 border border-border rounded-lg font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                    Cancel
+                                </button>
+                                <button type="submit" disabled={rejectEnquiryModal.isSubmitting || !rejectEnquiryModal.remarks.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg cursor-pointer disabled:opacity-50">
+                                    {rejectEnquiryModal.isSubmitting ? 'Rejecting...' : 'Confirm Reject'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </>
                                 )}
                             </div>
 
@@ -2125,7 +2950,157 @@ export default function CustomerCrmPage() {
                                     <span>{isSubmitting ? 'Saving...' : (editingEnquiry ? 'Update Enquiry' : 'Save Enquiry')}</span>
                                 </button>
                             </div>
-                        </>
+                            {/* ─── View Order Enquiry Modal ──────────────────────────────────── */}
+            {viewingEnquiry && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="fixed inset-0" onClick={() => setViewingEnquiry(null)} />
+                    <div className="relative z-10 w-full max-w-2xl bg-card-bg border border-border rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+                        <div className="px-5 py-4 bg-sidebar-bg text-sidebar-text-active border-b border-sidebar-hover flex items-center justify-between shrink-0">
+                            <div>
+                                <h3 className="text-sm font-extrabold flex items-center gap-2">
+                                    <span>{viewingEnquiry.nslNumber || viewingEnquiry.enquiryNumber || 'Order Enquiry'}</span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary-light">
+                                        {viewingEnquiry.source === 'Website' ? 'Website' : 'NSL'}
+                                    </span>
+                                </h3>
+                                <p className="text-[11px] text-sidebar-text">
+                                    Enquiry Date: {formatDate(viewingEnquiry.enquiryDate || viewingEnquiry.createdAt)} • Status: {viewingEnquiry.status || 'Open'}
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="p-1.5 text-sidebar-text hover:text-white rounded-lg cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-5 overflow-y-auto space-y-4 text-xs flex-1">
+                            {viewingEnquiry.approvalRemarks && (
+                                <div className={`p-3 rounded-xl border ${viewingEnquiry.status === 'Rejected' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`}>
+                                    <span className="text-[10px] font-extrabold uppercase block mb-0.5">
+                                        {viewingEnquiry.status === 'Rejected' ? 'Rejection Reason' : 'Approval Remarks'}:
+                                    </span>
+                                    <p className="font-semibold">{viewingEnquiry.approvalRemarks}</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg p-3.5 rounded-xl border border-border">
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Customer / Prospect</span>
+                                    <span className="font-extrabold text-text-main text-sm">
+                                        {viewingEnquiry.customer?.companyName || viewingEnquiry.customerRef?.companyName || viewingEnquiry.newCustomerDetails?.company || viewingEnquiry.newCustomerDetails?.name || 'Prospect'}
+                                    </span>
+                                    {(viewingEnquiry.contactPerson || viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone) && (
+                                        <div className="text-[11px] text-text-muted">
+                                            {viewingEnquiry.contactPerson || viewingEnquiry.newCustomerDetails?.name} {viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone ? `(${viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone})` : ''}
+                                        </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Product & Quantity</span>
+                                    <span className="font-bold text-text-main">
+                                        {viewingEnquiry.productCategory || 'N/A'} • {viewingEnquiry.totalOrderQuantity != null ? Number(viewingEnquiry.totalOrderQuantity).toLocaleString('en-IN') : '-'} {viewingEnquiry.quantityUnit || 'Kg'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Material & Lamination</span>
+                                    <span className="font-semibold text-text-main">
+                                        {[viewingEnquiry.materialQualityFabric, viewingEnquiry.fabricLaminationType, viewingEnquiry.fabricGrammage ? `${viewingEnquiry.fabricGrammage} GSM` : ''].filter(Boolean).join(' | ') || '-'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Status</span>
+                                    <span className="font-extrabold text-text-main">{viewingEnquiry.status || 'Open'}</span>
+                                </div>
+                            </div>
+
+                            {(viewingEnquiry.description || viewingEnquiry.remarks) && (
+                                <div className="bg-app-bg p-3 rounded-xl border border-border">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Requirement Summary</span>
+                                    <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="px-4 py-2 border border-border rounded-lg text-xs font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                Close
+                            </button>
+                            <div className="flex items-center gap-2">
+                                {(viewingEnquiry.status === 'Pending Approval' || viewingEnquiry.soApprovalStatus === 'Pending Approval') && canApprove && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRejectEnquiryModal({ isOpen: true, enquiry: viewingEnquiry, remarks: '', isSubmitting: false })}
+                                            className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                        >
+                                            <XIcon size={13} />
+                                            <span>Reject</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={approvingEnquiryId === viewingEnquiry._id}
+                                            onClick={() => handleQuickApproveEnquiry(viewingEnquiry)}
+                                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                        >
+                                            <Check size={13} />
+                                            <span>Approve</span>
+                                        </button>
+                                    </>
+                                )}
+                                {(viewingEnquiry.status === 'Approved' || viewingEnquiry.soApprovalStatus === 'Approved') && !viewingEnquiry.orderConfirmed && !viewingEnquiry.salesOrder && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const enq = viewingEnquiry;
+                                            setViewingEnquiry(null);
+                                            handleGenerateSO(enq);
+                                        }}
+                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                    >
+                                        <ShoppingCart size={13} />
+                                        <span>Generate SO</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ─── Quick Reject Enquiry Modal ─────────────────────────────────── */}
+            {rejectEnquiryModal.isOpen && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="bg-card-bg border border-border rounded-xl shadow-2xl w-full max-w-md p-5 space-y-4 text-xs">
+                        <div className="flex items-center justify-between pb-2 border-b border-border">
+                            <h3 className="text-sm font-extrabold text-text-main">Reject Enquiry {rejectEnquiryModal.enquiry?.nslNumber || ''}</h3>
+                            <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="text-text-muted hover:text-text-main cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+                        <form onSubmit={handleQuickRejectEnquiry} className="space-y-3">
+                            <div>
+                                <label className="block text-[11px] font-bold uppercase text-text-main mb-1">Rejection Remark *</label>
+                                <textarea
+                                    required
+                                    rows={3}
+                                    placeholder="Enter mandatory reason for rejecting this enquiry..."
+                                    value={rejectEnquiryModal.remarks}
+                                    onChange={(e) => setRejectEnquiryModal((p) => ({ ...p, remarks: e.target.value }))}
+                                    className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-rose-500"
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                                <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="px-3.5 py-2 border border-border rounded-lg font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                    Cancel
+                                </button>
+                                <button type="submit" disabled={rejectEnquiryModal.isSubmitting || !rejectEnquiryModal.remarks.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg cursor-pointer disabled:opacity-50">
+                                    {rejectEnquiryModal.isSubmitting ? 'Rejecting...' : 'Confirm Reject'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </>
                     )}
                 </form>
             </SlideOverPanel>
@@ -2242,6 +3217,156 @@ export default function CustomerCrmPage() {
                     setRefreshKey((p) => p + 1);
                 }}
             />
+            {/* ─── View Order Enquiry Modal ──────────────────────────────────── */}
+            {viewingEnquiry && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="fixed inset-0" onClick={() => setViewingEnquiry(null)} />
+                    <div className="relative z-10 w-full max-w-2xl bg-card-bg border border-border rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+                        <div className="px-5 py-4 bg-sidebar-bg text-sidebar-text-active border-b border-sidebar-hover flex items-center justify-between shrink-0">
+                            <div>
+                                <h3 className="text-sm font-extrabold flex items-center gap-2">
+                                    <span>{viewingEnquiry.nslNumber || viewingEnquiry.enquiryNumber || 'Order Enquiry'}</span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary-light">
+                                        {viewingEnquiry.source === 'Website' ? 'Website' : 'NSL'}
+                                    </span>
+                                </h3>
+                                <p className="text-[11px] text-sidebar-text">
+                                    Enquiry Date: {formatDate(viewingEnquiry.enquiryDate || viewingEnquiry.createdAt)} • Status: {viewingEnquiry.status || 'Open'}
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="p-1.5 text-sidebar-text hover:text-white rounded-lg cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-5 overflow-y-auto space-y-4 text-xs flex-1">
+                            {viewingEnquiry.approvalRemarks && (
+                                <div className={`p-3 rounded-xl border ${viewingEnquiry.status === 'Rejected' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`}>
+                                    <span className="text-[10px] font-extrabold uppercase block mb-0.5">
+                                        {viewingEnquiry.status === 'Rejected' ? 'Rejection Reason' : 'Approval Remarks'}:
+                                    </span>
+                                    <p className="font-semibold">{viewingEnquiry.approvalRemarks}</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg p-3.5 rounded-xl border border-border">
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Customer / Prospect</span>
+                                    <span className="font-extrabold text-text-main text-sm">
+                                        {viewingEnquiry.customer?.companyName || viewingEnquiry.customerRef?.companyName || viewingEnquiry.newCustomerDetails?.company || viewingEnquiry.newCustomerDetails?.name || 'Prospect'}
+                                    </span>
+                                    {(viewingEnquiry.contactPerson || viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone) && (
+                                        <div className="text-[11px] text-text-muted">
+                                            {viewingEnquiry.contactPerson || viewingEnquiry.newCustomerDetails?.name} {viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone ? `(${viewingEnquiry.contactNumber || viewingEnquiry.newCustomerDetails?.phone})` : ''}
+                                        </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Product & Quantity</span>
+                                    <span className="font-bold text-text-main">
+                                        {viewingEnquiry.productCategory || 'N/A'} • {viewingEnquiry.totalOrderQuantity != null ? Number(viewingEnquiry.totalOrderQuantity).toLocaleString('en-IN') : '-'} {viewingEnquiry.quantityUnit || 'Kg'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Material & Lamination</span>
+                                    <span className="font-semibold text-text-main">
+                                        {[viewingEnquiry.materialQualityFabric, viewingEnquiry.fabricLaminationType, viewingEnquiry.fabricGrammage ? `${viewingEnquiry.fabricGrammage} GSM` : ''].filter(Boolean).join(' | ') || '-'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block">Status</span>
+                                    <span className="font-extrabold text-text-main">{viewingEnquiry.status || 'Open'}</span>
+                                </div>
+                            </div>
+
+                            {(viewingEnquiry.description || viewingEnquiry.remarks) && (
+                                <div className="bg-app-bg p-3 rounded-xl border border-border">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Requirement Summary</span>
+                                    <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
+                            <button type="button" onClick={() => setViewingEnquiry(null)} className="px-4 py-2 border border-border rounded-lg text-xs font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                Close
+                            </button>
+                            <div className="flex items-center gap-2">
+                                {(viewingEnquiry.status === 'Pending Approval' || viewingEnquiry.soApprovalStatus === 'Pending Approval') && canApprove && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRejectEnquiryModal({ isOpen: true, enquiry: viewingEnquiry, remarks: '', isSubmitting: false })}
+                                            className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                        >
+                                            <XIcon size={13} />
+                                            <span>Reject</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={approvingEnquiryId === viewingEnquiry._id}
+                                            onClick={() => handleQuickApproveEnquiry(viewingEnquiry)}
+                                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                        >
+                                            <Check size={13} />
+                                            <span>Approve</span>
+                                        </button>
+                                    </>
+                                )}
+                                {(viewingEnquiry.status === 'Approved' || viewingEnquiry.soApprovalStatus === 'Approved') && !viewingEnquiry.orderConfirmed && !viewingEnquiry.salesOrder && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const enq = viewingEnquiry;
+                                            setViewingEnquiry(null);
+                                            handleGenerateSO(enq);
+                                        }}
+                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                                    >
+                                        <ShoppingCart size={13} />
+                                        <span>Generate SO</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ─── Quick Reject Enquiry Modal ─────────────────────────────────── */}
+            {rejectEnquiryModal.isOpen && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs font-sans">
+                    <div className="bg-card-bg border border-border rounded-xl shadow-2xl w-full max-w-md p-5 space-y-4 text-xs">
+                        <div className="flex items-center justify-between pb-2 border-b border-border">
+                            <h3 className="text-sm font-extrabold text-text-main">Reject Enquiry {rejectEnquiryModal.enquiry?.nslNumber || ''}</h3>
+                            <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="text-text-muted hover:text-text-main cursor-pointer">
+                                <XIcon size={16} />
+                            </button>
+                        </div>
+                        <form onSubmit={handleQuickRejectEnquiry} className="space-y-3">
+                            <div>
+                                <label className="block text-[11px] font-bold uppercase text-text-main mb-1">Rejection Remark *</label>
+                                <textarea
+                                    required
+                                    rows={3}
+                                    placeholder="Enter mandatory reason for rejecting this enquiry..."
+                                    value={rejectEnquiryModal.remarks}
+                                    onChange={(e) => setRejectEnquiryModal((p) => ({ ...p, remarks: e.target.value }))}
+                                    className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-rose-500"
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                                <button type="button" onClick={() => setRejectEnquiryModal({ isOpen: false, enquiry: null, remarks: '', isSubmitting: false })} className="px-3.5 py-2 border border-border rounded-lg font-semibold text-text-muted hover:text-text-main cursor-pointer">
+                                    Cancel
+                                </button>
+                                <button type="submit" disabled={rejectEnquiryModal.isSubmitting || !rejectEnquiryModal.remarks.trim()} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg cursor-pointer disabled:opacity-50">
+                                    {rejectEnquiryModal.isSubmitting ? 'Rejecting...' : 'Confirm Reject'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
         </>
     );
 }

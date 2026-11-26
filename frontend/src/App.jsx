@@ -150,7 +150,7 @@ export default function App() {
                         <Route path="/analytics" element={<AnalyticsPage />} />
                     </Route>
 
-                    <Route element={<ProtectedRoute requireTenantAdmin />}>
+                    <Route element={<ProtectedRoute requireApprovalPermission />}>
                         <Route path="/approvals" element={<ApprovalsPage />} />
                     </Route>
 

@@ -5,6 +5,8 @@ import SearchableSelect from '../shared/SearchableSelect';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { getTodayLocalDateString, getFutureLocalDateString } from '../../utils/dateUtils';
+import { computeDocumentTotals } from '../../utils/chargesHelper';
+import ChargesAndAdjustmentsSection from '../shared/ChargesAndAdjustmentsSection';
 
 export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, editPo }) {
     const [suppliers, setSuppliers] = useState([]);
@@ -20,6 +22,17 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
     const [expectedDelivery, setExpectedDelivery] = useState(getFutureLocalDateString(7));
     const [deliveryLocation, setDeliveryLocation] = useState('');
     const [notes, setNotes] = useState('');
+    const [gstTreatment, setGstTreatment] = useState('TAXABLE');
+    const [gstRate, setGstRate] = useState(18);
+    const [charges, setCharges] = useState({
+        discountType: 'FIXED',
+        discountValue: '',
+        freightAmount: '',
+        insuranceAmount: '',
+        otherChargesAmount: '',
+        otherChargesLabel: '',
+        autoRoundOff: true
+    });
 
     // Repeatable items array
     const [items, setItems] = useState([
@@ -38,6 +51,17 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
             const locId = typeof editPo.deliveryLocation === 'object' ? editPo.deliveryLocation?._id : editPo.deliveryLocation;
             setDeliveryLocation(locId || '');
             setNotes(editPo.notes || '');
+            setGstTreatment(editPo.gstTreatment === 'EXEMPT' ? 'EXEMPT' : 'TAXABLE');
+            setGstRate(editPo.gstRate !== undefined ? Number(editPo.gstRate) : 18);
+            setCharges({
+                discountType: editPo.discountType || 'FIXED',
+                discountValue: editPo.discountValue ? String(editPo.discountValue) : '',
+                freightAmount: editPo.freightAmount ? String(editPo.freightAmount) : '',
+                insuranceAmount: editPo.insuranceAmount ? String(editPo.insuranceAmount) : '',
+                otherChargesAmount: editPo.otherChargesAmount ? String(editPo.otherChargesAmount) : '',
+                otherChargesLabel: editPo.otherChargesLabel || '',
+                autoRoundOff: editPo.autoRoundOff !== false
+            });
 
             const rawItems = editPo.items || editPo.materials;
             if (Array.isArray(rawItems) && rawItems.length > 0) {
@@ -54,6 +78,17 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
             setPoDate(getTodayLocalDateString());
             setExpectedDelivery(getFutureLocalDateString(7));
             setNotes('');
+            setGstTreatment('TAXABLE');
+            setGstRate(18);
+            setCharges({
+                discountType: 'FIXED',
+                discountValue: '',
+                freightAmount: '',
+                insuranceAmount: '',
+                otherChargesAmount: '',
+                otherChargesLabel: '',
+                autoRoundOff: true
+            });
         }
 
         setIsLoadingData(true);
@@ -133,6 +168,19 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
         return acc + (qty * rate);
     }, 0);
 
+    const totalsCalc = computeDocumentTotals({
+        itemsSubtotal: computedTotalValue,
+        discountType: charges.discountType,
+        discountValue: charges.discountValue,
+        freightAmount: charges.freightAmount,
+        insuranceAmount: charges.insuranceAmount,
+        otherChargesAmount: charges.otherChargesAmount,
+        otherChargesLabel: charges.otherChargesLabel,
+        gstTreatment,
+        gstRate,
+        autoRoundOff: charges.autoRoundOff
+    });
+
     // Group and sum quantities by unit separately
     const poTotalsByUnit = items.reduce((acc, item) => {
         const qty = Number(item.orderedQuantity) || 0;
@@ -180,6 +228,11 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
             }
         }
 
+        if (totalsCalc.validationError) {
+            toast.error(totalsCalc.validationError);
+            return;
+        }
+
         // Determine target status when editing existing PO
         let statusToSend = targetStatus;
         if (editPo?._id) {
@@ -204,6 +257,15 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                 deliveryLocation: deliveryLocation || undefined,
                 notes: notes.trim() || undefined,
                 status: statusToSend,
+                gstTreatment,
+                gstRate: gstTreatment === 'EXEMPT' ? 0 : Number(gstRate ?? 18),
+                discountType: charges.discountType,
+                discountValue: Number(charges.discountValue || 0),
+                freightAmount: Number(charges.freightAmount || 0),
+                insuranceAmount: Number(charges.insuranceAmount || 0),
+                otherChargesAmount: Number(charges.otherChargesAmount || 0),
+                otherChargesLabel: charges.otherChargesLabel.trim(),
+                autoRoundOff: charges.autoRoundOff !== false,
                 items: items.map((i) => ({
                     rawMaterial: i.rawMaterial,
                     orderedQuantity: Number(i.orderedQuantity),
@@ -446,15 +508,99 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                     </div>
                 </div>
 
+                {/* GST Treatment & Charges & Adjustments */}
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div>
+                        <label className="block text-[10px] font-bold uppercase text-text-muted mb-1">
+                            GST Treatment
+                        </label>
+                        <select
+                            value={gstTreatment}
+                            onChange={(e) => setGstTreatment(e.target.value)}
+                            className="w-full border border-border rounded-lg p-2 bg-app-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                        >
+                            <option value="TAXABLE">Taxable (GST Applicable)</option>
+                            <option value="EXEMPT">GST Exempt (0%)</option>
+                        </select>
+                    </div>
+                    {gstTreatment !== 'EXEMPT' && (
+                        <div>
+                            <label className="block text-[10px] font-bold uppercase text-text-muted mb-1">
+                                GST Rate (%)
+                            </label>
+                            <input
+                                type="number"
+                                min="0"
+                                max="28"
+                                step="any"
+                                value={gstRate}
+                                onChange={(e) => setGstRate(e.target.value)}
+                                className="w-full border border-border rounded-lg p-2 bg-app-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
+                            />
+                        </div>
+                    )}
+                </div>
+
+                <ChargesAndAdjustmentsSection
+                    charges={charges}
+                    onChange={setCharges}
+                    totals={totalsCalc}
+                    disabled={isSubmitting}
+                />
+
                 {/* Total PO Value & Grouped Quantity Live Banner */}
                 <div className="bg-app-bg border border-border rounded-lg p-3 space-y-1.5 font-sans">
                     <div className="flex justify-between items-center text-xs">
                         <span className="text-text-muted font-bold uppercase text-[10px]">Total Quantity:</span>
                         <span className="font-mono font-bold text-text-main">{formattedPoQuantity}</span>
                     </div>
+                    <div className="flex justify-between items-center text-xs">
+                        <span className="text-text-muted font-medium">Items Subtotal:</span>
+                        <span className="font-mono font-bold text-text-main">₹{totalsCalc.itemsSubtotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                    </div>
+                    {totalsCalc.discountAmount > 0 && (
+                        <div className="flex justify-between items-center text-xs text-emerald-700">
+                            <span className="font-medium">Less: Discount{totalsCalc.discountType === 'PERCENT' ? ` (${totalsCalc.discountValue}%)` : ''}:</span>
+                            <span className="font-mono font-bold">-₹{totalsCalc.discountAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                        </div>
+                    )}
+                    {totalsCalc.freightAmount > 0 && (
+                        <div className="flex justify-between items-center text-xs">
+                            <span className="text-text-muted font-medium">Freight / Transport:</span>
+                            <span className="font-mono font-semibold text-text-main">+₹{totalsCalc.freightAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                        </div>
+                    )}
+                    {totalsCalc.insuranceAmount > 0 && (
+                        <div className="flex justify-between items-center text-xs">
+                            <span className="text-text-muted font-medium">Insurance Charges:</span>
+                            <span className="font-mono font-semibold text-text-main">+₹{totalsCalc.insuranceAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                        </div>
+                    )}
+                    {totalsCalc.otherChargesAmount > 0 && (
+                        <div className="flex justify-between items-center text-xs">
+                            <span className="text-text-muted font-medium">{totalsCalc.otherChargesLabel ? `Other (${totalsCalc.otherChargesLabel}):` : 'Other Charges:'}</span>
+                            <span className="font-mono font-semibold text-text-main">+₹{totalsCalc.otherChargesAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                        </div>
+                    )}
+                    <div className="flex justify-between items-center text-xs pt-1 border-t border-border/50">
+                        <span className="text-text-muted font-semibold">Taxable Value:</span>
+                        <span className="font-mono font-bold text-text-main">₹{totalsCalc.taxableValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                        <span className="text-text-muted font-medium">{gstTreatment === 'EXEMPT' ? 'GST (Exempt):' : `GST (${totalsCalc.gstRate}%):`}</span>
+                        <span className="font-mono font-bold text-text-main">₹{totalsCalc.taxAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                    </div>
+                    {totalsCalc.roundOff !== 0 && (
+                        <div className="flex justify-between items-center text-xs">
+                            <span className="text-text-muted font-medium">Round Off:</span>
+                            <span className="font-mono font-semibold text-text-main">
+                                {totalsCalc.roundOff > 0 ? `+₹${totalsCalc.roundOff.toFixed(2)}` : `-₹${Math.abs(totalsCalc.roundOff).toFixed(2)}`}
+                            </span>
+                        </div>
+                    )}
                     <div className="flex justify-between items-center text-xs pt-1 border-t border-border/70 font-mono font-bold">
-                        <span className="text-text-muted font-sans text-xs uppercase">Estimated Total PO Value:</span>
-                        <span className="text-sm text-primary">₹{computedTotalValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                        <span className="text-text-muted font-sans text-xs uppercase">Estimated PO Grand Total:</span>
+                        <span className="text-sm text-primary">₹{totalsCalc.grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                     </div>
                 </div>
 

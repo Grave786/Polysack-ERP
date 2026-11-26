@@ -77,7 +77,10 @@ export default function AdministrationPage() {
         contactEmail: '',
         contactPhone: '',
         registeredAddress: { line1: '', line2: '', city: '', pincode: '' },
-        gstFilingFrequency: 'Monthly'
+        gstFilingFrequency: 'Monthly',
+        approvalSettings: {
+            autoApproveSalesOrdersByApprover: false
+        }
     });
 
     const derivedStateCode = formData.gstin && formData.gstin.length >= 2 ? formData.gstin.substring(0, 2) : '';
@@ -124,6 +127,9 @@ export default function AdministrationPage() {
                             gstFilingFrequency: profile.gstFilingFrequency || 'Monthly',
                             productionSettings: {
                                 activeStartingStage: profile.productionSettings?.activeStartingStage || 'FLEXO_PRINTING'
+                            },
+                            approvalSettings: {
+                                autoApproveSalesOrdersByApprover: Boolean(profile.approvalSettings?.autoApproveSalesOrdersByApprover)
                             }
                         });
                     }
@@ -1143,6 +1149,37 @@ export default function AdministrationPage() {
                             <option value="BALING_PACKING">Stage 8: Baling & Packing</option>
                         </select>
                     </div>
+                </div>
+
+                {/* Approval Settings Header */}
+                <div className="pt-3 border-t border-border space-y-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-text-main">
+                        Approval Settings
+                    </h3>
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none max-w-2xl p-3 rounded-lg bg-app-bg border border-border">
+                        <input
+                            type="checkbox"
+                            checked={Boolean(formData.approvalSettings?.autoApproveSalesOrdersByApprover)}
+                            onChange={(e) =>
+                                setFormData({
+                                    ...formData,
+                                    approvalSettings: {
+                                        ...(formData.approvalSettings || {}),
+                                        autoApproveSalesOrdersByApprover: e.target.checked
+                                    }
+                                })
+                            }
+                            className="mt-0.5 accent-primary cursor-pointer"
+                        />
+                        <div>
+                            <span className="text-xs font-bold text-text-main block">
+                                Auto-approve Sales Orders created by users who have approval permission
+                            </span>
+                            <span className="text-[11px] text-text-muted">
+                                When OFF (default), all Sales Orders created from Sales &amp; Billing go to Pending Approval. When ON, orders created by approvers are approved immediately and logged as auto-approved.
+                            </span>
+                        </div>
+                    </label>
                 </div>
 
                 {/* Save Button */}

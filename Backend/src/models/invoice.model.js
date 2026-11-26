@@ -87,7 +87,7 @@ const InvoiceSchema = new mongoose.Schema({
         type: Number,
         default: 18,
         min: [0, 'GST rate cannot be negative'],
-        max: [28, 'GST rate cannot exceed 28%']
+        max: [100, 'GST rate cannot exceed 100%']
     },
     gstTreatment: {
         type: String,
@@ -119,6 +119,18 @@ const InvoiceSchema = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    itemsSubtotal: { type: Number, default: 0, min: 0 },
+    discountType: { type: String, enum: ['PERCENT', 'FIXED'], default: 'FIXED' },
+    discountValue: { type: Number, default: 0, min: 0 },
+    discountAmount: { type: Number, default: 0, min: 0 },
+    freightAmount: { type: Number, default: 0, min: 0 },
+    insuranceAmount: { type: Number, default: 0, min: 0 },
+    otherChargesAmount: { type: Number, default: 0, min: 0 },
+    otherChargesLabel: { type: String, trim: true, default: '' },
+    taxableValue: { type: Number, default: 0, min: 0 },
+    taxAmount: { type: Number, default: 0, min: 0 },
+    autoRoundOff: { type: Boolean, default: true },
+    roundOff: { type: Number, default: 0 },
     grandTotal: {
         type: Number,
         default: 0,

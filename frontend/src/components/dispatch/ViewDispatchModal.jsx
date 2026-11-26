@@ -46,6 +46,8 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
         .map(([unit, qty]) => `${qty.toLocaleString()} ${unit}`)
         .join(' + ') || '0 Pcs';
     const totalBales = items.reduce((acc, i) => acc + Number(i.dispatchedBales !== undefined && i.dispatchedBales !== null ? i.dispatchedBales : (i.dispatchedQuantity ? Math.ceil(i.dispatchedQuantity / 300) : 0)), 0);
+    const totalKg = items.reduce((acc, i) => acc + (Number(i.dispatchedKg) || 0), 0);
+    const dualTotalSuffix = !totalsByUnit.Kg && totalKg > 0 ? ` / ${Number(totalKg.toFixed(2)).toLocaleString('en-IN')} Kg` : '';
 
     // Linked Invoice & Payment Check
     const invoice = dispatch.invoice;
@@ -211,7 +213,7 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
                     <div className="border border-border rounded-xl overflow-hidden">
                         <div className="bg-table-header-bg p-2.5 font-bold uppercase text-[10px] tracking-wider text-table-header-text flex justify-between">
                             <span>Quantity Shipped in Load</span>
-                            <span className="font-mono">{totalQtyString} {totalBales > 0 ? `(${totalBales} Bales)` : ''}</span>
+                            <span className="font-mono">{totalQtyString}{dualTotalSuffix} {totalBales > 0 ? `(${totalBales} Bales)` : ''}</span>
                         </div>
                         <table className="w-full text-left text-xs border-collapse">
                             <thead>
@@ -228,13 +230,18 @@ export default function ViewDispatchModal({ isOpen, dispatch, onClose, onOpenUpl
                                     const fgName = fg?.name || it.finishedGoodName || 'Finished Poly Bag';
                                     const qty = Number(it.dispatchedQuantity || it.quantity || 0);
                                     const unit = it.unit || 'Pcs';
+                                    const kg = Number(it.dispatchedKg || 0);
+                                    const pcs = Number(it.dispatchedPcs || 0);
+                                    const dualItemSuffix = kg > 0 && unit.toLowerCase() !== 'kg'
+                                        ? ` / ${kg.toLocaleString('en-IN')} Kg`
+                                        : (unit.toLowerCase() === 'kg' && pcs > 0 ? ` / ${pcs.toLocaleString('en-IN')} Pcs` : '');
                                     const bales = it.dispatchedBales !== undefined && it.dispatchedBales !== null ? Number(it.dispatchedBales) : (qty > 0 ? Math.ceil(qty / 300) : 0);
 
                                     return (
                                         <tr key={idx} className="hover:bg-app-bg/50">
                                             <td className="p-2.5 text-text-muted font-mono">{idx + 1}</td>
                                             <td className="p-2.5 font-semibold text-text-main">{fgName}</td>
-                                            <td className="p-2.5 text-right font-mono font-bold text-text-main">{qty.toLocaleString()} {unit}</td>
+                                            <td className="p-2.5 text-right font-mono font-bold text-text-main">{qty.toLocaleString('en-IN')} {unit}{dualItemSuffix}</td>
                                             <td className="p-2.5 text-right font-mono text-text-muted">{bales}</td>
                                         </tr>
                                     );

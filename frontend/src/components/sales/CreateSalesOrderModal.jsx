@@ -12,6 +12,8 @@ import {
     getUnitConversionFeedback
 } from '../../utils/bagWeightHelper';
 import { getAllowedSoStatuses, SO_STATUS_LABELS } from '../../utils/salesOrderStatus';
+import { computeDocumentTotals } from '../../utils/chargesHelper';
+import ChargesAndAdjustmentsSection from '../shared/ChargesAndAdjustmentsSection';
 
 // Allowed Sales Order Units (Always lists all 4 units)
 const ALL_SO_UNITS = ['Pcs', 'Kg', 'Roll', 'Bags'];
@@ -35,8 +37,18 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
     const [soDeps, setSoDeps] = useState({ hasLinkedWo: false, hasDispatch: false, hasInvoice: false, plannedWorkOrders: [] });
     const [lastRatesMap, setLastRatesMap] = useState({});
     const [gstTreatment, setGstTreatment] = useState('TAXABLE');
+    const [gstRate, setGstRate] = useState(18);
     const [exemptionReason, setExemptionReason] = useState('');
     const [notes, setNotes] = useState('');
+    const [charges, setCharges] = useState({
+        discountType: 'FIXED',
+        discountValue: '',
+        freightAmount: '',
+        insuranceAmount: '',
+        otherChargesAmount: '',
+        otherChargesLabel: '',
+        autoRoundOff: true
+    });
 
     // Line Items State
     const [items, setItems] = useState([
@@ -72,7 +84,10 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                     setCustomers(custRes.data.data || []);
                 }
                 if (fgRes.data?.success) {
-                    setFinishedGoods(fgRes.data.data || []);
+                    const activeFgs = (fgRes.data.data || []).filter(
+                        (fg) => fg.isActive !== false && String(fg.status || 'Active').toLowerCase() === 'active'
+                    );
+                    setFinishedGoods(activeFgs);
                 }
                 if (locRes.data?.success) {
                     setLocations(locRes.data.data || []);
@@ -103,9 +118,24 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
             setDispatchLocation(locId || '');
             setStatus(initialData.status || 'CONFIRMED');
             setStatusRemark('');
-            setGstTreatment(initialData.gstTreatment === 'EXEMPT' ? 'EXEMPT' : 'TAXABLE');
+            const editTreatment = initialData.gstTreatment === 'EXEMPT' ? 'EXEMPT' : 'TAXABLE';
+            setGstTreatment(editTreatment);
+            setGstRate(
+                editTreatment === 'EXEMPT'
+                    ? 0
+                    : (initialData.gstRate !== undefined && initialData.gstRate !== null ? Number(initialData.gstRate) : 18)
+            );
             setExemptionReason(initialData.exemptionReason || '');
             setNotes(initialData.notes || '');
+            setCharges({
+                discountType: initialData.discountType || 'FIXED',
+                discountValue: initialData.discountValue ? String(initialData.discountValue) : '',
+                freightAmount: initialData.freightAmount ? String(initialData.freightAmount) : '',
+                insuranceAmount: initialData.insuranceAmount ? String(initialData.insuranceAmount) : '',
+                otherChargesAmount: initialData.otherChargesAmount ? String(initialData.otherChargesAmount) : '',
+                otherChargesLabel: initialData.otherChargesLabel || '',
+                autoRoundOff: initialData.autoRoundOff !== false
+            });
 
             if (initialData._id) {
                 axiosInstance.get(`/sales-orders/${initialData._id}`)
@@ -143,9 +173,24 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
             setStatus(initialData?.status || 'CONFIRMED');
             setStatusRemark('');
             setSoDeps({ hasLinkedWo: false, hasDispatch: false, hasInvoice: false, plannedWorkOrders: [] });
-            setGstTreatment(initialData?.gstTreatment === 'EXEMPT' ? 'EXEMPT' : 'TAXABLE');
+            const initTreatment = initialData?.gstTreatment === 'EXEMPT' ? 'EXEMPT' : 'TAXABLE';
+            setGstTreatment(initTreatment);
+            setGstRate(
+                initTreatment === 'EXEMPT'
+                    ? 0
+                    : (initialData?.gstRate !== undefined && initialData?.gstRate !== null ? Number(initialData.gstRate) : 18)
+            );
             setExemptionReason(initialData?.exemptionReason || '');
             setNotes(initialData?.notes || initialData?.description || '');
+            setCharges({
+                discountType: 'FIXED',
+                discountValue: '',
+                freightAmount: '',
+                insuranceAmount: '',
+                otherChargesAmount: '',
+                otherChargesLabel: '',
+                autoRoundOff: true
+            });
             if (Array.isArray(initialData?.items) && initialData.items.length > 0) {
                 setItems(initialData.items);
             } else if (initialData?.totalOrderQuantity) {
@@ -267,9 +312,21 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
 
     const subtotal = items.reduce((acc, it) => acc + (Number(it.subtotal) || 0), 0);
     const isGstExempt = gstTreatment === 'EXEMPT';
-    const gstRate = isGstExempt ? 0 : 18; // Standard 18% GST for Woven Poly Bags
-    const gstAmount = isGstExempt ? 0 : Math.round((subtotal * gstRate) / 100);
-    const grandTotal = subtotal + gstAmount;
+    const effectiveGstRate = isGstExempt ? 0 : Math.min(100, Math.max(0, Number(gstRate === '' ? 0 : gstRate) || 0));
+    const totalsCalc = computeDocumentTotals({
+        itemsSubtotal: subtotal,
+        discountType: charges.discountType,
+        discountValue: charges.discountValue,
+        freightAmount: charges.freightAmount,
+        insuranceAmount: charges.insuranceAmount,
+        otherChargesAmount: charges.otherChargesAmount,
+        otherChargesLabel: charges.otherChargesLabel,
+        gstTreatment,
+        gstRate: effectiveGstRate,
+        autoRoundOff: charges.autoRoundOff
+    });
+    const gstAmount = totalsCalc.taxAmount;
+    const grandTotal = totalsCalc.grandTotal;
 
     const currentStatus = initialData?.status || 'DRAFT';
     const isCancelledOrder = isEditMode && currentStatus === 'CANCELLED';
@@ -280,6 +337,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
 
     const isFormValid =
         !isCancelledOrder &&
+        !totalsCalc.validationError &&
         customerId &&
         deliveryDue &&
         items.length > 0 &&
@@ -323,7 +381,15 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                 statusRemark: isStatusChanged ? statusRemark.trim() : undefined,
                 cancellationReason: status === 'CANCELLED' ? statusRemark.trim() : undefined,
                 gstTreatment,
+                gstRate: effectiveGstRate,
                 exemptionReason: gstTreatment === 'EXEMPT' ? exemptionReason.trim() : '',
+                discountType: charges.discountType,
+                discountValue: Number(charges.discountValue || 0),
+                freightAmount: Number(charges.freightAmount || 0),
+                insuranceAmount: Number(charges.insuranceAmount || 0),
+                otherChargesAmount: Number(charges.otherChargesAmount || 0),
+                otherChargesLabel: charges.otherChargesLabel.trim(),
+                autoRoundOff: charges.autoRoundOff !== false,
                 notes: notes.trim() || undefined,
                 items: items.map((it) => ({
                     finishedGood: it.finishedGood,
@@ -342,11 +408,19 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
 
             if (res.data?.success) {
                 const soNum = res.data.data?.soNumber || (isEditMode ? initialData.soNumber : 'Sales Order');
-                toast.success(
-                    isEditMode
-                        ? `Sales Order ${soNum} updated successfully!`
-                        : `Sales Order ${soNum} booked successfully!`
-                );
+                const soAppStatus = res.data.data?.soApprovalStatus;
+                if (res.data.reapprovalRequired) {
+                    toast.success(`Sales Order ${soNum} updated and sent for approval.`);
+                } else if (soAppStatus === 'Pending Approval') {
+                    toast.success(isEditMode ? `Sales Order ${soNum} updated (Pending Approval).` : `Sales Order ${soNum} submitted for approval!`);
+                } else {
+                    toast.success(
+                        isEditMode
+                            ? `Sales Order ${soNum} updated successfully!`
+                            : `Sales Order ${soNum} booked successfully!`
+                    );
+                }
+                window.dispatchEvent(new CustomEvent('approval-count-changed'));
                 onClose();
                 if (onSuccess) onSuccess();
             }
@@ -507,8 +581,10 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                     const cust = customers.find((c) => c._id === val);
                                     if (cust && (cust.gstTreatment === 'EXEMPT' || cust.isGstExempt === true)) {
                                         setGstTreatment('EXEMPT');
+                                        setGstRate(0);
                                     } else {
                                         setGstTreatment('TAXABLE');
+                                        setGstRate((prev) => (Number(prev) === 0 || prev === '' ? 18 : prev));
                                     }
                                 }
                             }}
@@ -816,38 +892,84 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                             })}
                         </div>
 
-                        {/* GST Treatment Selector */}
+                        {/* GST Treatment & Rate */}
                         <div className="bg-app-bg/60 border border-border/80 rounded-lg p-3 space-y-2.5">
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
                                 <div>
                                     <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
-                                        GST Treatment *
+                                        GST TREATMENT *
                                     </label>
                                     <select
                                         value={gstTreatment}
-                                        onChange={(e) => setGstTreatment(e.target.value)}
-                                        className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                                        disabled={isCancelledOrder || isDispatchedOrder}
+                                        onChange={(e) => {
+                                            const nextTreatment = e.target.value;
+                                            setGstTreatment(nextTreatment);
+                                            if (nextTreatment === 'EXEMPT') {
+                                                setGstRate(0);
+                                            } else if (Number(gstRate) === 0 || gstRate === '') {
+                                                setGstRate(18);
+                                            }
+                                        }}
+                                        className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-60"
                                     >
-                                        <option value="TAXABLE">Taxable (18% GST)</option>
+                                        <option value="TAXABLE">Taxable (GST Applicable)</option>
                                         <option value="EXEMPT">GST Exempt (0% GST)</option>
                                     </select>
                                 </div>
-                                {isGstExempt && (
-                                    <div>
-                                        <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
-                                            Exemption Reason / Note (Optional)
-                                        </label>
-                                        <input
-                                            type="text"
-                                            placeholder="e.g. Export / SEZ / LUT / Exempt Notification"
-                                            value={exemptionReason}
-                                            onChange={(e) => setExemptionReason(e.target.value)}
-                                            className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
-                                        />
-                                    </div>
-                                )}
+                                <div>
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
+                                        GST RATE (%)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={100}
+                                        step="0.01"
+                                        disabled={isGstExempt || isCancelledOrder || isDispatchedOrder}
+                                        value={isGstExempt ? 0 : gstRate}
+                                        onChange={(e) => {
+                                            const val = e.target.value;
+                                            if (val === '') {
+                                                setGstRate('');
+                                                return;
+                                            }
+                                            const num = Number(val);
+                                            if (!isNaN(num)) {
+                                                setGstRate(Math.min(100, Math.max(0, num)));
+                                            }
+                                        }}
+                                        className={`w-full border border-border rounded-lg p-2 text-xs font-mono font-bold focus:outline-none focus:border-primary ${
+                                            isGstExempt || isCancelledOrder || isDispatchedOrder
+                                                ? 'bg-slate-100 text-text-muted opacity-60 cursor-not-allowed'
+                                                : 'bg-card-bg text-text-main'
+                                        }`}
+                                    />
+                                </div>
                             </div>
+                            {isGstExempt && (
+                                <div>
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
+                                        Exemption Reason / Note (Optional)
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. Export / SEZ / LUT / Exempt Notification"
+                                        value={exemptionReason}
+                                        onChange={(e) => setExemptionReason(e.target.value)}
+                                        className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+                            )}
                         </div>
+
+                        {/* Charges & Adjustments */}
+                        <ChargesAndAdjustmentsSection
+                            charges={charges}
+                            onChange={setCharges}
+                            totals={totalsCalc}
+                            disabled={isCancelledOrder || isDispatchedOrder}
+                        />
 
                         {/* Live Financial Summary */}
                         <div className="bg-app-bg/80 border border-border/80 rounded-lg p-3 space-y-1.5 font-sans">
@@ -856,16 +978,56 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                 <span className="font-mono font-bold text-text-main">{formattedTotalQuantity}</span>
                             </div>
                             <div className="flex justify-between items-center text-xs">
-                                <span className="text-text-muted font-medium">Taxable Subtotal:</span>
-                                <span className="font-mono font-bold text-text-main">₹{subtotal.toLocaleString()}</span>
+                                <span className="text-text-muted font-medium">Items Subtotal:</span>
+                                <span className="font-mono font-bold text-text-main">₹{totalsCalc.itemsSubtotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            </div>
+                            {totalsCalc.discountAmount > 0 && (
+                                <div className="flex justify-between items-center text-xs text-emerald-700">
+                                    <span className="font-medium">
+                                        Less: Discount{totalsCalc.discountType === 'PERCENT' ? ` (${totalsCalc.discountValue}%)` : ''}:
+                                    </span>
+                                    <span className="font-mono font-bold">-₹{totalsCalc.discountAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                </div>
+                            )}
+                            {totalsCalc.freightAmount > 0 && (
+                                <div className="flex justify-between items-center text-xs">
+                                    <span className="text-text-muted font-medium">Freight / Transport:</span>
+                                    <span className="font-mono font-semibold text-text-main">+₹{totalsCalc.freightAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                </div>
+                            )}
+                            {totalsCalc.insuranceAmount > 0 && (
+                                <div className="flex justify-between items-center text-xs">
+                                    <span className="text-text-muted font-medium">Insurance Charges:</span>
+                                    <span className="font-mono font-semibold text-text-main">+₹{totalsCalc.insuranceAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                </div>
+                            )}
+                            {totalsCalc.otherChargesAmount > 0 && (
+                                <div className="flex justify-between items-center text-xs">
+                                    <span className="text-text-muted font-medium">
+                                        {totalsCalc.otherChargesLabel ? `Other (${totalsCalc.otherChargesLabel}):` : 'Other Charges:'}
+                                    </span>
+                                    <span className="font-mono font-semibold text-text-main">+₹{totalsCalc.otherChargesAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                </div>
+                            )}
+                            <div className="flex justify-between items-center text-xs pt-1 border-t border-border/50">
+                                <span className="text-text-muted font-semibold">Taxable Value:</span>
+                                <span className="font-mono font-bold text-text-main">₹{totalsCalc.taxableValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                             </div>
                             <div className="flex justify-between items-center text-xs">
-                                <span className="text-text-muted font-medium">{isGstExempt ? 'GST (Exempt):' : 'Estimated GST (18%):'}</span>
-                                <span className="font-mono font-bold text-text-main">₹{gstAmount.toLocaleString()}</span>
+                                <span className="text-text-muted font-medium">{isGstExempt ? 'GST (Exempt):' : `Estimated GST (${effectiveGstRate}%):`}</span>
+                                <span className="font-mono font-bold text-text-main">₹{gstAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                             </div>
+                            {totalsCalc.roundOff !== 0 && (
+                                <div className="flex justify-between items-center text-xs">
+                                    <span className="text-text-muted font-medium">Round Off:</span>
+                                    <span className="font-mono font-semibold text-text-main">
+                                        {totalsCalc.roundOff > 0 ? `+₹${totalsCalc.roundOff.toFixed(2)}` : `-₹${Math.abs(totalsCalc.roundOff).toFixed(2)}`}
+                                    </span>
+                                </div>
+                            )}
                             <div className="flex justify-between items-center text-xs pt-1 border-t border-border/70">
                                 <span className="font-bold text-text-main">Estimated Grand Total:</span>
-                                <span className="font-mono font-extrabold text-sm text-primary">₹{grandTotal.toLocaleString()}</span>
+                                <span className="font-mono font-extrabold text-sm text-primary">₹{grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                             </div>
                         </div>
                     </div>

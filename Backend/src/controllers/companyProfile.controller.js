@@ -28,7 +28,8 @@ const ALLOWED_PROFILE_FIELDS = [
     'contactEmail',
     'contactPhone',
     'logoUrl',
-    'productionSettings'
+    'productionSettings',
+    'approvalSettings'
 ];
 
 /**
@@ -63,6 +64,9 @@ const formatProfileResponse = (tenant) => {
         productionSettings: tenant.productionSettings || {
             activeStartingStage: 'FLEXO_PRINTING',
             stageConfigs: []
+        },
+        approvalSettings: {
+            autoApproveSalesOrdersByApprover: Boolean(tenant.approvalSettings?.autoApproveSalesOrdersByApprover)
         },
         createdAt: tenant.createdAt,
         updatedAt: tenant.updatedAt
@@ -203,6 +207,10 @@ const updateCompanyProfile = async (req, res) => {
                     stageConfigs: Array.isArray(req.body.productionSettings.stageConfigs)
                         ? req.body.productionSettings.stageConfigs
                         : (tenant.productionSettings?.stageConfigs || [])
+                };
+            } else if (key === 'approvalSettings' && typeof req.body.approvalSettings === 'object' && req.body.approvalSettings !== null) {
+                tenant.approvalSettings = {
+                    autoApproveSalesOrdersByApprover: Boolean(req.body.approvalSettings.autoApproveSalesOrdersByApprover)
                 };
             } else if (req.body[key] !== undefined) {
                 tenant[key] = typeof req.body[key] === 'string' ? req.body[key].trim() : req.body[key];

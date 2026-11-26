@@ -72,6 +72,18 @@ const SalesOrderSchema = new mongoose.Schema({
         default: 0,
         min: [0, 'Total value cannot be negative']
     },
+    itemsSubtotal: { type: Number, default: 0, min: 0 },
+    discountType: { type: String, enum: ['PERCENT', 'FIXED'], default: 'FIXED' },
+    discountValue: { type: Number, default: 0, min: 0 },
+    discountAmount: { type: Number, default: 0, min: 0 },
+    freightAmount: { type: Number, default: 0, min: 0 },
+    insuranceAmount: { type: Number, default: 0, min: 0 },
+    otherChargesAmount: { type: Number, default: 0, min: 0 },
+    otherChargesLabel: { type: String, trim: true, default: '' },
+    taxableValue: { type: Number, default: 0, min: 0 },
+    taxAmount: { type: Number, default: 0, min: 0 },
+    autoRoundOff: { type: Boolean, default: true },
+    roundOff: { type: Number, default: 0 },
     gstTreatment: {
         type: String,
         enum: ['TAXABLE', 'EXEMPT'],
@@ -86,7 +98,7 @@ const SalesOrderSchema = new mongoose.Schema({
         type: Number,
         default: 18,
         min: [0, 'GST rate cannot be negative'],
-        max: [28, 'GST rate cannot exceed 28%']
+        max: [100, 'GST rate cannot exceed 100%']
     },
     gstAmount: {
         type: Number,
@@ -129,6 +141,30 @@ const SalesOrderSchema = new mongoose.Schema({
         type: String,
         trim: true,
         default: ''
+    },
+    soApprovalStatus: {
+        type: String,
+        enum: ['Not Required', 'Pending Approval', 'Approved', 'Rejected'],
+        default: 'Not Required'
+    },
+    approvalRemarks: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    approvedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
+    approvedAt: {
+        type: Date,
+        default: null
+    },
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
     },
     cancelledAt: {
         type: Date,
