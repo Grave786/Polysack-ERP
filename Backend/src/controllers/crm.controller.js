@@ -8,6 +8,7 @@ const User = require('../models/user.model');
 const SalesOrder = require('../models/salesOrder.model');
 const Invoice = require('../models/invoice.model');
 const Approval = require('../models/approval.model');
+const Notification = require('../models/notification.model');
 const { notifyApprovers, REMINDER_INTERVAL_HOURS } = require('../services/approval.service');
 const { normalizeEnum } = require('../utils/enumNormalizer');
 const { isTenantAdmin } = require('../middlewares/rbac.middleware');
@@ -46,6 +47,106 @@ const generateComplaintTicketNumber = async (tenantId) => {
 // 1. CUSTOMER INTERACTIONS CONTROLLERS
 // ==========================================
 
+const extractEnquirySnapshot = (enq) => {
+    if (!enq || typeof enq !== 'object') {
+        return { prospectName: '', contactPerson: '', contactNumber: '', enquiryNumber: '' };
+    }
+    const cust = (enq.customerRef && typeof enq.customerRef === 'object' ? enq.customerRef : null)
+        || (enq.customer && typeof enq.customer === 'object' ? enq.customer : null);
+    const prospectName = (
+        enq.newCustomerDetails?.company ||
+        enq.newCustomerDetails?.name ||
+        cust?.companyName ||
+        cust?.name ||
+        enq.contactPerson ||
+        'Prospect'
+    ).trim();
+    const contactPerson = (
+        enq.contactPerson ||
+        enq.newCustomerDetails?.name ||
+        cust?.contactPerson ||
+        ''
+    ).trim();
+    const contactNumber = (
+        enq.contactNumber ||
+        enq.newCustomerDetails?.phone ||
+        cust?.phone ||
+        ''
+    ).trim();
+    const enquiryNumber = (enq.nslNumber || enq.enquiryNumber || '').trim();
+    return { prospectName, contactPerson, contactNumber, enquiryNumber };
+};
+
+const normalizeInteractionRead = (doc) => {
+    const obj = doc?.toObject ? doc.toObject() : { ...doc };
+    const enq = (obj.enquiry && typeof obj.enquiry === 'object' ? obj.enquiry : null)
+        || (obj.enquiryId && typeof obj.enquiryId === 'object' ? obj.enquiryId : null);
+    if (enq) {
+        if (!obj.enquiry) obj.enquiry = enq;
+        if (!obj.enquiryId) obj.enquiryId = enq;
+        const snap = extractEnquirySnapshot(enq);
+        if (!obj.prospectName) obj.prospectName = snap.prospectName;
+        if (!obj.contactPerson) obj.contactPerson = snap.contactPerson;
+        if (!obj.contactNumber) obj.contactNumber = snap.contactNumber;
+        if (!obj.enquiryNumber) obj.enquiryNumber = snap.enquiryNumber;
+    } else if (!obj.prospectName && obj.customerName) {
+        obj.prospectName = obj.customerName;
+    }
+    return obj;
+};
+
+const syncFollowUpNotifications = async (tenantId) => {
+    try {
+        if (!tenantId) return;
+        const endOfToday = new Date();
+        endOfToday.setHours(23, 59, 59, 999);
+
+        const dueFollowUps = await CustomerInteraction.find({
+            tenant: tenantId,
+            isActive: { $ne: false },
+            status: { $nin: ['CLOSED', 'RESOLVED', 'Closed (Resolved)', 'Resolved', 'Resolved / Complete', 'Closed'] },
+            nextFollowUpDate: { $ne: null, $lte: endOfToday }
+        })
+            .populate('customer', 'companyName name code')
+            .populate('enquiry', 'nslNumber enquiryNumber newCustomerDetails contactPerson contactNumber')
+            .populate('enquiryId', 'nslNumber enquiryNumber newCustomerDetails contactPerson contactNumber')
+            .limit(25)
+            .lean();
+
+        for (const item of dueFollowUps) {
+            const existing = await Notification.findOne({
+                tenant: tenantId,
+                type: 'LEAD_ALERT',
+                'data.interactionId': item._id,
+                isRead: false
+            }).select('_id').lean();
+            if (existing) continue;
+
+            const norm = normalizeInteractionRead(item);
+            const partyLabel = item.customer?.companyName || item.customer?.name || norm.prospectName || norm.enquiryNumber || 'Lead / Customer';
+            const refLabel = norm.enquiryNumber ? ` (${norm.enquiryNumber})` : '';
+
+            await Notification.create({
+                tenant: tenantId,
+                type: 'LEAD_ALERT',
+                module: 'CRM',
+                title: `Follow-up Due: ${partyLabel}${refLabel}`,
+                message: `${item.interactionType || 'Follow-up'} scheduled for ${partyLabel}${refLabel}: ${item.subject || item.notes || 'Follow-up reminder'}`.slice(0, 240),
+                priority: 'HIGH',
+                data: {
+                    interactionId: item._id,
+                    enquiryId: norm.enquiry?._id || norm.enquiryId?._id || null,
+                    customerId: item.customer?._id || item.customer || null
+                },
+                link: `/customer-crm?tab=follow-ups&id=${item._id}`,
+                isRead: false
+            });
+        }
+    } catch (err) {
+        console.warn('[syncFollowUpNotifications] non-fatal:', err.message);
+    }
+};
+
 /**
  * @desc    Create a Customer Interaction / Follow-up Log
  * @route   POST /api/crm/interactions
@@ -73,34 +174,64 @@ const createInteraction = async (req, res) => {
             assignedExecutive,
             status,
             nextFollowUpDate,
+            enquiry,
             enquiryId,
-            referenceId,
-            customerName
+            referenceId
         } = req.body;
 
-        const targetCustomer = customer || customerId;
-        const refId = enquiryId || referenceId;
+        const rawCustomer = customer || customerId;
+        const rawEnquiry = enquiry || enquiryId || referenceId;
 
-        if (!targetCustomer && !refId && !customerName) {
+        if (!rawCustomer && !rawEnquiry) {
             return res.status(400).json({
                 success: false,
-                message: 'Please provide customer ObjectId, customerName, or enquiry reference.'
+                message: 'Please link this interaction to either a Customer or an Order Enquiry.'
             });
         }
 
         let resolvedCustomer = null;
-        if (targetCustomer && mongoose.Types.ObjectId.isValid(targetCustomer)) {
-            const customerDoc = await Customer.findOne({ _id: targetCustomer, ...(tenantId && { tenant: tenantId }) });
-            if (customerDoc) resolvedCustomer = customerDoc._id;
+        if (rawCustomer) {
+            if (!mongoose.Types.ObjectId.isValid(rawCustomer)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid customer ID format.'
+                });
+            }
+            const customerDoc = await Customer.findOne({ _id: rawCustomer, tenant: tenantId }).select('_id companyName name');
+            if (!customerDoc) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Customer does not exist or does not belong to your organization.'
+                });
+            }
+            resolvedCustomer = customerDoc._id;
         }
 
-        let resolvedName = customerName || undefined;
-        if (!resolvedCustomer && refId && mongoose.Types.ObjectId.isValid(refId)) {
-            const enq = await OrderEnquiry.findById(refId);
-            if (enq) {
-                resolvedCustomer = enq.customerRef || enq.customer || null;
-                if (!resolvedCustomer) {
-                    resolvedName = enq.newCustomerDetails?.company || enq.newCustomerDetails?.name;
+        let resolvedEnquiry = null;
+        let enquirySnapshot = { prospectName: '', contactPerson: '', contactNumber: '', enquiryNumber: '' };
+        if (rawEnquiry) {
+            if (!mongoose.Types.ObjectId.isValid(rawEnquiry)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid Order Enquiry ID format.'
+                });
+            }
+            const enq = await OrderEnquiry.findOne({ _id: rawEnquiry, tenant: tenantId })
+                .populate('customer customerRef', 'companyName name code phone contactPerson');
+            if (!enq) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Order Enquiry does not exist or does not belong to your organization.'
+                });
+            }
+            resolvedEnquiry = enq._id;
+            enquirySnapshot = extractEnquirySnapshot(enq);
+
+            if (!resolvedCustomer) {
+                const enqCustId = enq.customerRef?._id || enq.customerRef || enq.customer?._id || enq.customer || null;
+                if (enqCustId && mongoose.Types.ObjectId.isValid(enqCustId)) {
+                    const enqCust = await Customer.findOne({ _id: enqCustId, tenant: tenantId }).select('_id');
+                    if (enqCust) resolvedCustomer = enqCust._id;
                 }
             }
         }
@@ -109,7 +240,7 @@ const createInteraction = async (req, res) => {
         if (assignedExecutive && assignedExecutive !== 'Unassigned') {
             const rawExec = typeof assignedExecutive === 'object' ? assignedExecutive._id : assignedExecutive;
             if (rawExec && mongoose.Types.ObjectId.isValid(rawExec)) {
-                const execDoc = await User.findOne({ _id: rawExec, ...(tenantId && { tenant: tenantId }), isActive: true });
+                const execDoc = await User.findOne({ _id: rawExec, tenant: tenantId, isActive: true });
                 if (execDoc) resolvedExecutive = execDoc._id;
             }
         }
@@ -139,12 +270,17 @@ const createInteraction = async (req, res) => {
         const interaction = new CustomerInteraction({
             tenant: tenantId,
             customer: resolvedCustomer,
-            customerName: resolvedName,
-            enquiryId: refId || null,
-            referenceId: refId || null,
+            customerName: !resolvedCustomer ? enquirySnapshot.prospectName : undefined,
+            enquiry: resolvedEnquiry,
+            enquiryId: resolvedEnquiry,
+            referenceId: resolvedEnquiry,
+            prospectName: enquirySnapshot.prospectName,
+            contactPerson: enquirySnapshot.contactPerson,
+            contactNumber: enquirySnapshot.contactNumber,
+            enquiryNumber: enquirySnapshot.enquiryNumber,
             date: date ? new Date(date) : new Date(),
             interactionType: normType,
-            subject: (subject || `Follow-up: ${refId || 'Lead'}`).trim(),
+            subject: (subject || `Follow-up: ${enquirySnapshot.enquiryNumber || enquirySnapshot.prospectName || 'Lead'}`).trim(),
             notes: notes ? notes.trim() : '',
             assignedExecutive: resolvedExecutive,
             status: normStatus,
@@ -156,13 +292,15 @@ const createInteraction = async (req, res) => {
 
         await interaction.populate([
             { path: 'customer', select: 'companyName code contactPerson phone email' },
+            { path: 'enquiry', select: 'nslNumber enquiryNumber customerType newCustomerDetails contactPerson contactNumber status soApprovalStatus' },
+            { path: 'enquiryId', select: 'nslNumber enquiryNumber customerType newCustomerDetails contactPerson contactNumber status soApprovalStatus' },
             { path: 'assignedExecutive', select: 'name email role' }
         ]);
 
         return res.status(201).json({
             success: true,
             message: 'Customer interaction logged successfully.',
-            data: interaction
+            data: normalizeInteractionRead(interaction)
         });
     } catch (error) {
         console.error('Error in createInteraction:', error);
@@ -194,11 +332,21 @@ const getInteractions = async (req, res) => {
             });
         }
 
-        const { customer, status, interactionType, assignedExecutive, startDate, endDate, search, page = 1, limit = 20 } = req.query;
-        const filter = { isActive: { $ne: false } };
-        if (tenantId) filter.tenant = tenantId;
+        const { customer, enquiry, enquiryId, status, interactionType, assignedExecutive, startDate, endDate, search, page = 1, limit = 20 } = req.query;
+        const filter = { tenant: tenantId, isActive: { $ne: false } };
 
+        const andConditions = [];
         if (customer) filter.customer = customer;
+        const targetEnq = enquiry || enquiryId;
+        if (targetEnq && mongoose.Types.ObjectId.isValid(targetEnq)) {
+            andConditions.push({
+                $or: [
+                    { enquiry: targetEnq },
+                    { enquiryId: targetEnq },
+                    { referenceId: targetEnq }
+                ]
+            });
+        }
         if (status && status !== 'All' && status !== 'ALL' && status !== 'All Statuses' && status !== 'undefined') {
             if (status.includes('Open') || status === 'OPEN') {
                 filter.status = 'OPEN';
@@ -225,20 +373,62 @@ const getInteractions = async (req, res) => {
             }
         }
 
-        if (search) {
-            filter.$or = [
-                { subject: { $regex: search, $options: 'i' } },
-                { notes: { $regex: search, $options: 'i' } }
-            ];
+        if (search && String(search).trim()) {
+            const q = String(search).trim();
+            const [matchingCustomers, matchingEnquiries] = await Promise.all([
+                Customer.find({
+                    tenant: tenantId,
+                    $or: [
+                        { companyName: { $regex: q, $options: 'i' } },
+                        { code: { $regex: q, $options: 'i' } },
+                        { phone: { $regex: q, $options: 'i' } }
+                    ]
+                }).select('_id').lean(),
+                OrderEnquiry.find({
+                    tenant: tenantId,
+                    $or: [
+                        { nslNumber: { $regex: q, $options: 'i' } },
+                        { enquiryNumber: { $regex: q, $options: 'i' } },
+                        { contactPerson: { $regex: q, $options: 'i' } },
+                        { contactNumber: { $regex: q, $options: 'i' } },
+                        { 'newCustomerDetails.company': { $regex: q, $options: 'i' } },
+                        { 'newCustomerDetails.name': { $regex: q, $options: 'i' } },
+                        { 'newCustomerDetails.phone': { $regex: q, $options: 'i' } }
+                    ]
+                }).select('_id').lean()
+            ]);
+            const custIds = matchingCustomers.map((c) => c._id);
+            const enqIds = matchingEnquiries.map((e) => e._id);
+            andConditions.push({
+                $or: [
+                    { subject: { $regex: q, $options: 'i' } },
+                    { notes: { $regex: q, $options: 'i' } },
+                    { customerName: { $regex: q, $options: 'i' } },
+                    { prospectName: { $regex: q, $options: 'i' } },
+                    { contactPerson: { $regex: q, $options: 'i' } },
+                    { contactNumber: { $regex: q, $options: 'i' } },
+                    { enquiryNumber: { $regex: q, $options: 'i' } },
+                    ...(custIds.length > 0 ? [{ customer: { $in: custIds } }] : []),
+                    ...(enqIds.length > 0 ? [{ enquiry: { $in: enqIds } }, { enquiryId: { $in: enqIds } }, { referenceId: { $in: enqIds } }] : [])
+                ]
+            });
+        }
+
+        if (andConditions.length > 0) {
+            filter.$and = andConditions;
         }
 
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
         const limitNum = Math.max(1, parseInt(limit, 10) || 20);
         const skip = (pageNum - 1) * limitNum;
 
+        syncFollowUpNotifications(tenantId).catch(() => {});
+
         const [interactions, total] = await Promise.all([
             CustomerInteraction.find(filter)
                 .populate('customer', 'companyName code contactPerson phone email')
+                .populate('enquiry', 'nslNumber enquiryNumber customerType newCustomerDetails contactPerson contactNumber status soApprovalStatus')
+                .populate('enquiryId', 'nslNumber enquiryNumber customerType newCustomerDetails contactPerson contactNumber status soApprovalStatus')
                 .populate('assignedExecutive', 'name email role')
                 .sort({ createdAt: -1 })
                 .skip(skip)
@@ -246,16 +436,18 @@ const getInteractions = async (req, res) => {
             CustomerInteraction.countDocuments(filter)
         ]);
 
+        const normalizedInteractions = interactions.map(normalizeInteractionRead);
+
         return res.status(200).json({
             success: true,
-            count: interactions.length,
+            count: normalizedInteractions.length,
             pagination: {
                 total,
                 page: pageNum,
                 limit: limitNum,
                 pages: Math.ceil(total / limitNum) || 1
             },
-            data: interactions
+            data: normalizedInteractions
         });
     } catch (error) {
         console.error('Error in getInteractions:', error);
@@ -298,22 +490,25 @@ const exportInteractionsCsv = async (req, res) => {
 
         const list = await CustomerInteraction.find(filter)
             .populate('customer', 'companyName code')
+            .populate('enquiry', 'nslNumber enquiryNumber newCustomerDetails contactPerson contactNumber')
+            .populate('enquiryId', 'nslNumber enquiryNumber newCustomerDetails contactPerson contactNumber')
             .populate('assignedExecutive', 'name')
             .sort({ date: -1 });
 
         res.setHeader('Content-Type', 'text/csv');
         res.setHeader('Content-Disposition', 'attachment; filename="customer-interactions.csv"');
 
-        let csv = 'Date,Customer Code,Customer Name,Type,Subject,Assigned Executive,Status,Next Follow Up\n';
-        for (const item of list) {
-            const dateStr = item.date ? item.date.toISOString().split('T')[0] : '';
-            const custCode = `"${item.customer ? item.customer.code : ''}"`;
-            const custName = `"${item.customer ? item.customer.companyName : ''}"`;
+        let csv = 'Date,Customer / NSL Code,Customer / Prospect Name,Type,Subject,Assigned Executive,Status,Next Follow Up\n';
+        for (const rawItem of list) {
+            const item = normalizeInteractionRead(rawItem);
+            const dateStr = item.date ? new Date(item.date).toISOString().split('T')[0] : '';
+            const custCode = `"${item.customer ? (item.customer.code || '') : (item.enquiryNumber || '')}"`;
+            const custName = `"${(item.customer ? (item.customer.companyName || '') : (item.prospectName || item.customerName || '')).replace(/"/g, '""')}"`;
             const type = `"${item.interactionType || ''}"`;
             const subj = `"${(item.subject || '').replace(/"/g, '""')}"`;
             const exec = `"${item.assignedExecutive ? item.assignedExecutive.name : ''}"`;
             const st = `"${item.status || ''}"`;
-            const nextDate = item.nextFollowUpDate ? item.nextFollowUpDate.toISOString().split('T')[0] : '';
+            const nextDate = item.nextFollowUpDate ? new Date(item.nextFollowUpDate).toISOString().split('T')[0] : '';
 
             csv += `${dateStr},${custCode},${custName},${type},${subj},${exec},${st},${nextDate}\n`;
         }
@@ -346,6 +541,8 @@ const getInteractionById = async (req, res) => {
 
         const interaction = await CustomerInteraction.findOne({ _id: req.params.id, tenant: tenantId })
             .populate('customer', 'companyName code contactPerson phone email address city state')
+            .populate('enquiry', 'nslNumber enquiryNumber customerType newCustomerDetails contactPerson contactNumber status soApprovalStatus')
+            .populate('enquiryId', 'nslNumber enquiryNumber customerType newCustomerDetails contactPerson contactNumber status soApprovalStatus')
             .populate('assignedExecutive', 'name email role');
 
         if (!interaction) {
@@ -357,7 +554,7 @@ const getInteractionById = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            data: interaction
+            data: normalizeInteractionRead(interaction)
         });
     } catch (error) {
         console.error('Error in getInteractionById:', error);
@@ -383,18 +580,78 @@ const getInteractionById = async (req, res) => {
 const updateInteraction = async (req, res) => {
     try {
         const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
         delete req.body.tenant;
 
-        // Resolve customer
+        const existing = await CustomerInteraction.findOne({ _id: req.params.id, tenant: tenantId });
+        if (!existing) {
+            return res.status(404).json({
+                success: false,
+                message: 'Interaction not found.'
+            });
+        }
+
+        // Resolve customer (validated against tenant)
         const targetCustomer = req.body.customer !== undefined ? req.body.customer : req.body.customerId;
         let resolvedCustomer = undefined;
         if (targetCustomer !== undefined) {
             const rawCustId = typeof targetCustomer === 'object' ? targetCustomer?._id : targetCustomer;
-            if (rawCustId && mongoose.Types.ObjectId.isValid(rawCustId)) {
-                resolvedCustomer = new mongoose.Types.ObjectId(rawCustId);
-            } else if (rawCustId === null || rawCustId === '') {
+            if (rawCustId) {
+                if (!mongoose.Types.ObjectId.isValid(rawCustId)) {
+                    return res.status(400).json({ success: false, message: 'Invalid customer ID format.' });
+                }
+                const custDoc = await Customer.findOne({ _id: rawCustId, tenant: tenantId }).select('_id');
+                if (!custDoc) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Customer does not exist or does not belong to your organization.'
+                    });
+                }
+                resolvedCustomer = custDoc._id;
+            } else {
                 resolvedCustomer = null;
             }
+        }
+
+        // Resolve enquiry (validated against tenant)
+        const targetEnquiry = req.body.enquiry !== undefined
+            ? req.body.enquiry
+            : (req.body.enquiryId !== undefined ? req.body.enquiryId : req.body.referenceId);
+        let resolvedEnquiry = undefined;
+        let enquirySnapshot = null;
+        if (targetEnquiry !== undefined) {
+            const rawEnqId = typeof targetEnquiry === 'object' ? targetEnquiry?._id : targetEnquiry;
+            if (rawEnqId) {
+                if (!mongoose.Types.ObjectId.isValid(rawEnqId)) {
+                    return res.status(400).json({ success: false, message: 'Invalid Order Enquiry ID format.' });
+                }
+                const enqDoc = await OrderEnquiry.findOne({ _id: rawEnqId, tenant: tenantId })
+                    .populate('customer customerRef', 'companyName name code phone contactPerson');
+                if (!enqDoc) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Order Enquiry does not exist or does not belong to your organization.'
+                    });
+                }
+                resolvedEnquiry = enqDoc._id;
+                enquirySnapshot = extractEnquirySnapshot(enqDoc);
+            } else {
+                resolvedEnquiry = null;
+            }
+        }
+
+        const finalCustomer = resolvedCustomer !== undefined ? resolvedCustomer : existing.customer;
+        const finalEnquiry = resolvedEnquiry !== undefined ? resolvedEnquiry : (existing.enquiry || existing.enquiryId || existing.referenceId);
+        if (!finalCustomer && !finalEnquiry) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please link this interaction to either a Customer or an Order Enquiry.'
+            });
         }
 
         // Resolve assigned executive
@@ -402,7 +659,8 @@ const updateInteraction = async (req, res) => {
         if (req.body.assignedExecutive !== undefined) {
             const rawExecId = typeof req.body.assignedExecutive === 'object' ? req.body.assignedExecutive?._id : req.body.assignedExecutive;
             if (rawExecId && mongoose.Types.ObjectId.isValid(rawExecId)) {
-                resolvedExecutive = new mongoose.Types.ObjectId(rawExecId);
+                const execDoc = await User.findOne({ _id: rawExecId, tenant: tenantId, isActive: true }).select('_id');
+                resolvedExecutive = execDoc ? execDoc._id : null;
             } else {
                 resolvedExecutive = null;
             }
@@ -440,7 +698,18 @@ const updateInteraction = async (req, res) => {
 
         const updateData = {};
         if (resolvedCustomer !== undefined) updateData.customer = resolvedCustomer;
-        if (req.body.customerName !== undefined) updateData.customerName = req.body.customerName;
+        if (resolvedEnquiry !== undefined) {
+            updateData.enquiry = resolvedEnquiry;
+            updateData.enquiryId = resolvedEnquiry;
+            updateData.referenceId = resolvedEnquiry;
+            if (enquirySnapshot) {
+                updateData.prospectName = enquirySnapshot.prospectName;
+                updateData.contactPerson = enquirySnapshot.contactPerson;
+                updateData.contactNumber = enquirySnapshot.contactNumber;
+                updateData.enquiryNumber = enquirySnapshot.enquiryNumber;
+                if (!finalCustomer) updateData.customerName = enquirySnapshot.prospectName;
+            }
+        }
         if (resolvedExecutive !== undefined) updateData.assignedExecutive = resolvedExecutive;
         if (resolvedStatus !== undefined) updateData.status = resolvedStatus;
         if (resolvedType !== undefined) updateData.interactionType = resolvedType;
@@ -450,39 +719,20 @@ const updateInteraction = async (req, res) => {
         if (req.body.nextFollowUpDate !== undefined) updateData.nextFollowUpDate = req.body.nextFollowUpDate ? new Date(req.body.nextFollowUpDate) : null;
         if (req.body.isActive !== undefined) updateData.isActive = Boolean(req.body.isActive);
 
-        const filter = { _id: req.params.id };
-        if (tenantId) filter.tenant = tenantId;
-
-        let interaction = await CustomerInteraction.findOneAndUpdate(
-            filter,
+        const interaction = await CustomerInteraction.findOneAndUpdate(
+            { _id: req.params.id, tenant: tenantId },
             { $set: updateData },
             { new: true, runValidators: true }
         )
-        .populate('customer', 'companyName code contactPerson phone email')
-        .populate('assignedExecutive', 'name email role');
-
-        if (!interaction) {
-            // Fallback without tenant constraint in case of cross-session or admin update
-            interaction = await CustomerInteraction.findByIdAndUpdate(
-                req.params.id,
-                { $set: updateData },
-                { new: true, runValidators: true }
-            )
             .populate('customer', 'companyName code contactPerson phone email')
+            .populate('enquiry', 'nslNumber enquiryNumber customerType newCustomerDetails contactPerson contactNumber status soApprovalStatus')
+            .populate('enquiryId', 'nslNumber enquiryNumber customerType newCustomerDetails contactPerson contactNumber status soApprovalStatus')
             .populate('assignedExecutive', 'name email role');
-        }
-
-        if (!interaction) {
-            return res.status(404).json({
-                success: false,
-                message: 'Interaction not found.'
-            });
-        }
 
         return res.status(200).json({
             success: true,
             message: 'Customer interaction updated successfully.',
-            data: interaction
+            data: normalizeInteractionRead(interaction)
         });
     } catch (error) {
         console.error('Error in updateInteraction:', error);
@@ -1228,6 +1478,21 @@ const getOrderEnquiryById = async (req, res) => {
             }
         }
 
+        const followUpHistory = await CustomerInteraction.find({
+            tenant: tenantId,
+            isActive: { $ne: false },
+            $or: [
+                { enquiry: enquiry._id },
+                { enquiryId: enquiry._id },
+                { referenceId: enquiry._id }
+            ]
+        })
+            .populate('assignedExecutive', 'name email')
+            .sort({ date: -1, createdAt: -1 })
+            .lean();
+
+        doc.followUpHistory = followUpHistory.map(normalizeInteractionRead);
+
         return res.status(200).json({ success: true, data: doc });
     } catch (error) {
         console.error('Error in getOrderEnquiryById:', error);
@@ -1355,23 +1620,34 @@ const deleteOrderEnquiry = async (req, res) => {
 const addFollowUp = async (req, res) => {
     try {
         const tenantId = req.user?.tenant;
-        const enquiry = await OrderEnquiry.findById(req.params.id);
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context is missing or invalid.' });
+        }
+        const enquiry = await OrderEnquiry.findOne({ _id: req.params.id, tenant: tenantId })
+            .populate('customer customerRef', 'companyName name code phone contactPerson');
         if (!enquiry) {
             return res.status(404).json({ success: false, message: 'Order enquiry not found.' });
         }
 
         const { date, communicationType, type, notes, nextFollowUpDate, status } = req.body;
         const commType = communicationType || type || 'Phone Call';
+        const snapshot = extractEnquirySnapshot(enquiry);
+        const linkedCustomer = enquiry.customerRef?._id || enquiry.customerRef || enquiry.customer?._id || enquiry.customer || null;
 
         const interaction = new CustomerInteraction({
-            tenant: tenantId || enquiry.tenant,
-            customer: enquiry.customerRef || enquiry.customer || null,
-            customerName: enquiry.newCustomerDetails?.company || enquiry.newCustomerDetails?.name || undefined,
+            tenant: tenantId,
+            customer: linkedCustomer,
+            customerName: !linkedCustomer ? snapshot.prospectName : undefined,
+            enquiry: enquiry._id,
             enquiryId: enquiry._id,
             referenceId: enquiry._id,
+            prospectName: snapshot.prospectName,
+            contactPerson: snapshot.contactPerson,
+            contactNumber: snapshot.contactNumber,
+            enquiryNumber: snapshot.enquiryNumber,
             date: date ? new Date(date) : new Date(),
             interactionType: commType || 'Phone Call',
-            subject: `Follow-up: ${enquiry.nslNumber || 'Enquiry'}`,
+            subject: `Follow-up: ${snapshot.enquiryNumber || snapshot.prospectName || 'Enquiry'}`,
             notes: notes || '',
             status: status || 'OPEN',
             assignedExecutive: req.user?._id || req.user?.id || undefined,
@@ -1384,7 +1660,7 @@ const addFollowUp = async (req, res) => {
         return res.status(201).json({
             success: true,
             message: 'Follow-up logged successfully as interaction.',
-            data: interaction
+            data: normalizeInteractionRead(interaction)
         });
     } catch (error) {
         console.error('Error in addFollowUp:', error);

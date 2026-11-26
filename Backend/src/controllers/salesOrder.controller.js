@@ -4,6 +4,7 @@ const Customer = require('../models/customer.model');
 const Location = require('../models/location.model');
 const FinishedGood = require('../models/finishedGood.model');
 const OrderEnquiry = require('../models/orderEnquiry.model');
+const CustomerInteraction = require('../models/customerInteraction.model');
 const WorkOrder = require('../models/workOrder.model');
 const Dispatch = require('../models/dispatch.model');
 const Invoice = require('../models/invoice.model');
@@ -652,9 +653,29 @@ const createSalesOrder = async (req, res) => {
             await OrderEnquiry.findByIdAndUpdate(linkedEnquiry._id, {
                 status: 'Confirmed',
                 orderConfirmed: true,
+                customer: salesOrder.customer,
+                customerRef: salesOrder.customer,
                 salesOrder: salesOrder._id,
                 salesOrderNo: salesOrder.soNumber
             });
+            await CustomerInteraction.updateMany(
+                {
+                    tenant: tenantId,
+                    $or: [
+                        { enquiry: linkedEnquiry._id },
+                        { enquiryId: linkedEnquiry._id },
+                        { referenceId: linkedEnquiry._id }
+                    ]
+                },
+                {
+                    $set: {
+                        customer: salesOrder.customer,
+                        enquiry: linkedEnquiry._id,
+                        enquiryId: linkedEnquiry._id,
+                        referenceId: linkedEnquiry._id
+                    }
+                }
+            );
         }
 
         await salesOrder.populate([

@@ -224,9 +224,9 @@ export default function CustomerCrmPage() {
         }
     };
 
-    // Fetch full order enquiry details when opening view modal to ensure latest followUps
+    // Fetch full order enquiry details when opening view modal to ensure latest followUpHistory
     useEffect(() => {
-        if (viewingEnquiry?._id && !viewingEnquiry.followUps) {
+        if (viewingEnquiry?._id) {
             axiosInstance.get(`/crm/enquiries/${viewingEnquiry._id}`)
                 .then((res) => {
                     if (res.data?.data) {
@@ -235,7 +235,7 @@ export default function CustomerCrmPage() {
                 })
                 .catch(() => {});
         }
-    }, [viewingEnquiry?._id]);
+    }, [viewingEnquiry?._id, refreshKey]);
 
     // Switch to requested tab once when ?tab=... is present (record modal is handled by TabbedResourcePage)
     useEffect(() => {
@@ -603,9 +603,9 @@ export default function CustomerCrmPage() {
         generateEnquiryDescription
     ]);
 
-    // ── Fetch customers + users when any drawer opens ──────────────────────────
+    // ── Fetch customers + users when any drawer/modal opens ───────────────────
     useEffect(() => {
-        if (isInteractionDrawerOpen || isComplaintDrawerOpen || isEnquiryDrawerOpen) {
+        if (isInteractionDrawerOpen || isInteractionModalOpen || isComplaintDrawerOpen || isComplaintModalOpen || isEnquiryDrawerOpen) {
             setIsLoadingDropdowns(true);
             Promise.all([
                 axiosInstance.get('/customers?isActive=true&status=ACTIVE_CUSTOMER&limit=200'),
@@ -633,7 +633,7 @@ export default function CustomerCrmPage() {
                 .catch(() => toast.error('Failed to load customers or sales executive catalog'))
                 .finally(() => setIsLoadingDropdowns(false));
         }
-    }, [isInteractionDrawerOpen, isComplaintDrawerOpen, isEnquiryDrawerOpen]);
+    }, [isInteractionDrawerOpen, isInteractionModalOpen, isComplaintDrawerOpen, isComplaintModalOpen, isEnquiryDrawerOpen]);
 
     // ── Fetch shared material attributes when enquiry drawer opens ─────────────
     useEffect(() => {
@@ -1006,14 +1006,30 @@ export default function CustomerCrmPage() {
             header: 'CUSTOMER',
             exportValue: (row) => {
                 const c = typeof row.customer === 'object' ? row.customer : null;
-                return c?.companyName || row.customerName || '';
+                if (c?.companyName) return c.companyName;
+                const enq = typeof row.enquiry === 'object' ? row.enquiry : (typeof row.enquiryId === 'object' ? row.enquiryId : null);
+                const pName = row.prospectName || enq?.newCustomerDetails?.company || enq?.newCustomerDetails?.name || row.customerName || '';
+                const nsl = row.enquiryNumber || enq?.nslNumber || '';
+                return nsl ? `${pName} (${nsl})` : pName;
             },
             render: (row) => {
                 const c = typeof row.customer === 'object' ? row.customer : null;
+                const enq = typeof row.enquiry === 'object' ? row.enquiry : (typeof row.enquiryId === 'object' ? row.enquiryId : null);
+                const isProspect = !c;
+                const displayName = c?.companyName || row.prospectName || enq?.newCustomerDetails?.company || enq?.newCustomerDetails?.name || row.customerName || '-';
+                const nslNo = row.enquiryNumber || enq?.nslNumber || enq?.enquiryNumber || '';
                 return (
                     <div className="font-sans leading-tight">
-                        <div className="font-extrabold text-text-main text-xs">{c?.companyName || row.customerName || '-'}</div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-extrabold text-text-main text-xs">{displayName}</span>
+                            {isProspect && (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase bg-amber-50 text-amber-800 border border-amber-200">
+                                    Prospect
+                                </span>
+                            )}
+                        </div>
                         {c?.code && <div className="text-[10px] font-mono text-text-muted">{c.code}</div>}
+                        {!c?.code && nslNo && <div className="text-[10px] font-mono text-primary font-bold">{nslNo}</div>}
                     </div>
                 );
             },
@@ -1024,7 +1040,16 @@ export default function CustomerCrmPage() {
             exportValue: (row) => formatDate(row.date || row.createdAt),
             render: (row) => {
                 const d = row.date || row.createdAt;
-                return <span className="font-mono text-xs text-text-main">{formatDate(d)}</span>;
+                return (
+                    <div className="leading-tight">
+                        <span className="font-mono text-xs text-text-main block">{formatDate(d)}</span>
+                        {row.nextFollowUpDate && (
+                            <span className="font-mono text-[10px] text-amber-700 font-semibold block">
+                                Next: {formatDate(row.nextFollowUpDate)}
+                            </span>
+                        )}
+                    </div>
+                );
             },
             sortable: true
         },
@@ -1476,6 +1501,63 @@ export default function CustomerCrmPage() {
                                     <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
                                 </div>
                             )}
+
+                            {/* Follow-up History Timeline */}
+                            <div className="bg-app-bg p-3.5 rounded-xl border border-border space-y-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted tracking-wider">
+                                        Follow-up History ({Array.isArray(viewingEnquiry.followUpHistory) ? viewingEnquiry.followUpHistory.length : 0})
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setSelectedNslForFollowUp(viewingEnquiry);
+                                            setIsFollowUpModalOpen(true);
+                                        }}
+                                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                    >
+                                        <PhoneCall size={11} />
+                                        <span>Log Follow-up</span>
+                                    </button>
+                                </div>
+
+                                {Array.isArray(viewingEnquiry.followUpHistory) && viewingEnquiry.followUpHistory.length > 0 ? (
+                                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                                        {viewingEnquiry.followUpHistory.map((fu) => (
+                                            <div key={fu._id} className="bg-card-bg border border-border rounded-lg p-2.5 space-y-1">
+                                                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="font-mono font-bold text-[11px] text-text-main">
+                                                            {formatDate(fu.date || fu.createdAt)}
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                                            {fu.interactionType || 'Phone Call'}
+                                                        </span>
+                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                                                            {fu.status || 'OPEN'}
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-[10px] text-text-muted">
+                                                        By {fu.assignedExecutive?.name || 'System'}
+                                                    </span>
+                                                </div>
+                                                {fu.notes && (
+                                                    <p className="text-xs text-text-main whitespace-pre-wrap">{fu.notes}</p>
+                                                )}
+                                                {fu.nextFollowUpDate && (
+                                                    <div className="text-[10px] font-mono font-semibold text-amber-700">
+                                                        Next Follow-up: {formatDate(fu.nextFollowUpDate)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-[11px] text-text-muted italic">
+                                        No follow-ups logged for this enquiry yet.
+                                    </p>
+                                )}
+                            </div>
                         </div>
 
                         <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
@@ -1835,6 +1917,63 @@ export default function CustomerCrmPage() {
                                     <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
                                 </div>
                             )}
+
+                            {/* Follow-up History Timeline */}
+                            <div className="bg-app-bg p-3.5 rounded-xl border border-border space-y-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted tracking-wider">
+                                        Follow-up History ({Array.isArray(viewingEnquiry.followUpHistory) ? viewingEnquiry.followUpHistory.length : 0})
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setSelectedNslForFollowUp(viewingEnquiry);
+                                            setIsFollowUpModalOpen(true);
+                                        }}
+                                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                    >
+                                        <PhoneCall size={11} />
+                                        <span>Log Follow-up</span>
+                                    </button>
+                                </div>
+
+                                {Array.isArray(viewingEnquiry.followUpHistory) && viewingEnquiry.followUpHistory.length > 0 ? (
+                                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                                        {viewingEnquiry.followUpHistory.map((fu) => (
+                                            <div key={fu._id} className="bg-card-bg border border-border rounded-lg p-2.5 space-y-1">
+                                                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="font-mono font-bold text-[11px] text-text-main">
+                                                            {formatDate(fu.date || fu.createdAt)}
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                                            {fu.interactionType || 'Phone Call'}
+                                                        </span>
+                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                                                            {fu.status || 'OPEN'}
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-[10px] text-text-muted">
+                                                        By {fu.assignedExecutive?.name || 'System'}
+                                                    </span>
+                                                </div>
+                                                {fu.notes && (
+                                                    <p className="text-xs text-text-main whitespace-pre-wrap">{fu.notes}</p>
+                                                )}
+                                                {fu.nextFollowUpDate && (
+                                                    <div className="text-[10px] font-mono font-semibold text-amber-700">
+                                                        Next Follow-up: {formatDate(fu.nextFollowUpDate)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-[11px] text-text-muted italic">
+                                        No follow-ups logged for this enquiry yet.
+                                    </p>
+                                )}
+                            </div>
                         </div>
 
                         <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
@@ -2057,6 +2196,63 @@ export default function CustomerCrmPage() {
                                     <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
                                 </div>
                             )}
+
+                            {/* Follow-up History Timeline */}
+                            <div className="bg-app-bg p-3.5 rounded-xl border border-border space-y-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted tracking-wider">
+                                        Follow-up History ({Array.isArray(viewingEnquiry.followUpHistory) ? viewingEnquiry.followUpHistory.length : 0})
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setSelectedNslForFollowUp(viewingEnquiry);
+                                            setIsFollowUpModalOpen(true);
+                                        }}
+                                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                    >
+                                        <PhoneCall size={11} />
+                                        <span>Log Follow-up</span>
+                                    </button>
+                                </div>
+
+                                {Array.isArray(viewingEnquiry.followUpHistory) && viewingEnquiry.followUpHistory.length > 0 ? (
+                                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                                        {viewingEnquiry.followUpHistory.map((fu) => (
+                                            <div key={fu._id} className="bg-card-bg border border-border rounded-lg p-2.5 space-y-1">
+                                                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="font-mono font-bold text-[11px] text-text-main">
+                                                            {formatDate(fu.date || fu.createdAt)}
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                                            {fu.interactionType || 'Phone Call'}
+                                                        </span>
+                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                                                            {fu.status || 'OPEN'}
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-[10px] text-text-muted">
+                                                        By {fu.assignedExecutive?.name || 'System'}
+                                                    </span>
+                                                </div>
+                                                {fu.notes && (
+                                                    <p className="text-xs text-text-main whitespace-pre-wrap">{fu.notes}</p>
+                                                )}
+                                                {fu.nextFollowUpDate && (
+                                                    <div className="text-[10px] font-mono font-semibold text-amber-700">
+                                                        Next Follow-up: {formatDate(fu.nextFollowUpDate)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-[11px] text-text-muted italic">
+                                        No follow-ups logged for this enquiry yet.
+                                    </p>
+                                )}
+                            </div>
                         </div>
 
                         <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
@@ -2300,6 +2496,63 @@ export default function CustomerCrmPage() {
                                     <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
                                 </div>
                             )}
+
+                            {/* Follow-up History Timeline */}
+                            <div className="bg-app-bg p-3.5 rounded-xl border border-border space-y-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted tracking-wider">
+                                        Follow-up History ({Array.isArray(viewingEnquiry.followUpHistory) ? viewingEnquiry.followUpHistory.length : 0})
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setSelectedNslForFollowUp(viewingEnquiry);
+                                            setIsFollowUpModalOpen(true);
+                                        }}
+                                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                    >
+                                        <PhoneCall size={11} />
+                                        <span>Log Follow-up</span>
+                                    </button>
+                                </div>
+
+                                {Array.isArray(viewingEnquiry.followUpHistory) && viewingEnquiry.followUpHistory.length > 0 ? (
+                                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                                        {viewingEnquiry.followUpHistory.map((fu) => (
+                                            <div key={fu._id} className="bg-card-bg border border-border rounded-lg p-2.5 space-y-1">
+                                                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="font-mono font-bold text-[11px] text-text-main">
+                                                            {formatDate(fu.date || fu.createdAt)}
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                                            {fu.interactionType || 'Phone Call'}
+                                                        </span>
+                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                                                            {fu.status || 'OPEN'}
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-[10px] text-text-muted">
+                                                        By {fu.assignedExecutive?.name || 'System'}
+                                                    </span>
+                                                </div>
+                                                {fu.notes && (
+                                                    <p className="text-xs text-text-main whitespace-pre-wrap">{fu.notes}</p>
+                                                )}
+                                                {fu.nextFollowUpDate && (
+                                                    <div className="text-[10px] font-mono font-semibold text-amber-700">
+                                                        Next Follow-up: {formatDate(fu.nextFollowUpDate)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-[11px] text-text-muted italic">
+                                        No follow-ups logged for this enquiry yet.
+                                    </p>
+                                )}
+                            </div>
                         </div>
 
                         <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
@@ -2515,6 +2768,63 @@ export default function CustomerCrmPage() {
                                     <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
                                 </div>
                             )}
+
+                            {/* Follow-up History Timeline */}
+                            <div className="bg-app-bg p-3.5 rounded-xl border border-border space-y-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted tracking-wider">
+                                        Follow-up History ({Array.isArray(viewingEnquiry.followUpHistory) ? viewingEnquiry.followUpHistory.length : 0})
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setSelectedNslForFollowUp(viewingEnquiry);
+                                            setIsFollowUpModalOpen(true);
+                                        }}
+                                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                    >
+                                        <PhoneCall size={11} />
+                                        <span>Log Follow-up</span>
+                                    </button>
+                                </div>
+
+                                {Array.isArray(viewingEnquiry.followUpHistory) && viewingEnquiry.followUpHistory.length > 0 ? (
+                                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                                        {viewingEnquiry.followUpHistory.map((fu) => (
+                                            <div key={fu._id} className="bg-card-bg border border-border rounded-lg p-2.5 space-y-1">
+                                                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="font-mono font-bold text-[11px] text-text-main">
+                                                            {formatDate(fu.date || fu.createdAt)}
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                                            {fu.interactionType || 'Phone Call'}
+                                                        </span>
+                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                                                            {fu.status || 'OPEN'}
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-[10px] text-text-muted">
+                                                        By {fu.assignedExecutive?.name || 'System'}
+                                                    </span>
+                                                </div>
+                                                {fu.notes && (
+                                                    <p className="text-xs text-text-main whitespace-pre-wrap">{fu.notes}</p>
+                                                )}
+                                                {fu.nextFollowUpDate && (
+                                                    <div className="text-[10px] font-mono font-semibold text-amber-700">
+                                                        Next Follow-up: {formatDate(fu.nextFollowUpDate)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-[11px] text-text-muted italic">
+                                        No follow-ups logged for this enquiry yet.
+                                    </p>
+                                )}
+                            </div>
                         </div>
 
                         <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
@@ -3018,6 +3328,63 @@ export default function CustomerCrmPage() {
                                     <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
                                 </div>
                             )}
+
+                            {/* Follow-up History Timeline */}
+                            <div className="bg-app-bg p-3.5 rounded-xl border border-border space-y-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted tracking-wider">
+                                        Follow-up History ({Array.isArray(viewingEnquiry.followUpHistory) ? viewingEnquiry.followUpHistory.length : 0})
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setSelectedNslForFollowUp(viewingEnquiry);
+                                            setIsFollowUpModalOpen(true);
+                                        }}
+                                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                    >
+                                        <PhoneCall size={11} />
+                                        <span>Log Follow-up</span>
+                                    </button>
+                                </div>
+
+                                {Array.isArray(viewingEnquiry.followUpHistory) && viewingEnquiry.followUpHistory.length > 0 ? (
+                                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                                        {viewingEnquiry.followUpHistory.map((fu) => (
+                                            <div key={fu._id} className="bg-card-bg border border-border rounded-lg p-2.5 space-y-1">
+                                                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="font-mono font-bold text-[11px] text-text-main">
+                                                            {formatDate(fu.date || fu.createdAt)}
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                                            {fu.interactionType || 'Phone Call'}
+                                                        </span>
+                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                                                            {fu.status || 'OPEN'}
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-[10px] text-text-muted">
+                                                        By {fu.assignedExecutive?.name || 'System'}
+                                                    </span>
+                                                </div>
+                                                {fu.notes && (
+                                                    <p className="text-xs text-text-main whitespace-pre-wrap">{fu.notes}</p>
+                                                )}
+                                                {fu.nextFollowUpDate && (
+                                                    <div className="text-[10px] font-mono font-semibold text-amber-700">
+                                                        Next Follow-up: {formatDate(fu.nextFollowUpDate)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-[11px] text-text-muted italic">
+                                        No follow-ups logged for this enquiry yet.
+                                    </p>
+                                )}
+                            </div>
                         </div>
 
                         <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">
@@ -3213,6 +3580,18 @@ export default function CustomerCrmPage() {
                 editData={selectedInteraction}
                 customers={customers}
                 users={users}
+                onOpenEnquiry={(enqOrId) => {
+                    setIsInteractionModalOpen(false);
+                    setSelectedInteraction(null);
+                    const id = typeof enqOrId === 'object' ? enqOrId?._id : enqOrId;
+                    if (id) {
+                        axiosInstance.get(`/crm/enquiries/${id}`)
+                            .then((res) => {
+                                if (res.data?.data) setViewingEnquiry(res.data.data);
+                            })
+                            .catch(() => {});
+                    }
+                }}
                 onSuccess={() => {
                     setRefreshKey((p) => p + 1);
                 }}
@@ -3285,6 +3664,63 @@ export default function CustomerCrmPage() {
                                     <p className="text-xs text-text-main whitespace-pre-wrap">{viewingEnquiry.description || viewingEnquiry.remarks}</p>
                                 </div>
                             )}
+
+                            {/* Follow-up History Timeline */}
+                            <div className="bg-app-bg p-3.5 rounded-xl border border-border space-y-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] uppercase font-bold text-text-muted tracking-wider">
+                                        Follow-up History ({Array.isArray(viewingEnquiry.followUpHistory) ? viewingEnquiry.followUpHistory.length : 0})
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setSelectedNslForFollowUp(viewingEnquiry);
+                                            setIsFollowUpModalOpen(true);
+                                        }}
+                                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                    >
+                                        <PhoneCall size={11} />
+                                        <span>Log Follow-up</span>
+                                    </button>
+                                </div>
+
+                                {Array.isArray(viewingEnquiry.followUpHistory) && viewingEnquiry.followUpHistory.length > 0 ? (
+                                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                                        {viewingEnquiry.followUpHistory.map((fu) => (
+                                            <div key={fu._id} className="bg-card-bg border border-border rounded-lg p-2.5 space-y-1">
+                                                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="font-mono font-bold text-[11px] text-text-main">
+                                                            {formatDate(fu.date || fu.createdAt)}
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                                            {fu.interactionType || 'Phone Call'}
+                                                        </span>
+                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                                                            {fu.status || 'OPEN'}
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-[10px] text-text-muted">
+                                                        By {fu.assignedExecutive?.name || 'System'}
+                                                    </span>
+                                                </div>
+                                                {fu.notes && (
+                                                    <p className="text-xs text-text-main whitespace-pre-wrap">{fu.notes}</p>
+                                                )}
+                                                {fu.nextFollowUpDate && (
+                                                    <div className="text-[10px] font-mono font-semibold text-amber-700">
+                                                        Next Follow-up: {formatDate(fu.nextFollowUpDate)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-[11px] text-text-muted italic">
+                                        No follow-ups logged for this enquiry yet.
+                                    </p>
+                                )}
+                            </div>
                         </div>
 
                         <div className="p-4 border-t border-border bg-app-bg flex items-center justify-between gap-2 shrink-0">

@@ -1,8 +1,46 @@
 const mongoose = require('mongoose');
 const Customer = require('../models/customer.model');
 const OrderEnquiry = require('../models/orderEnquiry.model');
+const CustomerInteraction = require('../models/customerInteraction.model');
 const { generateNextCustomerCode, peekNextCustomerCode } = require('../models/customer.model');
 const { generateCsv, sendCsvResponse } = require('../utils/csvExport');
+
+const linkEnquiryInteractionsToCustomer = async (tenantId, sourceLeadId, customerId) => {
+    if (!tenantId || !sourceLeadId || !customerId) return;
+    try {
+        const isObjectId = mongoose.Types.ObjectId.isValid(sourceLeadId);
+        const enq = await OrderEnquiry.findOne({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(sourceLeadId) }] : []),
+                { nslNumber: String(sourceLeadId).trim() }
+            ]
+        }).select('_id').lean();
+
+        if (!enq?._id) return;
+
+        await CustomerInteraction.updateMany(
+            {
+                tenant: new mongoose.Types.ObjectId(tenantId),
+                $or: [
+                    { enquiry: enq._id },
+                    { enquiryId: enq._id },
+                    { referenceId: enq._id }
+                ]
+            },
+            {
+                $set: {
+                    customer: customerId,
+                    enquiry: enq._id,
+                    enquiryId: enq._id,
+                    referenceId: enq._id
+                }
+            }
+        );
+    } catch (linkErr) {
+        console.warn('[createCustomer] Interaction backfill warning:', linkErr.message);
+    }
+};
 
 /**
  * Helper to process a single customer creation with atomic code generation and retry
@@ -63,6 +101,9 @@ const createSingleCustomerRecord = async ({ tenantId, customerData }) => {
             tenant: new mongoose.Types.ObjectId(tenantId)
         });
         if (existingGstin) {
+            if (trimmedSourceLeadId) {
+                await linkEnquiryInteractionsToCustomer(tenantId, trimmedSourceLeadId, existingGstin._id);
+            }
             return { customer: existingGstin, isExisting: true };
         }
     }
@@ -74,6 +115,9 @@ const createSingleCustomerRecord = async ({ tenantId, customerData }) => {
         tenant: new mongoose.Types.ObjectId(tenantId)
     });
     if (existingCompany) {
+        if (trimmedSourceLeadId) {
+            await linkEnquiryInteractionsToCustomer(tenantId, trimmedSourceLeadId, existingCompany._id);
+        }
         return { customer: existingCompany, isExisting: true };
     }
 
@@ -142,6 +186,7 @@ const createSingleCustomerRecord = async ({ tenantId, customerData }) => {
                     }
                 }
             );
+            await linkEnquiryInteractionsToCustomer(tenantId, trimmedSourceLeadId, customer._id);
         } catch (linkErr) {
             console.error('Failed to link enquiry with customer:', linkErr);
         }

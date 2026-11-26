@@ -15,6 +15,11 @@ const CustomerInteractionSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    enquiry: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'OrderEnquiry',
+        default: null
+    },
     enquiryId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'OrderEnquiry',
@@ -24,6 +29,26 @@ const CustomerInteractionSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'OrderEnquiry',
         default: null
+    },
+    prospectName: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    contactPerson: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    contactNumber: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    enquiryNumber: {
+        type: String,
+        trim: true,
+        default: ''
     },
     date: {
         type: Date,
@@ -73,7 +98,18 @@ const CustomerInteractionSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
+CustomerInteractionSchema.pre('validate', function () {
+    const hasCustomer = Boolean(this.customer);
+    const hasEnquiry = Boolean(this.enquiry || this.enquiryId || this.referenceId);
+    if (!hasCustomer && !hasEnquiry) {
+        this.invalidate('customer', 'Please link this interaction to either a Customer or an Order Enquiry.');
+    }
+});
+
 CustomerInteractionSchema.index({ tenant: 1, customer: 1, date: -1 });
+CustomerInteractionSchema.index({ tenant: 1, enquiry: 1, date: -1 });
+CustomerInteractionSchema.index({ tenant: 1, enquiryId: 1, date: -1 });
+CustomerInteractionSchema.index({ tenant: 1, nextFollowUpDate: 1 });
 CustomerInteractionSchema.index({ tenant: 1, status: 1 });
 
 module.exports = mongoose.model('CustomerInteraction', CustomerInteractionSchema);

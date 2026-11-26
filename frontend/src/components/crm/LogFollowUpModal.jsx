@@ -54,9 +54,8 @@ export default function LogFollowUpModal({ isOpen, onClose, nslData, onSuccess }
                 undefined;
 
             const payload = {
-                customer: targetCustomer,
-                customerId: targetCustomer,
-                customerName: prospectName,
+                ...(targetCustomer ? { customer: targetCustomer, customerId: targetCustomer } : {}),
+                enquiry: nslData._id,
                 enquiryId: nslData._id,
                 referenceId: nslData._id,
                 date: followUpDate,
