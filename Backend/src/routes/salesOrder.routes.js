@@ -6,7 +6,8 @@ const {
     getSalesOrderById,
     updateSalesOrder,
     updateStatus,
-    deleteSalesOrder
+    deleteSalesOrder,
+    getLastCustomerRate
 } = require('../controllers/salesOrder.controller');
 const { authenticate, checkPermission, checkTenantModule } = require('../middlewares/rbac.middleware');
 
@@ -26,6 +27,13 @@ router.post('/', authenticate, checkPermission('SALES', 'CREATE'), createSalesOr
  * @access  Private (SALES:READ)
  */
 router.get('/', authenticate, checkPermission('SALES', 'READ'), getSalesOrders);
+
+/**
+ * @route   GET /api/sales-orders/last-rate
+ * @desc    Get last agreed rate for a customer + finishedGood
+ * @access  Private (SALES:READ)
+ */
+router.get('/last-rate', authenticate, checkPermission('SALES', 'READ'), getLastCustomerRate);
 
 /**
  * @route   GET /api/sales-orders/:id

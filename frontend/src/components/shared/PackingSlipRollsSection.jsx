@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, Layers, AlertCircle, Search, ChevronDown, X, Loader2 } from 'lucide-react';
 import axiosInstance from '../../api/axiosInstance';
+import { resolveBagWeightSpec } from '../../utils/bagWeightHelper';
 
 /**
  * Empty roll template
@@ -263,10 +264,19 @@ export default function PackingSlipRollsSection({
     onChange,
     availableRolls = [],
     allowRollSelection = false,
+    selectedFinishedGood = null,
     title = 'Packing Slip & Roll Specifications',
     subtitle = 'Inward roll specifications from paper packing list',
     required = false
 }) {
+    const computeRollQtyPcs = (rollObj) => {
+        if (!selectedFinishedGood) return '';
+        const spec = resolveBagWeightSpec(selectedFinishedGood);
+        if (!spec?.weightGrams || spec.weightGrams <= 0 || spec.isUnrealistic) return '';
+        const kg = Number(rollObj.totalQuantityKg || rollObj.qtyKgs || rollObj.netWeight || rollObj.grossWeight || 0);
+        if (!Number.isFinite(kg) || kg <= 0) return '';
+        return String(Math.round((kg * 1000) / spec.weightGrams));
+    };
     const handleAddRoll = () => {
         onChange([...rolls, createEmptyRoll(rolls.length + 1)]);
     };
@@ -298,7 +308,12 @@ export default function PackingSlipRollsSection({
                 netWeight: selectedRoll.netWeight != null ? selectedRoll.netWeight : roll.netWeight,
                 fabricAverage: selectedRoll.fabricAverage != null ? selectedRoll.fabricAverage : roll.fabricAverage,
                 totalQuantityKg: selectedRoll.totalQuantityKg != null ? selectedRoll.totalQuantityKg : roll.totalQuantityKg,
-                totalQuantityPcs: selectedRoll.totalQuantityPcs != null ? selectedRoll.totalQuantityPcs : roll.totalQuantityPcs
+                totalQuantityPcs: selectedFinishedGood
+                    ? computeRollQtyPcs(selectedRoll)
+                    : (selectedRoll.totalQuantityPcs != null ? selectedRoll.totalQuantityPcs : roll.totalQuantityPcs),
+                qtyPcs: selectedFinishedGood
+                    ? computeRollQtyPcs(selectedRoll)
+                    : (selectedRoll.totalQuantityPcs != null ? selectedRoll.totalQuantityPcs : roll.qtyPcs)
             };
         });
         onChange(updated);
@@ -345,9 +360,16 @@ export default function PackingSlipRollsSection({
                 updatedRoll.fabricLength = value;
                 updatedRoll.length = value;
             }
-            if (field === 'totalQuantityKg' || field === 'qtyKgs') {
-                updatedRoll.totalQuantityKg = value;
-                updatedRoll.qtyKgs = value;
+            if (field === 'totalQuantityKg' || field === 'qtyKgs' || field === 'netWeight' || field === 'grossWeight') {
+                if (field === 'totalQuantityKg' || field === 'qtyKgs') {
+                    updatedRoll.totalQuantityKg = value;
+                    updatedRoll.qtyKgs = value;
+                }
+                if (selectedFinishedGood) {
+                    const computedPcs = computeRollQtyPcs(updatedRoll);
+                    updatedRoll.totalQuantityPcs = computedPcs;
+                    updatedRoll.qtyPcs = computedPcs;
+                }
             }
             if (field === 'totalQuantityPcs' || field === 'qtyPcs') {
                 updatedRoll.totalQuantityPcs = value;

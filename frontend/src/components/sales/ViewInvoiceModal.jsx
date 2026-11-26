@@ -13,6 +13,7 @@ export default function ViewInvoiceModal({ isOpen, invoice, onClose, onRecordPay
     const dueAmount = invoice.dueAmount !== undefined ? invoice.dueAmount : Math.max(0, grandTotal - paidAmount);
     const balanceAmount = invoice.balanceAmount !== undefined ? invoice.balanceAmount : dueAmount;
     const isPaid = invoice.paymentStatus === 'PAID';
+    const isExempt = invoice.gstTreatment === 'EXEMPT' || (Number(invoice.gstRate) === 0 && Number(invoice.gstAmount || 0) === 0);
 
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 print:p-0 print:bg-white print:block">
@@ -59,6 +60,11 @@ export default function ViewInvoiceModal({ isOpen, invoice, onClose, onRecordPay
                                 }`}>
                                 {invoice.paymentStatus || 'UNPAID'}
                             </span>
+                            {isExempt && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                    GST Exempt
+                                </span>
+                            )}
                             <button
                                 type="button"
                                 onClick={onClose}
@@ -131,10 +137,25 @@ export default function ViewInvoiceModal({ isOpen, invoice, onClose, onRecordPay
                 {/* Financial Summary */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg border border-border rounded-xl p-3.5">
                     <div className="space-y-1 text-xs">
-                        <div className="text-text-muted">CGST (9%): <span className="font-mono font-semibold text-text-main">₹{(invoice.cgstAmount || 0).toLocaleString()}</span></div>
-                        <div className="text-text-muted">SGST (9%): <span className="font-mono font-semibold text-text-main">₹{(invoice.sgstAmount || 0).toLocaleString()}</span></div>
-                        {invoice.igstAmount > 0 && (
-                            <div className="text-text-muted">IGST (18%): <span className="font-mono font-semibold text-text-main">₹{invoice.igstAmount.toLocaleString()}</span></div>
+                        {isExempt ? (
+                            <>
+                                <div className="font-bold text-emerald-800">
+                                    GST (Exempt): <span className="font-mono font-semibold text-text-main">₹0</span>
+                                </div>
+                                {invoice.exemptionReason && (
+                                    <div className="text-[11px] text-text-muted">
+                                        Reason: <span className="font-semibold text-text-main">{invoice.exemptionReason}</span>
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <>
+                                <div className="text-text-muted">CGST (9%): <span className="font-mono font-semibold text-text-main">₹{(invoice.cgstAmount || 0).toLocaleString()}</span></div>
+                                <div className="text-text-muted">SGST (9%): <span className="font-mono font-semibold text-text-main">₹{(invoice.sgstAmount || 0).toLocaleString()}</span></div>
+                                {invoice.igstAmount > 0 && (
+                                    <div className="text-text-muted">IGST (18%): <span className="font-mono font-semibold text-text-main">₹{invoice.igstAmount.toLocaleString()}</span></div>
+                                )}
+                            </>
                         )}
                     </div>
 

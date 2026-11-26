@@ -4,7 +4,7 @@ import axiosInstance from '../../api/axiosInstance';
 import WorkOrderShortageModal from './WorkOrderShortageModal';
 import InlineLookupSelect from '../shared/InlineLookupSelect';
 import SearchableSelect from '../shared/SearchableSelect';
-import { getTodayLocalDateString } from '../../utils/dateUtils';
+import { getTodayLocalDateString, formatDate } from '../../utils/dateUtils';
 import { formatGsmDisplay } from '../../utils/gsmUtils';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../store/authStore';
@@ -19,7 +19,10 @@ import {
     Trash2,
     X,
     Paperclip,
-    Plus
+    Plus,
+    Lock,
+    AlertTriangle,
+    Link2
 } from 'lucide-react';
 
 const STAGE_LABELS = {
@@ -44,13 +47,20 @@ const ALL_STAGE_KEYS = [
     'BALING_PACKING'
 ];
 
-export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workOrderToEdit = null }) {
+export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workOrderToEdit = null, initialSoLine = null }) {
     // Dropdown master lists
     const [customers, setCustomers] = useState([]);
     const [finishedGoods, setFinishedGoods] = useState([]);
     const [machines, setMachines] = useState([]);
+    const [pendingSoLines, setPendingSoLines] = useState([]);
     const [activeStartingStage, setActiveStartingStage] = useState('FLEXO_PRINTING');
     const [isLoadingDropdowns, setIsLoadingDropdowns] = useState(false);
+
+    // Sales Order Linking State
+    const [selectedSalesOrderId, setSelectedSalesOrderId] = useState('');
+    const [selectedSalesOrderLineId, setSelectedSalesOrderLineId] = useState('');
+    const [allowOverPlan, setAllowOverPlan] = useState(false);
+    const [allowOverPlanReason, setAllowOverPlanReason] = useState('');
 
     // Core Work Order Form State
     const [customer, setCustomer] = useState('');
@@ -124,6 +134,10 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
 
     // Reset Form Fields
     const resetForm = () => {
+        setSelectedSalesOrderId('');
+        setSelectedSalesOrderLineId('');
+        setAllowOverPlan(false);
+        setAllowOverPlanReason('');
         setTargetQuantity('');
         setAssignedMachine('');
         setAssignedOperators([]);
@@ -210,7 +224,77 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
         targetQuantity, isDescriptionManuallyEdited, finishedGoods
     ]);
 
-    // Populate form if in edit mode
+    // Helper to apply a selected Sales Order Line to the WO form
+    const applySoLineSelection = (line, fgList = finishedGoods, custList = customers) => {
+        if (!line) return;
+        const custId = line.customer?._id || line.customer || '';
+        const fgId = line.finishedGood?._id || line.finishedGood || '';
+        if (custId) {
+            setCustomer(custId);
+            const matchedCust = custList.find((c) => c._id === custId) || (typeof line.customer === 'object' ? line.customer : null);
+            if (matchedCust) {
+                if (matchedCust.contactPerson) setContactPersonName(matchedCust.contactPerson);
+                if (matchedCust.phone) setCustomerContactNumber(String(matchedCust.phone).replace(/\D/g, '').slice(0, 10));
+                if (matchedCust.designation) setContactPersonDesignation(matchedCust.designation);
+            }
+        }
+        if (fgId) {
+            setFinishedGood(fgId);
+            const matchedFg = fgList.find((fg) => fg._id === fgId) || (typeof line.finishedGood === 'object' ? line.finishedGood : null);
+            if (matchedFg) {
+                if (Array.isArray(matchedFg.inks) && matchedFg.inks.length > 0) {
+                    setInks([...matchedFg.inks]);
+                }
+                const g = matchedFg.fabricGSM ?? matchedFg.gsm ?? matchedFg.fabricGsm;
+                if (g !== undefined && g !== null && g !== '' && !isNaN(Number(g))) {
+                    setFabricGrammage(String(Number(g)));
+                } else if (typeof matchedFg.name === 'string') {
+                    const match = matchedFg.name.match(/(\d+(?:\.\d+)?)\s*(?:GSM|GMS)/i);
+                    if (match) setFabricGrammage(match[1]);
+                }
+                if (matchedFg.dimensions?.width) setFabricWidthInch(String(matchedFg.dimensions.width));
+                if (matchedFg.dimensions?.length) setFabricLengthInch(String(matchedFg.dimensions.length));
+                if (matchedFg.laminationType) setFabricLaminationType(matchedFg.laminationType);
+                if (matchedFg.printSpec?.printSides) {
+                    const ps = matchedFg.printSpec.printSides;
+                    setProductCategory(ps === 'NONE' ? 'Plain' : 'Print');
+                    setPrintSides(ps);
+                    if (matchedFg.printSpec.frontColours !== undefined) setFrontColours(matchedFg.printSpec.frontColours);
+                    if (matchedFg.printSpec.backColours !== undefined) setBackColours(matchedFg.printSpec.backColours);
+                }
+            }
+        }
+        if (line.hasUnitConversion && line.remainingQuantity > 0) {
+            setTargetQuantity(String(line.remainingQuantity));
+        } else if (!line.hasUnitConversion) {
+            setTargetQuantity('');
+        }
+        if (line.orderDate) {
+            try {
+                setOrderDate(new Date(line.orderDate).toISOString().split('T')[0]);
+            } catch {
+                // keep default
+            }
+        }
+        const countUnit = ['Pcs', 'Bags'].includes(line.orderedUnit) ? line.orderedUnit : 'Bags';
+        setTotalOrderQuantity(line.orderedQuantity !== undefined && line.orderedQuantity !== null ? String(line.orderedQuantity) : '');
+        setTotalOrderQuantityUnit(countUnit);
+        setOrderConfirmed(true);
+        if (Array.isArray(line.poAttachments) && line.poAttachments.length > 0) {
+            setPurchaseOrderFiles(line.poAttachments);
+        }
+        if (line.deliveryDue) {
+            try {
+                setExpectedDeliveryDate(new Date(line.deliveryDue).toISOString().split('T')[0]);
+            } catch {
+                setExpectedDeliveryDate('');
+            }
+        }
+        setAllowOverPlan(false);
+        setAllowOverPlanReason('');
+    };
+
+    // Populate form if in edit mode or initialSoLine mode
     useEffect(() => {
         if (!isOpen) return;
         if (workOrderToEdit) {
@@ -221,6 +305,10 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                 ? workOrderToEdit.assignedOperators.map(op => (typeof op === 'object' && op !== null ? op._id : op)).filter(Boolean)
                 : [];
 
+            setSelectedSalesOrderId(workOrderToEdit.salesOrder?._id || workOrderToEdit.salesOrder || '');
+            setSelectedSalesOrderLineId(workOrderToEdit.salesOrderLineId || '');
+            setAllowOverPlan(Boolean(workOrderToEdit.allowOverPlanReason));
+            setAllowOverPlanReason(workOrderToEdit.allowOverPlanReason || '');
             setCustomer(custId);
             setFinishedGood(fgId);
             setTargetQuantity(workOrderToEdit.targetQuantity !== undefined && workOrderToEdit.targetQuantity !== null ? String(workOrderToEdit.targetQuantity) : '');
@@ -273,8 +361,17 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
             }
             setPurchaseOrderFiles(jod.purchaseOrderFiles || []);
             setRolls(Array.isArray(jod.rolls) && jod.rolls.length > 0 ? jod.rolls : [createEmptyRoll(1)]);
+        } else if (initialSoLine) {
+            setSelectedSalesOrderId(initialSoLine.salesOrderId || '');
+            setSelectedSalesOrderLineId(initialSoLine.lineId || '');
+            applySoLineSelection(initialSoLine);
+        } else {
+            setSelectedSalesOrderId('');
+            setSelectedSalesOrderLineId('');
+            setAllowOverPlan(false);
+            setAllowOverPlanReason('');
         }
-    }, [isOpen, workOrderToEdit]);
+    }, [isOpen, workOrderToEdit, initialSoLine]);
 
     // Fetch dropdown options & tenant production settings when modal opens
     useEffect(() => {
@@ -283,36 +380,46 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
         const fetchDropdowns = async () => {
             try {
                 setIsLoadingDropdowns(true);
-                const [custRes, fgRes, mchRes, profileRes, attrRes, rmRes, empRes] = await Promise.all([
+                const [custRes, fgRes, mchRes, profileRes, attrRes, rmRes, empRes, pendingSoRes] = await Promise.all([
                     axiosInstance.get('/customers?isActive=true&limit=100'),
                     axiosInstance.get('/finished-goods?isActive=true&limit=100'),
                     axiosInstance.get('/machines?isActive=true&limit=100'),
                     axiosInstance.get('/admin/company-profile').catch(() => null),
                     axiosInstance.get('/raw-material-attributes').catch(() => null),
                     axiosInstance.get('/raw-materials?isActive=true&limit=100').catch(() => null),
-                    axiosInstance.get('/employees?isActive=true&limit=200').catch(() => null)
+                    axiosInstance.get('/employees?isActive=true&limit=200').catch(() => null),
+                    axiosInstance.get('/work-orders/pending-production?limit=200').catch(() => null)
                 ]);
 
+                const custList = custRes.data?.success ? (custRes.data.data || []) : [];
+                const fgList = fgRes.data?.success ? (fgRes.data.data || []) : [];
+
                 if (custRes.data?.success) {
-                    const list = custRes.data.data || [];
-                    setCustomers(list);
-                    if (!workOrderToEdit && list.length > 0 && !customer) {
-                        setCustomer(list[0]._id);
-                        if (list[0].contactPerson && !contactPersonName) {
-                            setContactPersonName(list[0].contactPerson);
+                    setCustomers(custList);
+                    if (!workOrderToEdit && !initialSoLine && custList.length > 0 && !customer) {
+                        setCustomer(custList[0]._id);
+                        if (custList[0].contactPerson && !contactPersonName) {
+                            setContactPersonName(custList[0].contactPerson);
                         }
-                        if (list[0].phone && !customerContactNumber) {
-                            setCustomerContactNumber(list[0].phone.replace(/\D/g, '').slice(0, 10));
+                        if (custList[0].phone && !customerContactNumber) {
+                            setCustomerContactNumber(custList[0].phone.replace(/\D/g, '').slice(0, 10));
                         }
                     }
                 }
 
                 if (fgRes.data?.success) {
-                    const list = fgRes.data.data || [];
-                    setFinishedGoods(list);
-                    if (!workOrderToEdit && list.length > 0 && !finishedGood) {
-                        setFinishedGood(list[0]._id);
+                    setFinishedGoods(fgList);
+                    if (!workOrderToEdit && !initialSoLine && fgList.length > 0 && !finishedGood) {
+                        setFinishedGood(fgList[0]._id);
                     }
+                }
+
+                if (pendingSoRes?.data?.success && Array.isArray(pendingSoRes.data.data)) {
+                    setPendingSoLines(pendingSoRes.data.data);
+                }
+
+                if (initialSoLine && !workOrderToEdit) {
+                    applySoLineSelection(initialSoLine, fgList, custList);
                 }
 
                 if (mchRes.data?.success) {
@@ -371,6 +478,102 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
             ? `${op.employeeCode ? `${op.employeeCode} - ` : ''}${op.name || ''}`
             : String(op))).join(', ')
         : (assignedMachine ? 'No Operator Assigned' : '');
+    // Derived Sales Order linking data
+    const soGroupedMap = new Map();
+    pendingSoLines.forEach((line) => {
+        if (!line?.salesOrderId) return;
+        const existing = soGroupedMap.get(line.salesOrderId);
+        if (!existing) {
+            soGroupedMap.set(line.salesOrderId, {
+                salesOrderId: line.salesOrderId,
+                soNumber: line.soNumber,
+                customerName: line.customer?.companyName || line.customer?.name || 'Customer',
+                deliveryDue: line.deliveryDue,
+                isOverdue: line.isOverdue,
+                totalRemaining: Number(line.remainingQuantity || 0),
+                lines: [line]
+            });
+        } else {
+            existing.totalRemaining += Number(line.remainingQuantity || 0);
+            existing.lines.push(line);
+        }
+    });
+
+    const soOptions = [
+        {
+            value: '',
+            code: 'STOCK',
+            label: 'Stock production (no Sales Order)',
+            subLabel: 'Independent make-to-stock Work Order',
+            searchText: 'stock production no sales order independent'
+        },
+        ...Array.from(soGroupedMap.values()).map((so) => ({
+            value: so.salesOrderId,
+            code: so.soNumber,
+            label: so.customerName,
+            subLabel: [
+                `${so.lines.length} pending line${so.lines.length > 1 ? 's' : ''}`,
+                `Rem: ${so.totalRemaining.toLocaleString('en-IN')} Bags`,
+                so.deliveryDue ? `Due: ${formatDate(so.deliveryDue)}` : null
+            ].filter(Boolean).join(' • '),
+            badge: so.isOverdue ? 'OVERDUE' : `${so.totalRemaining.toLocaleString('en-IN')} Bags`,
+            badgeTone: so.isOverdue ? 'rose' : 'amber',
+            searchText: `${so.soNumber} ${so.customerName}`
+        }))
+    ];
+
+    if (selectedSalesOrderId && !soGroupedMap.has(selectedSalesOrderId)) {
+        const fallbackCode = initialSoLine?.soNumber || workOrderToEdit?.salesOrderNumber || 'SO';
+        const fallbackCust = initialSoLine?.customer?.companyName || initialSoLine?.customer?.name || workOrderToEdit?.customer?.companyName || 'Linked Sales Order';
+        soOptions.push({
+            value: selectedSalesOrderId,
+            code: fallbackCode,
+            label: fallbackCust,
+            subLabel: 'Currently linked Sales Order',
+            searchText: `${fallbackCode} ${fallbackCust}`
+        });
+    }
+
+    const linesForSelectedSo = selectedSalesOrderId
+        ? pendingSoLines.filter((l) => l.salesOrderId === selectedSalesOrderId)
+        : [];
+
+    const selectedSoLine =
+        linesForSelectedSo.find((l) => l.lineId === selectedSalesOrderLineId) ||
+        (initialSoLine && initialSoLine.salesOrderId === selectedSalesOrderId && initialSoLine.lineId === selectedSalesOrderLineId ? initialSoLine : null);
+
+    const isOverPlanning = Boolean(
+        selectedSoLine &&
+        selectedSoLine.hasUnitConversion &&
+        targetQuantity !== '' &&
+        Number(targetQuantity) > Number(selectedSoLine.remainingQuantity || 0)
+    );
+
+    const handleSalesOrderChange = (newSoId) => {
+        setSelectedSalesOrderId(newSoId);
+        if (!newSoId) {
+            setSelectedSalesOrderLineId('');
+            setAllowOverPlan(false);
+            setAllowOverPlanReason('');
+            return;
+        }
+        const matchingLines = pendingSoLines.filter((l) => l.salesOrderId === newSoId);
+        if (matchingLines.length === 1) {
+            setSelectedSalesOrderLineId(matchingLines[0].lineId);
+            applySoLineSelection(matchingLines[0]);
+        } else {
+            setSelectedSalesOrderLineId('');
+        }
+    };
+
+    const handleSalesOrderLineChange = (newLineId) => {
+        setSelectedSalesOrderLineId(newLineId);
+        const line = linesForSelectedSo.find((l) => l.lineId === newLineId);
+        if (line) {
+            applySoLineSelection(line);
+        }
+    };
+
     // Collect which required fields are still missing (used for inline feedback)
     const missingFields = [];
     if (!customer) missingFields.push('Customer / Client');
@@ -661,6 +864,10 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
 
             // Step 2: Proceed with WO creation or update with Job Order Details
             const payload = {
+                salesOrderId: selectedSalesOrderId || null,
+                salesOrderLineId: selectedSalesOrderLineId || null,
+                allowOverPlan: Boolean(allowOverPlan),
+                allowOverPlanReason: allowOverPlan ? (allowOverPlanReason || '').trim() : '',
                 customer,
                 finishedGood,
                 targetQuantity: targetQtyNum,
@@ -725,8 +932,8 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
             if (workOrderToEdit?._id) {
                 res = await axiosInstance.put(`/work-orders/${workOrderToEdit._id}`, payload);
                 if (res.data?.success) {
-                    const woNum = res.data.data?.workOrderNumber || workOrderToEdit.workOrderNumber || 'Work Order';
-                    toast.success(`Work Order ${woNum} updated successfully!`);
+                    const woNum = res.data.data?.workOrderNumber || res.data.data?.workOrder?.workOrderNumber || workOrderToEdit.workOrderNumber || 'Work Order';
+                    toast.success(res.data?.message || `Work Order ${woNum} updated successfully!`);
                     resetForm();
                     onClose();
                     if (onSuccess) onSuccess();
@@ -734,8 +941,8 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
             } else {
                 res = await axiosInstance.post('/work-orders', payload);
                 if (res.data?.success) {
-                    const woNum = res.data.data?.workOrderNumber || 'Work Order';
-                    toast.success(`Work Order ${woNum} created successfully!`);
+                    const woNum = res.data.data?.workOrderNumber || res.data.data?.workOrder?.workOrderNumber || 'Work Order';
+                    toast.success(res.data?.message || `Work Order ${woNum} created successfully!`);
                     resetForm();
                     onClose();
                     if (onSuccess) onSuccess();
@@ -800,16 +1007,116 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                 footer={footerButtons}
             >
                 <form id="create-work-order-form" onSubmit={handleSubmit} className="space-y-4 text-xs font-sans pb-4">
+                    {/* SALES ORDER REFERENCE (OPTIONAL LINKING) */}
+                    <div className="p-3 bg-app-bg/70 border border-border rounded-lg space-y-3">
+                        <div>
+                            <label className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                <Link2 size={13} className="text-primary" />
+                                <span>Sales Order Reference</span>
+                                <span className="text-[10px] font-semibold normal-case text-text-muted">(Optional)</span>
+                            </label>
+                            <SearchableSelect
+                                value={selectedSalesOrderId}
+                                onChange={handleSalesOrderChange}
+                                disabled={isLoadingDropdowns || Boolean(initialSoLine) || (Boolean(workOrderToEdit?.salesOrder) && !isAdmin)}
+                                loading={isLoadingDropdowns}
+                                placeholder="Stock production (no Sales Order)"
+                                searchPlaceholder="Search SO number or customer..."
+                                emptyMessage="No pending Sales Orders found"
+                                options={soOptions}
+                            />
+                        </div>
+
+                        {selectedSalesOrderId && linesForSelectedSo.length > 1 && (
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                    Select Sales Order Line Item *
+                                </label>
+                                <SearchableSelect
+                                    required
+                                    value={selectedSalesOrderLineId}
+                                    onChange={handleSalesOrderLineChange}
+                                    disabled={Boolean(initialSoLine)}
+                                    placeholder="-- Choose SO Line Item --"
+                                    searchPlaceholder="Search finished bag spec..."
+                                    options={linesForSelectedSo.map((line) => ({
+                                        value: line.lineId,
+                                        code: line.finishedGood?.code || 'FG',
+                                        label: line.finishedGood?.name || 'Finished Bag',
+                                        subLabel: `Ordered: ${Number(line.orderedQuantity || 0).toLocaleString('en-IN')} ${line.orderedUnit} • Planned: ${Number(line.plannedQuantity || 0).toLocaleString('en-IN')} • Rem: ${Number(line.remainingQuantity || 0).toLocaleString('en-IN')} Bags`,
+                                        badge: `Rem: ${Number(line.remainingQuantity || 0).toLocaleString('en-IN')}`,
+                                        badgeTone: 'amber',
+                                        searchText: `${line.finishedGood?.code || ''} ${line.finishedGood?.name || ''}`
+                                    }))}
+                                />
+                            </div>
+                        )}
+
+                        {selectedSoLine && (() => {
+                            const lineCountUnit = ['Pcs', 'Bags'].includes(selectedSoLine.orderedUnit) ? selectedSoLine.orderedUnit : 'Bags';
+                            return (
+                            <div className="p-2.5 bg-card-bg border border-border rounded-md space-y-2 text-[11px]">
+                                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-1.5">
+                                    <span className="font-mono font-bold text-primary">
+                                        Against {selectedSoLine.soNumber} - line {selectedSoLine.lineIndex || 1} of {selectedSoLine.totalLines || 1} - Ordered {Number(selectedSoLine.orderedQuantity || 0).toLocaleString('en-IN')} {selectedSoLine.orderedUnit} - Already planned {Number(selectedSoLine.plannedQuantity || 0).toLocaleString('en-IN')} - Remaining {selectedSoLine.hasUnitConversion ? Number(selectedSoLine.remainingQuantity || 0).toLocaleString('en-IN') : 'Manual'}
+                                    </span>
+                                    <span className="text-text-muted font-semibold">
+                                        Due: <span className={selectedSoLine.isOverdue ? 'text-rose-600 font-bold' : 'text-text-main font-bold'}>{formatDate(selectedSoLine.deliveryDue)}</span>
+                                    </span>
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono">
+                                    <div>
+                                        <span className="text-[10px] text-text-muted uppercase block">Ordered</span>
+                                        <span className="font-bold text-text-main">
+                                            {Number(selectedSoLine.orderedQuantity || 0).toLocaleString('en-IN')} {selectedSoLine.orderedUnit}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="text-[10px] text-text-muted uppercase block">Planned</span>
+                                        <span className="font-bold text-amber-700">
+                                            {Number(selectedSoLine.plannedQuantity || 0).toLocaleString('en-IN')} {lineCountUnit}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="text-[10px] text-text-muted uppercase block">Remaining</span>
+                                        <span className="font-extrabold text-primary">
+                                            {selectedSoLine.hasUnitConversion ? `${Number(selectedSoLine.remainingQuantity || 0).toLocaleString('en-IN')} ${lineCountUnit}` : 'Manual'}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="text-[10px] text-text-muted uppercase block">FG Stock</span>
+                                        <span className="font-bold text-emerald-700">
+                                            {Number(selectedSoLine.fgCurrentStock || 0).toLocaleString('en-IN')} {lineCountUnit}
+                                            {selectedSoLine.shortfall > 0 ? ` (Short: ${Number(selectedSoLine.shortfall).toLocaleString('en-IN')})` : ''}
+                                        </span>
+                                    </div>
+                                </div>
+                                {!selectedSoLine.hasUnitConversion && (
+                                    <div className="flex items-start gap-1.5 p-2 rounded bg-amber-50 border border-amber-200 text-amber-900">
+                                        <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-600" />
+                                        <span>{selectedSoLine.conversionNote || 'Manual conversion required — enter Target Production Quantity in Bags.'}</span>
+                                    </div>
+                                )}
+                            </div>
+                            );
+                        })()}
+                    </div>
+
                     {/* CORE REQUIRED WO FIELDS (Untouched in position and behavior) */}
                     <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                            Select Customer / Client *
+                        <label className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                            <span>Select Customer / Client *</span>
+                            {selectedSalesOrderId && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold normal-case text-amber-700">
+                                    <Lock size={11} /> Locked from Sales Order
+                                </span>
+                            )}
                         </label>
                         <SearchableSelect
                             required
                             value={customer}
                             onChange={(val) => handleCustomerChange(val)}
-                            disabled={isLoadingDropdowns}
+                            disabled={isLoadingDropdowns || Boolean(selectedSalesOrderId)}
                             loading={isLoadingDropdowns}
                             placeholder={isLoadingDropdowns ? 'Loading Customers...' : '-- Select Customer --'}
                             searchPlaceholder="Search customer by code, name, or GSTIN..."
@@ -825,8 +1132,13 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                            Select Finished Bag Specification *
+                        <label className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                            <span>Select Finished Bag Specification *</span>
+                            {selectedSalesOrderId && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold normal-case text-amber-700">
+                                    <Lock size={11} /> Locked from Sales Order
+                                </span>
+                            )}
                         </label>
                         <SearchableSelect
                             required
@@ -847,7 +1159,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                                     }
                                 }
                             }}
-                            disabled={isLoadingDropdowns}
+                            disabled={isLoadingDropdowns || Boolean(selectedSalesOrderId)}
                             loading={isLoadingDropdowns}
                             placeholder={isLoadingDropdowns ? 'Loading Specifications...' : '-- Select Finished Good Spec --'}
                             searchPlaceholder="Search by code, name, GSM, size, laminated..."
@@ -881,11 +1193,17 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                                 required
                                 step="0.001"
                                 min="0.001"
+                                max={initialSoLine && selectedSoLine?.hasUnitConversion && !allowOverPlan ? selectedSoLine.remainingQuantity : undefined}
                                 placeholder="e.g. 20000"
                                 value={targetQuantity}
                                 onChange={(e) => setTargetQuantity(e.target.value)}
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-bold"
                             />
+                            {selectedSoLine?.hasUnitConversion && (
+                                <p className="text-[10px] text-text-muted mt-1 font-mono">
+                                    Max remaining to plan: <strong>{Number(selectedSoLine.remainingQuantity || 0).toLocaleString('en-IN')} {totalOrderQuantityUnit || 'Bags'}</strong>
+                                </p>
+                            )}
                         </div>
 
                         <div>
@@ -903,6 +1221,35 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                             </select>
                         </div>
                     </div>
+
+                    {isOverPlanning && (
+                        <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-md space-y-2 text-[11px] text-amber-900">
+                            <div className="flex items-start gap-1.5 font-semibold">
+                                <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-600" />
+                                <span>
+                                    Target quantity ({Number(targetQuantity).toLocaleString('en-IN')}) exceeds remaining SO quantity ({Number(selectedSoLine.remainingQuantity).toLocaleString('en-IN')} Bags).
+                                </span>
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer font-bold">
+                                <input
+                                    type="checkbox"
+                                    checked={allowOverPlan}
+                                    onChange={(e) => setAllowOverPlan(e.target.checked)}
+                                    className="rounded border-amber-400 text-primary focus:ring-primary"
+                                />
+                                <span>Allow over-planning (buffer / extra stock)</span>
+                            </label>
+                            {allowOverPlan && (
+                                <input
+                                    type="text"
+                                    placeholder="Optional reason for over-planning (e.g. 5% wastage buffer)"
+                                    value={allowOverPlanReason}
+                                    onChange={(e) => setAllowOverPlanReason(e.target.value)}
+                                    className="w-full border border-amber-300 rounded px-2.5 py-1.5 bg-white text-xs text-text-main focus:outline-none focus:border-primary"
+                                />
+                            )}
+                        </div>
+                    )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
@@ -1490,6 +1837,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                                 rolls={rolls}
                                 onChange={setRolls}
                                 allowRollSelection={true}
+                                selectedFinishedGood={finishedGoods.find((fg) => String(fg._id) === String(finishedGood)) || null}
                                 title="Job Order Roll Specifications"
                                 subtitle="Select available inventory rolls with remaining meters stock or enter manual rolls."
                                 required={true}

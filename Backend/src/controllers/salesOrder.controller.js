@@ -4,6 +4,20 @@ const Customer = require('../models/customer.model');
 const Location = require('../models/location.model');
 const FinishedGood = require('../models/finishedGood.model');
 const OrderEnquiry = require('../models/orderEnquiry.model');
+const WorkOrder = require('../models/workOrder.model');
+const Dispatch = require('../models/dispatch.model');
+const Invoice = require('../models/invoice.model');
+const Notification = require('../models/notification.model');
+const {
+    validateSoStatusTransition,
+    SO_DISPATCHED_STATUSES
+} = require('../utils/salesOrderStatus');
+const {
+    getSoLineId,
+    convertSoQtyToBags,
+    doesWoMatchSoLine,
+    notifyProductionOnSoConfirm
+} = require('../services/soProduction.service');
 
 /**
  * Helper function to auto-generate unique SO number per tenant & year
@@ -30,6 +44,204 @@ const generateSoNumber = async (tenantId) => {
     return `${prefix}${paddedSeq}`;
 };
 
+const ALLOWED_GST_TREATMENTS = ['TAXABLE', 'EXEMPT'];
+
+const computeSoGstTotals = (subtotal, rawTreatment) => {
+    const treatment = rawTreatment ? String(rawTreatment).trim().toUpperCase() : 'TAXABLE';
+    if (!ALLOWED_GST_TREATMENTS.includes(treatment)) {
+        return { error: `Invalid gstTreatment '${rawTreatment}'. Allowed values: TAXABLE, EXEMPT.` };
+    }
+    const cleanSubtotal = Math.max(0, Number(subtotal || 0));
+    if (treatment === 'EXEMPT') {
+        return {
+            gstTreatment: 'EXEMPT',
+            gstRate: 0,
+            gstAmount: 0,
+            grandTotal: cleanSubtotal
+        };
+    }
+    const gstRate = 18;
+    const gstAmount = Math.round((cleanSubtotal * gstRate) / 100);
+    return {
+        gstTreatment: 'TAXABLE',
+        gstRate,
+        gstAmount,
+        grandTotal: cleanSubtotal + gstAmount
+    };
+};
+
+const getSoDependencies = async (salesOrderId, tenantId) => {
+    const [linkedWOs, linkedDispatches, linkedInvoices] = await Promise.all([
+        WorkOrder.find({
+            tenant: tenantId,
+            salesOrder: salesOrderId,
+            status: { $ne: 'CANCELLED' },
+            isActive: true
+        }).select('workOrderNumber status completedQuantity targetQuantity').lean(),
+        Dispatch.find({
+            tenant: tenantId,
+            salesOrder: salesOrderId,
+            deliveryStatus: { $ne: 'CANCELLED' },
+            status: { $ne: 'CANCELLED' },
+            isActive: true
+        }).select('dispatchNumber deliveryStatus').lean(),
+        Invoice.find({
+            tenant: tenantId,
+            salesOrder: salesOrderId,
+            isActive: true
+        }).select('invoiceNumber paymentStatus grandTotal').lean()
+    ]);
+
+    const blockingWOs = linkedWOs.filter((w) => w.status === 'IN_PROGRESS' || w.status === 'COMPLETED' || Number(w.completedQuantity || 0) > 0);
+    const plannedWOs = linkedWOs.filter((w) => !blockingWOs.includes(w));
+
+    return {
+        linkedWOs,
+        blockingWOs,
+        plannedWOs,
+        linkedDispatches,
+        linkedInvoices,
+        hasLinkedWo: linkedWOs.length > 0,
+        hasDispatch: linkedDispatches.length > 0,
+        hasInvoice: linkedInvoices.length > 0
+    };
+};
+
+const createSoModuleNotification = async ({ tenantId, module, title, message, link, referenceId }) => {
+    try {
+        await Notification.create({
+            tenant: tenantId,
+            module,
+            title,
+            message,
+            link,
+            referenceId,
+            isRead: false
+        });
+    } catch (err) {
+        console.error('Notification creation error (SO):', err.message);
+    }
+};
+
+const applySoStatusTransition = async ({
+    salesOrder,
+    targetStatus,
+    remark = '',
+    cancelLinkedWorkOrders,
+    user,
+    tenantId,
+    deps
+}) => {
+    const currStatus = salesOrder.status || 'DRAFT';
+    const nextStatus = String(targetStatus || '').trim().toUpperCase();
+
+    const validation = validateSoStatusTransition({
+        currentStatus: currStatus,
+        targetStatus: nextStatus,
+        remark,
+        hasLinkedWo: deps.hasLinkedWo,
+        hasDispatch: deps.hasDispatch,
+        hasInvoice: deps.hasInvoice
+    });
+
+    if (!validation.valid) {
+        return { error: validation.error, statusCode: 400 };
+    }
+    if (validation.unchanged) {
+        return { unchanged: true };
+    }
+
+    if (nextStatus === 'CANCELLED') {
+        const blockers = [];
+        if (deps.blockingWOs.length > 0) {
+            blockers.push(`Active/Completed Work Orders: ${deps.blockingWOs.map((w) => w.workOrderNumber).join(', ')}`);
+        }
+        if (deps.linkedDispatches.length > 0) {
+            blockers.push(`Dispatches: ${deps.linkedDispatches.map((d) => d.dispatchNumber).join(', ')}`);
+        }
+        if (deps.linkedInvoices.length > 0) {
+            blockers.push(`Invoices: ${deps.linkedInvoices.map((i) => i.invoiceNumber).join(', ')}`);
+        }
+        if (blockers.length > 0) {
+            return {
+                statusCode: 400,
+                error: `Cannot cancel ${salesOrder.soNumber} because linked records exist (${blockers.join('; ')}). Please cancel them first.`
+            };
+        }
+
+        if (deps.plannedWOs.length > 0 && cancelLinkedWorkOrders === undefined) {
+            return {
+                statusCode: 409,
+                requiresWoDecision: true,
+                plannedWorkOrders: deps.plannedWOs.map((w) => ({ _id: w._id, workOrderNumber: w.workOrderNumber, status: w.status })),
+                error: `Linked planned Work Orders exist (${deps.plannedWOs.map((w) => w.workOrderNumber).join(', ')}). Choose whether to cancel or release them.`
+            };
+        }
+
+        if (deps.plannedWOs.length > 0) {
+            const woIds = deps.plannedWOs.map((w) => w._id);
+            if (cancelLinkedWorkOrders === true) {
+                await WorkOrder.updateMany(
+                    { _id: { $in: woIds }, tenant: tenantId },
+                    {
+                        $set: {
+                            status: 'CANCELLED',
+                            remarks: `[SO CANCELLED: ${salesOrder.soNumber}] Cancelled together with Sales Order (${String(remark).trim()})`
+                        }
+                    }
+                );
+            } else {
+                await WorkOrder.updateMany(
+                    { _id: { $in: woIds }, tenant: tenantId },
+                    {
+                        $set: {
+                            salesOrder: null,
+                            salesOrderLineId: null,
+                            salesOrderNumber: '',
+                            remarks: `[Released from cancelled SO ${salesOrder.soNumber}]`
+                        }
+                    }
+                );
+            }
+        }
+
+        salesOrder.cancelledAt = new Date();
+        salesOrder.cancelledBy = user?._id || user?.id || null;
+        salesOrder.cancellationReason = String(remark || '').trim();
+        salesOrder.productionStatus = 'Not Planned';
+        if (Array.isArray(salesOrder.items)) {
+            salesOrder.items.forEach((it) => {
+                it.plannedQuantity = 0;
+            });
+        }
+
+        await OrderEnquiry.updateMany(
+            {
+                tenant: tenantId,
+                $or: [
+                    ...(salesOrder.sourceEnquiry ? [{ _id: salesOrder.sourceEnquiry }] : []),
+                    { salesOrder: salesOrder._id },
+                    { salesOrderNo: salesOrder.soNumber }
+                ]
+            },
+            { $set: { orderConfirmed: false, status: 'Approved', salesOrder: null, salesOrderNo: '' } }
+        );
+    }
+
+    salesOrder.status = nextStatus;
+    salesOrder.statusHistory = Array.isArray(salesOrder.statusHistory) ? salesOrder.statusHistory : [];
+    salesOrder.statusHistory.push({
+        from: currStatus,
+        to: nextStatus,
+        changedBy: user?._id || user?.id || null,
+        changedByName: user?.name || user?.email || '',
+        changedAt: new Date(),
+        remark: String(remark || '').trim()
+    });
+
+    return { changed: true, from: currStatus, to: nextStatus };
+};
+
 /**
  * @desc    Create a new Sales Order
  * @route   POST /api/sales-orders
@@ -49,6 +261,9 @@ const createSalesOrder = async (req, res) => {
         delete req.body.tenant;
         delete req.body.soNumber;
         delete req.body.totalValue;
+        delete req.body.gstAmount;
+        delete req.body.grandTotal;
+        delete req.body.gstRate;
 
         const {
             customer,
@@ -57,7 +272,9 @@ const createSalesOrder = async (req, res) => {
             items,
             dispatchLocation,
             notes,
-            status
+            status,
+            gstTreatment,
+            exemptionReason
         } = req.body;
 
         // 1. Validation
@@ -253,6 +470,11 @@ const createSalesOrder = async (req, res) => {
         const soNumber = await generateSoNumber(tenantId);
         const initialStatus = (status === 'CONFIRMED') ? 'CONFIRMED' : 'DRAFT';
 
+        const gstCalc = computeSoGstTotals(computedTotalValue, gstTreatment);
+        if (gstCalc.error) {
+            return res.status(400).json({ success: false, message: gstCalc.error });
+        }
+
         const salesOrder = new SalesOrder({
             tenant: tenantId,
             soNumber,
@@ -261,7 +483,22 @@ const createSalesOrder = async (req, res) => {
             deliveryDue: deliveryDue ? new Date(deliveryDue) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
             items: cleanedItems,
             totalValue: computedTotalValue,
+            gstTreatment: gstCalc.gstTreatment,
+            exemptionReason: gstCalc.gstTreatment === 'EXEMPT' ? String(exemptionReason || '').trim() : '',
+            gstRate: gstCalc.gstRate,
+            gstAmount: gstCalc.gstAmount,
+            grandTotal: gstCalc.grandTotal,
             status: initialStatus,
+            statusHistory: [
+                {
+                    from: '',
+                    to: initialStatus,
+                    changedBy: req.user?._id || req.user?.id || null,
+                    changedByName: req.user?.name || req.user?.email || '',
+                    changedAt: new Date(),
+                    remark: 'Order created'
+                }
+            ],
             dispatchLocation: dispatchLocation || null,
             notes,
             sourceEnquiry: linkedEnquiry ? linkedEnquiry._id : null,
@@ -271,6 +508,25 @@ const createSalesOrder = async (req, res) => {
 
         await salesOrder.save();
 
+        if (salesOrder.status === 'CONFIRMED') {
+            await notifyProductionOnSoConfirm(salesOrder, tenantId);
+        } else if (salesOrder.status === 'CANCELLED') {
+            // Flag existing active linked Work Orders so shop floor knows SO was cancelled
+            await WorkOrder.updateMany(
+                {
+                    tenant: tenantId,
+                    salesOrder: salesOrder._id,
+                    status: { $ne: 'CANCELLED' },
+                    isActive: true
+                },
+                {
+                    $set: {
+                        remarks: `[SO CANCELLED: ${salesOrder.soNumber}] Sales Order was cancelled`
+                    }
+                }
+            );
+        }
+
         if (linkedEnquiry) {
             await OrderEnquiry.findByIdAndUpdate(linkedEnquiry._id, {
                 status: 'Confirmed',
@@ -278,6 +534,10 @@ const createSalesOrder = async (req, res) => {
                 salesOrder: salesOrder._id,
                 salesOrderNo: salesOrder.soNumber
             });
+        }
+
+        if (salesOrder.status === 'CONFIRMED') {
+            await notifyProductionOnSoConfirm(salesOrder, tenantId);
         }
 
         await salesOrder.populate([
@@ -330,12 +590,27 @@ const getSalesOrders = async (req, res) => {
             });
         }
 
-        const { status, customer, search, page = 1, limit = 20 } = req.query;
+        const { status, productionStatus, customer, search, page = 1, limit = 20 } = req.query;
 
         const filter = { tenant: tenantId };
 
         if (status) {
             filter.status = status;
+        }
+
+        if (productionStatus && productionStatus !== 'All' && productionStatus !== 'All Statuses') {
+            if (productionStatus === 'Not Planned') {
+                filter.$and = filter.$and || [];
+                filter.$and.push({
+                    $or: [
+                        { productionStatus: 'Not Planned' },
+                        { productionStatus: { $exists: false } },
+                        { productionStatus: null }
+                    ]
+                });
+            } else {
+                filter.productionStatus = productionStatus;
+            }
         }
 
         if (customer) {
@@ -428,6 +703,13 @@ const getSalesOrders = async (req, res) => {
                     }
                 });
             }
+
+            const readGstCalc = computeSoGstTotals(soObj.totalValue || 0, soObj.gstTreatment || 'TAXABLE');
+            soObj.gstTreatment = readGstCalc.gstTreatment;
+            soObj.exemptionReason = soObj.gstTreatment === 'EXEMPT' ? (soObj.exemptionReason || '') : '';
+            soObj.gstRate = soObj.gstTreatment === 'EXEMPT' ? 0 : (soObj.gstRate ?? readGstCalc.gstRate);
+            soObj.gstAmount = soObj.gstTreatment === 'EXEMPT' ? 0 : (soObj.gstAmount ?? readGstCalc.gstAmount);
+            soObj.grandTotal = soObj.gstTreatment === 'EXEMPT' ? (soObj.totalValue || 0) : (soObj.grandTotal ?? readGstCalc.grandTotal);
             return soObj;
         });
 
@@ -477,6 +759,7 @@ const getSalesOrderById = async (req, res) => {
 
         const salesOrder = await SalesOrder.findOne({ _id: req.params.id, tenant: tenantId })
             .populate('customer', 'companyName name code contactPerson phone email address city gstin creditLimit')
+            .populate('cancelledBy', 'name email')
             .populate({
                 path: 'sourceEnquiry',
                 select: 'customer customerRef newCustomerDetails nslNumber',
@@ -542,6 +825,60 @@ const getSalesOrderById = async (req, res) => {
             });
         }
 
+        // Attach Production Plan (line-by-line ordered/planned/remaining & linked Work Orders)
+        const linkedWOs = await WorkOrder.find({
+            tenant: tenantId,
+            salesOrder: responseData._id,
+            status: { $ne: 'CANCELLED' },
+            isActive: true
+        })
+            .select('workOrderNumber salesOrderLineId finishedGood targetQuantity completedQuantity status createdAt')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        responseData.productionStatus = responseData.productionStatus || 'Not Planned';
+        responseData.productionPlan = (responseData.items || []).map((item, idx) => {
+            const lineId = getSoLineId(item, idx);
+            const lineWOs = linkedWOs.filter((wo) => doesWoMatchSoLine(wo, item, idx));
+            const plannedQuantity = lineWOs.reduce((sum, w) => sum + Number(w.targetQuantity || 0), 0);
+            const orderedQuantity = Number(item.quantity || 0);
+            const unit = item.unit || 'Pcs';
+            const conv = convertSoQtyToBags(orderedQuantity, unit, item.finishedGood);
+            const orderedBags = conv.hasConversion && conv.convertedBags !== null ? conv.convertedBags : orderedQuantity;
+            const remainingQuantity = Math.max(0, Number((orderedBags - plannedQuantity).toFixed(3)));
+
+            return {
+                lineId,
+                lineIndex: idx + 1,
+                finishedGood: item.finishedGood,
+                orderedQuantity,
+                unit,
+                convertedOrderedBags: orderedBags,
+                hasUnitConversion: conv.hasConversion,
+                conversionNote: conv.conversionNote,
+                plannedQuantity,
+                remainingQuantity,
+                linkedWorkOrders: lineWOs.map((w) => ({
+                    _id: w._id,
+                    workOrderNumber: w.workOrderNumber,
+                    targetQuantity: w.targetQuantity,
+                    completedQuantity: w.completedQuantity || 0,
+                    status: w.status
+                }))
+            };
+        });
+
+        const deps = await getSoDependencies(responseData._id, tenantId);
+        responseData.dependencies = {
+            hasLinkedWo: deps.hasLinkedWo,
+            hasDispatch: deps.hasDispatch,
+            hasInvoice: deps.hasInvoice,
+            workOrdersCount: deps.linkedWOs.length,
+            dispatchesCount: deps.linkedDispatches.length,
+            invoicesCount: deps.linkedInvoices.length,
+            plannedWorkOrders: deps.plannedWOs.map((w) => ({ _id: w._id, workOrderNumber: w.workOrderNumber, status: w.status }))
+        };
+
         return res.status(200).json({
             success: true,
             data: responseData
@@ -587,16 +924,23 @@ const updateSalesOrder = async (req, res) => {
             });
         }
 
-        if (salesOrder.status !== 'DRAFT' && salesOrder.status !== 'CONFIRMED') {
+        if (salesOrder.status === 'CANCELLED') {
             return res.status(400).json({
                 success: false,
-                message: `Cannot edit Sales Order with status '${salesOrder.status}'. Only 'DRAFT' or 'CONFIRMED' orders can be modified.`
+                message: 'Cancelled Sales Orders are read-only and cannot be edited.'
             });
         }
+
+        const deps = await getSoDependencies(salesOrder._id, tenantId);
+        const isDispatchedState = SO_DISPATCHED_STATUSES.includes(salesOrder.status);
+        const isLockedByDeps = deps.hasLinkedWo || deps.hasDispatch || deps.hasInvoice;
 
         delete req.body.tenant;
         delete req.body.soNumber;
         delete req.body.totalValue;
+        delete req.body.gstAmount;
+        delete req.body.grandTotal;
+        delete req.body.gstRate;
 
         const {
             customer,
@@ -604,10 +948,56 @@ const updateSalesOrder = async (req, res) => {
             deliveryDue,
             items,
             dispatchLocation,
-            notes
+            notes,
+            gstTreatment,
+            exemptionReason,
+            status: requestedStatus,
+            statusRemark,
+            cancellationReason,
+            cancelLinkedWorkOrders
         } = req.body;
 
-        if (customer) {
+        if (isDispatchedState) {
+            // Only allow notes update or DISPATCHED -> DELIVERED transition
+            if (notes !== undefined) salesOrder.notes = notes;
+            if (requestedStatus && requestedStatus !== salesOrder.status) {
+                const tr = await applySoStatusTransition({
+                    salesOrder,
+                    targetStatus: requestedStatus,
+                    remark: statusRemark || cancellationReason || '',
+                    cancelLinkedWorkOrders,
+                    user: req.user,
+                    tenantId,
+                    deps
+                });
+                if (tr.error) {
+                    return res.status(tr.statusCode || 400).json({
+                        success: false,
+                        message: tr.error,
+                        ...(tr.requiresWoDecision ? { requiresWoDecision: true, plannedWorkOrders: tr.plannedWorkOrders } : {})
+                    });
+                }
+            }
+            await salesOrder.save();
+            await salesOrder.populate([
+                { path: 'customer', select: 'companyName code contactPerson phone' },
+                { path: 'dispatchLocation', select: 'name code type' },
+                { path: 'items.finishedGood', select: 'name code uom currentStock' }
+            ]);
+            return res.status(200).json({
+                success: true,
+                message: 'Sales Order updated successfully.',
+                data: salesOrder
+            });
+        }
+
+        if (customer && String(customer) !== String(salesOrder.customer)) {
+            if (isLockedByDeps) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Customer cannot be changed once Work Orders, Dispatches, or Invoices exist for this Sales Order.'
+                });
+            }
             const customerDoc = await Customer.findOne({ _id: customer, tenant: tenantId });
             if (!customerDoc) {
                 return res.status(400).json({
@@ -633,7 +1023,7 @@ const updateSalesOrder = async (req, res) => {
             }
         }
 
-        if (orderDate) salesOrder.orderDate = orderDate;
+        if (orderDate && !isLockedByDeps) salesOrder.orderDate = orderDate;
         if (deliveryDue) salesOrder.deliveryDue = deliveryDue;
         if (notes !== undefined) salesOrder.notes = notes;
 
@@ -643,6 +1033,37 @@ const updateSalesOrder = async (req, res) => {
                     success: false,
                     message: 'items must be a non-empty array.'
                 });
+            }
+
+            if (isLockedByDeps) {
+                if (items.length !== salesOrder.items.length) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Products cannot be added or removed once Work Orders, Dispatches, or Invoices exist.'
+                    });
+                }
+                for (let idx = 0; idx < items.length; idx++) {
+                    const inc = items[idx];
+                    const existing = salesOrder.items.find((i) => String(i.finishedGood) === String(inc.finishedGood));
+                    if (!existing) {
+                        return res.status(400).json({
+                            success: false,
+                            message: 'Products cannot be changed once Work Orders, Dispatches, or Invoices exist.'
+                        });
+                    }
+                    if (inc.unit && existing.unit && String(inc.unit).toLowerCase() !== String(existing.unit).toLowerCase()) {
+                        return res.status(400).json({
+                            success: false,
+                            message: `Unit for product cannot be changed from '${existing.unit}' once Work Orders, Dispatches, or Invoices exist.`
+                        });
+                    }
+                    if (Number(inc.quantity) < Number(existing.quantity)) {
+                        return res.status(400).json({
+                            success: false,
+                            message: `Quantity cannot be reduced below ${existing.quantity} ${existing.unit || 'Pcs'} once Work Orders, Dispatches, or Invoices exist.`
+                        });
+                    }
+                }
             }
 
             const finishedGoodIds = new Set();
@@ -707,7 +1128,70 @@ const updateSalesOrder = async (req, res) => {
             salesOrder.totalValue = computedTotalValue;
         }
 
+        const effectiveTreatment = gstTreatment !== undefined ? gstTreatment : (salesOrder.gstTreatment || 'TAXABLE');
+        const gstCalc = computeSoGstTotals(salesOrder.totalValue || 0, effectiveTreatment);
+        if (gstCalc.error) {
+            return res.status(400).json({ success: false, message: gstCalc.error });
+        }
+        salesOrder.gstTreatment = gstCalc.gstTreatment;
+        salesOrder.gstRate = gstCalc.gstRate;
+        salesOrder.gstAmount = gstCalc.gstAmount;
+        salesOrder.grandTotal = gstCalc.grandTotal;
+        if (gstCalc.gstTreatment === 'EXEMPT') {
+            if (exemptionReason !== undefined) {
+                salesOrder.exemptionReason = String(exemptionReason || '').trim();
+            }
+        } else {
+            salesOrder.exemptionReason = '';
+        }
+
+        let transitionResult = null;
+        if (requestedStatus && String(requestedStatus).trim().toUpperCase() !== salesOrder.status) {
+            transitionResult = await applySoStatusTransition({
+                salesOrder,
+                targetStatus: requestedStatus,
+                remark: statusRemark || cancellationReason || '',
+                cancelLinkedWorkOrders,
+                user: req.user,
+                tenantId,
+                deps
+            });
+            if (transitionResult.error) {
+                return res.status(transitionResult.statusCode || 400).json({
+                    success: false,
+                    message: transitionResult.error,
+                    ...(transitionResult.requiresWoDecision
+                        ? { requiresWoDecision: true, plannedWorkOrders: transitionResult.plannedWorkOrders }
+                        : {})
+                });
+            }
+        }
+
         await salesOrder.save();
+
+        if (transitionResult?.changed) {
+            if (salesOrder.status === 'CONFIRMED') {
+                await notifyProductionOnSoConfirm(salesOrder, tenantId);
+            } else if (salesOrder.status === 'READY_FOR_DISPATCH') {
+                await createSoModuleNotification({
+                    tenantId,
+                    module: 'DISPATCH',
+                    title: 'Sales Order Ready for Dispatch',
+                    message: `Sales Order ${salesOrder.soNumber} is marked Ready for Dispatch.`,
+                    link: '/dispatch',
+                    referenceId: salesOrder._id
+                });
+            } else if (salesOrder.status === 'CANCELLED') {
+                await createSoModuleNotification({
+                    tenantId,
+                    module: 'PRODUCTION',
+                    title: 'Sales Order Cancelled',
+                    message: `Sales Order ${salesOrder.soNumber} was cancelled. Reason: ${salesOrder.cancellationReason || 'N/A'}`,
+                    link: '/production?tab=work-orders',
+                    referenceId: salesOrder._id
+                });
+            }
+        }
 
         await salesOrder.populate([
             { path: 'customer', select: 'companyName code contactPerson phone' },
@@ -752,7 +1236,7 @@ const updateStatus = async (req, res) => {
             });
         }
 
-        const { status } = req.body;
+        const { status, remark, cancellationReason, cancelLinkedWorkOrders } = req.body;
         if (!status) {
             return res.status(400).json({
                 success: false,
@@ -768,42 +1252,52 @@ const updateStatus = async (req, res) => {
             });
         }
 
-        if (status === 'DISPATCHED' || status === 'FULLY_DISPATCHED' || status === 'PARTIALLY_DISPATCHED' || status === 'DELIVERED') {
-            return res.status(400).json({
-                success: false,
-                message: `Status '${status}' cannot be set manually. Dispatch statuses are set automatically by the Dispatch module.`
-            });
-        }
+        const deps = await getSoDependencies(salesOrder._id, tenantId);
+        const tr = await applySoStatusTransition({
+            salesOrder,
+            targetStatus: status,
+            remark: remark || cancellationReason || '',
+            cancelLinkedWorkOrders,
+            user: req.user,
+            tenantId,
+            deps
+        });
 
-        if (status === 'CANCELLED') {
-            if (salesOrder.status === 'DISPATCHED' || salesOrder.status === 'DELIVERED') {
-                return res.status(400).json({
-                    success: false,
-                    message: `Cannot cancel a Sales Order that is already ${salesOrder.status}.`
-                });
-            }
-            salesOrder.status = 'CANCELLED';
-            await OrderEnquiry.updateMany(
-                {
-                    tenant: tenantId,
-                    $or: [
-                        ...(salesOrder.sourceEnquiry ? [{ _id: salesOrder.sourceEnquiry }] : []),
-                        { salesOrder: salesOrder._id },
-                        { salesOrderNo: salesOrder.soNumber }
-                    ]
-                },
-                { $set: { orderConfirmed: false, status: 'Approved', salesOrder: null, salesOrderNo: '' } }
-            );
-        } else if (status === 'CONFIRMED' || status === 'READY_FOR_DISPATCH' || status === 'DRAFT') {
-            salesOrder.status = status;
-        } else {
-            return res.status(400).json({
+        if (tr.error) {
+            return res.status(tr.statusCode || 400).json({
                 success: false,
-                message: `Invalid status transition to '${status}'.`
+                message: tr.error,
+                ...(tr.requiresWoDecision
+                    ? { requiresWoDecision: true, plannedWorkOrders: tr.plannedWorkOrders }
+                    : {})
             });
         }
 
         await salesOrder.save();
+
+        if (tr.changed) {
+            if (salesOrder.status === 'CONFIRMED') {
+                await notifyProductionOnSoConfirm(salesOrder, tenantId);
+            } else if (salesOrder.status === 'READY_FOR_DISPATCH') {
+                await createSoModuleNotification({
+                    tenantId,
+                    module: 'DISPATCH',
+                    title: 'Sales Order Ready for Dispatch',
+                    message: `Sales Order ${salesOrder.soNumber} is marked Ready for Dispatch.`,
+                    link: '/dispatch',
+                    referenceId: salesOrder._id
+                });
+            } else if (salesOrder.status === 'CANCELLED') {
+                await createSoModuleNotification({
+                    tenantId,
+                    module: 'PRODUCTION',
+                    title: 'Sales Order Cancelled',
+                    message: `Sales Order ${salesOrder.soNumber} was cancelled. Reason: ${salesOrder.cancellationReason || 'N/A'}`,
+                    link: '/production?tab=work-orders',
+                    referenceId: salesOrder._id
+                });
+            }
+        }
 
         return res.status(200).json({
             success: true,
@@ -861,6 +1355,25 @@ const deleteSalesOrder = async (req, res) => {
         salesOrder.isActive = false;
         await salesOrder.save();
 
+        if (salesOrder.status === 'CONFIRMED') {
+            await notifyProductionOnSoConfirm(salesOrder, tenantId);
+        } else if (salesOrder.status === 'CANCELLED') {
+            // Flag existing active linked Work Orders so shop floor knows SO was cancelled
+            await WorkOrder.updateMany(
+                {
+                    tenant: tenantId,
+                    salesOrder: salesOrder._id,
+                    status: { $ne: 'CANCELLED' },
+                    isActive: true
+                },
+                {
+                    $set: {
+                        remarks: `[SO CANCELLED: ${salesOrder.soNumber}] Sales Order was cancelled`
+                    }
+                }
+            );
+        }
+
         if (salesOrder.status === 'CANCELLED' || salesOrder.status === 'DRAFT') {
             await OrderEnquiry.updateMany(
                 {
@@ -898,11 +1411,63 @@ const deleteSalesOrder = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get the last agreed rate for a customer + finishedGood
+ * @route   GET /api/sales-orders/last-rate
+ * @access  Private (SALES:READ permission)
+ */
+const getLastCustomerRate = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant context missing.' });
+        }
+        const { customerId, finishedGoodId } = req.query;
+        if (!customerId || !finishedGoodId) {
+            return res.status(200).json({ success: true, data: null });
+        }
+
+        const lastSo = await SalesOrder.findOne({
+            tenant: tenantId,
+            customer: customerId,
+            status: { $ne: 'CANCELLED' },
+            'items.finishedGood': finishedGoodId,
+            isActive: true
+        })
+            .sort({ orderDate: -1, createdAt: -1 })
+            .select('soNumber orderDate items')
+            .lean();
+
+        if (!lastSo) {
+            return res.status(200).json({ success: true, data: null });
+        }
+
+        const matchedItem = (lastSo.items || []).find((i) => String(i.finishedGood) === String(finishedGoodId));
+        if (!matchedItem) {
+            return res.status(200).json({ success: true, data: null });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                ratePerUnit: Number(matchedItem.ratePerUnit || 0),
+                unit: matchedItem.unit || 'Pcs',
+                soNumber: lastSo.soNumber,
+                orderDate: lastSo.orderDate
+            }
+        });
+    } catch (error) {
+        console.error('Error in getLastCustomerRate:', error);
+        return res.status(500).json({ success: false, message: 'Failed to fetch last customer rate.' });
+    }
+};
+
 module.exports = {
     createSalesOrder,
     getSalesOrders,
     getSalesOrderById,
     updateSalesOrder,
     updateStatus,
-    deleteSalesOrder
+    deleteSalesOrder,
+    getLastCustomerRate
 };

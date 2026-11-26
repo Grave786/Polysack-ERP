@@ -9,6 +9,7 @@ const {
     cancelWorkOrder,
     getWorkOrders,
     getWorkOrderById,
+    getPendingProductionLines,
     getAvailableRolls,
     getRollsTraceability,
     skipStage,
@@ -88,6 +89,13 @@ router.post('/', authenticate, checkPermission('PRODUCTION', 'CREATE'), createWo
  * @access  Private (PRODUCTION:READ)
  */
 router.get('/', authenticate, checkPermission('PRODUCTION', 'READ'), getWorkOrders);
+
+/**
+ * @route   GET /api/work-orders/pending-production
+ * @desc    Get confirmed Sales Order lines pending production planning
+ * @access  Private (PRODUCTION:READ)
+ */
+router.get('/pending-production', authenticate, checkPermission('PRODUCTION', 'READ'), getPendingProductionLines);
 
 /**
  * @route   GET /api/work-orders/available-rolls

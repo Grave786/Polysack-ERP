@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import TabbedResourcePage from '../components/shared/TabbedResourcePage';
 import ProductionStageMonitor from '../components/production/ProductionStageMonitor';
+import PendingProductionTab from '../components/production/PendingProductionTab';
 import CreateWorkOrderModal from '../components/production/CreateWorkOrderModal';
 import DetailViewModal from '../components/shared/DetailViewModal';
-import { Layers, Activity, FileText, Plus, Eye, Pencil, AlertTriangle } from 'lucide-react';
+import { Layers, Activity, FileText, Plus, Eye, Pencil, AlertTriangle, ClipboardList, Link2 } from 'lucide-react';
 import axiosInstance from '../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
@@ -29,7 +30,9 @@ export default function ProductionPage() {
     const woIdFromUrl = searchParams.get('id');
 
     const [selectedWorkOrderId, setSelectedWorkOrderId] = useState(null);
-    const [activeTabKey, setActiveTabKey] = useState('work-orders');
+    const [activeTabKey, setActiveTabKey] = useState(woIdFromUrl ? 'work-orders' : 'pending-production');
+    const [pendingCount, setPendingCount] = useState(0);
+    const [initialSoLine, setInitialSoLine] = useState(null);
 
     // One-time consumption of redirect tab param
     useEffect(() => {
@@ -61,6 +64,17 @@ export default function ProductionPage() {
     const [cancelModalOpen, setCancelModalOpen] = useState(false);
     const [woToCancel, setWoToCancel] = useState(null);
     const [isCancelling, setIsCancelling] = useState(false);
+
+    useEffect(() => {
+        axiosInstance.get('/work-orders/pending-production?limit=1')
+            .then((res) => {
+                if (res.data?.success) {
+                    const count = res.data.summary?.linesPending ?? res.data.pagination?.total ?? res.data.count ?? 0;
+                    setPendingCount(Number(count) || 0);
+                }
+            })
+            .catch(() => {});
+    }, [refreshKey]);
 
     const handleTrackJob = (workOrderId) => {
         setSelectedWorkOrderId(workOrderId);
@@ -113,6 +127,32 @@ export default function ProductionPage() {
 
     const tabs = [
         {
+            key: 'pending-production',
+            label: 'Pending for Production',
+            badgeCount: pendingCount,
+            isAddable: false,
+            icon: ClipboardList,
+            customRender: () => (
+                <PendingProductionTab
+                    refreshKey={refreshKey}
+                    onCreateWorkOrderFromLine={(line) => {
+                        setInitialSoLine(line);
+                        setEditOrderRecord(null);
+                        setIsCreateModalOpen(true);
+                    }}
+                    onViewWorkOrder={(woId) => {
+                        if (!woId) return;
+                        axiosInstance.get(`/work-orders/${woId}`).then((res) => {
+                            if (res.data?.success && res.data?.data) {
+                                setViewOrderRecord(res.data.data);
+                            }
+                        }).catch(() => {});
+                    }}
+                    onCountChange={(cnt) => setPendingCount(Number(cnt) || 0)}
+                />
+            )
+        },
+        {
             key: 'work-orders',
             label: 'Active Work Orders',
             icon: Layers,
@@ -121,6 +161,7 @@ export default function ProductionPage() {
                 const u = row.unit || row.jobOrderDetails?.totalOrderQuantityUnit || 'Bags';
                 return {
                     'WORK ORDER #': row.workOrderNumber || row.code || '',
+                    'SO NUMBER': row.salesOrderNumber || 'Unlinked',
                     'CUSTOMER / CLIENT': row.customer?.companyName || row.customerName || '',
                     'WORK TITLE': row.finishedGood?.productName || row.workTitle || '',
                     'TARGET QTY': `${Number(row.targetQuantity || 0).toLocaleString('en-IN')} ${u}`,
@@ -136,6 +177,39 @@ export default function ProductionPage() {
                     accessor: 'workOrderNumber',
                     exportValue: (row) => row.workOrderNumber || row.code || '',
                     sortable: true
+                },
+                {
+                    header: 'SO NUMBER',
+                    accessor: 'salesOrderNumber',
+                    exportValue: (row) => row.salesOrderNumber || 'Unlinked',
+                    render: (row) => {
+                        if (row.salesOrderNumber) {
+                            return (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-primary/10 text-primary border border-primary/20 whitespace-nowrap">
+                                    <Link2 size={11} />
+                                    {row.salesOrderNumber}
+                                </span>
+                            );
+                        }
+                        return (
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-[11px] text-text-muted font-medium">Unlinked</span>
+                                {isAdmin && row.status !== 'CANCELLED' && row.status !== 'COMPLETED' && (
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setEditOrderRecord(row);
+                                        }}
+                                        className="px-1.5 py-0.5 text-[10px] font-bold text-primary hover:bg-primary/10 border border-primary/30 rounded cursor-pointer transition-colors"
+                                        title="Link to Sales Order"
+                                    >
+                                        Link SO
+                                    </button>
+                                )}
+                            </div>
+                        );
+                    }
                 },
                 {
                     header: 'CUSTOMER / CLIENT',
@@ -362,6 +436,7 @@ export default function ProductionPage() {
         {
             key: 'stage-monitor',
             label: 'Live Production Pipeline Monitor',
+            isAddable: false,
             icon: Activity,
             customRender: () => (
                 <ProductionStageMonitor
@@ -403,13 +478,16 @@ export default function ProductionPage() {
             <CreateWorkOrderModal
                 isOpen={isCreateModalOpen || Boolean(editOrderRecord)}
                 workOrderToEdit={editOrderRecord}
+                initialSoLine={initialSoLine}
                 onClose={() => {
                     setIsCreateModalOpen(false);
                     setEditOrderRecord(null);
+                    setInitialSoLine(null);
                 }}
                 onSuccess={() => {
                     setRefreshKey((prev) => prev + 1);
                     setEditOrderRecord(null);
+                    setInitialSoLine(null);
                 }}
             />
 

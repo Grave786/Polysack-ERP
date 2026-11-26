@@ -739,13 +739,13 @@ export default function TabbedResourcePage({
 
     // Keep tab count badge updated when pagination total changes for active tab
     useEffect(() => {
-        if (activeTab && !isTabPlaceholder && pagination?.total !== undefined) {
+        if (activeTab && activeTab.resourcePath && !isTabPlaceholder && pagination?.total !== undefined) {
             setTabCounts((prev) => ({
                 ...prev,
                 [activeTab.key]: pagination.total
             }));
         }
-    }, [activeTab?.key, isTabPlaceholder, pagination?.total]);
+    }, [activeTab?.key, activeTab?.resourcePath, isTabPlaceholder, pagination?.total]);
 
     // Auto-generate unique Employee Code when opening employee creation drawer
     useEffect(() => {
@@ -2081,6 +2081,13 @@ export default function TabbedResourcePage({
                     }
                 })
                 .catch(() => {});
+        }
+
+        if (activeTab?.isAddable === false || activeTab?.customRender) {
+            if (onAddClick && (activeTabKey === 'work-orders' || activeTabKey === 'stage-monitor')) {
+                onAddClick(activeTabKey);
+            }
+            return;
         }
 
         if (onAddClick && (activeTabKey === 'work-orders' || activeTabKey === 'stage-monitor')) {
@@ -4496,8 +4503,8 @@ export default function TabbedResourcePage({
                     {/* Optional Custom Header Action Buttons */}
                     {typeof headerActions === 'function' ? headerActions(handleOpenDrawer) : headerActions}
 
-                    {/* Top-Right Dynamic "Add New Record" Button (rendered only if custom headerActions is not supplied) */}
-                    {!headerActions && (
+                    {/* Top-Right Dynamic "Add New Record" Button (rendered only if custom headerActions is not supplied and tab is addable) */}
+                    {!headerActions && activeTab?.isAddable !== false && !activeTab?.customRender && (
                         <button
                             type="button"
                             className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-3.5 py-2 bg-primary hover:bg-primary-hover text-sidebar-bg font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
@@ -4518,7 +4525,9 @@ export default function TabbedResourcePage({
                             {tabs.map((tab) => {
                                 const isActive = tab.key === activeTabKey;
                                 const isPlaceholderTab = tab.isPlaceholder || (!tab.resourcePath && !tab.customRender);
-                                const count = isPlaceholderTab ? '—' : tabCounts[tab.key];
+                                const count = tab.badgeCount !== undefined
+                                    ? tab.badgeCount
+                                    : (isPlaceholderTab || !tab.resourcePath ? '—' : tabCounts[tab.key]);
                                 const TabIcon = tab.icon;
 
                                 return (

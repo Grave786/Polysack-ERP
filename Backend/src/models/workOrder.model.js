@@ -367,6 +367,26 @@ const WorkOrderSchema = new mongoose.Schema({
         ref: 'Customer',
         required: [true, 'Customer is required']
     },
+    salesOrder: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SalesOrder',
+        default: null
+    },
+    salesOrderLineId: {
+        type: String,
+        trim: true,
+        default: null
+    },
+    salesOrderNumber: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    allowOverPlanReason: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     finishedGood: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'FinishedGood',
@@ -473,5 +493,6 @@ WorkOrderSchema.methods.recalculateProgress = function () {
 WorkOrderSchema.index({ workOrderNumber: 1, tenant: 1 }, { unique: true });
 WorkOrderSchema.index({ tenant: 1, createdAt: 1 });
 WorkOrderSchema.index({ tenant: 1, assignedMachine: 1 });
+WorkOrderSchema.index({ tenant: 1, salesOrder: 1, salesOrderLineId: 1 });
 
 module.exports = mongoose.model('WorkOrder', WorkOrderSchema);

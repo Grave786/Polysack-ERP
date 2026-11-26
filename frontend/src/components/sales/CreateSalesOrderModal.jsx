@@ -5,123 +5,16 @@ import SearchableSelect from '../shared/SearchableSelect';
 import axiosInstance from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 import { getTodayLocalDateString, getFutureLocalDateString, formatToLocalDateString } from '../../utils/dateUtils';
+import {
+    normalizeSoUnit,
+    mapFgUomToOption,
+    resolveBagWeightSpec,
+    getUnitConversionFeedback
+} from '../../utils/bagWeightHelper';
+import { getAllowedSoStatuses, SO_STATUS_LABELS } from '../../utils/salesOrderStatus';
 
 // Allowed Sales Order Units (Always lists all 4 units)
 const ALL_SO_UNITS = ['Pcs', 'Kg', 'Roll', 'Bags'];
-
-// Normalize any legacy/case-variant unit to the canonical option
-const normalizeSoUnit = (unitStr) => {
-    if (!unitStr) return 'Pcs';
-    const lower = String(unitStr).trim().toLowerCase();
-    if (['kg', 'kgs', 'kilogram', 'kilograms', 'kilo'].includes(lower)) return 'Kg';
-    if (['roll', 'rolls', 'rl'].includes(lower)) return 'Roll';
-    if (['bags', 'bag'].includes(lower)) return 'Bags';
-    if (['pcs', 'pc', 'pieces', 'piece', 'nos', 'no', 'units', 'unit'].includes(lower)) return 'Pcs';
-    return ALL_SO_UNITS.includes(unitStr) ? unitStr : 'Pcs';
-};
-
-// Helper to map finished good's own UOM to one of the 4 standard options
-const mapFgUomToOption = (selectedFg) => {
-    if (!selectedFg) return 'Pcs';
-    const fgUom = (selectedFg.uom && typeof selectedFg.uom === 'object' && (selectedFg.uom.symbol || selectedFg.uom.name || selectedFg.uom.abbreviation))
-        ? (selectedFg.uom.symbol || selectedFg.uom.name || selectedFg.uom.abbreviation)
-        : (typeof selectedFg.uom === 'string' && !/^[0-9a-fA-F]{24}$/.test(selectedFg.uom) ? selectedFg.uom : (selectedFg.unit || 'Pcs'));
-    return normalizeSoUnit(fgUom);
-};
-
-// Helper to resolve physical empty bag weight in grams
-const resolveEmptyBagWeightGms = (fg) => {
-    if (!fg) return null;
-    const directWeight = Number(fg.bagWeightGms || fg.tareWeightGram || 0);
-    if (directWeight >= 15 && directWeight <= 500) {
-        return directWeight;
-    }
-    const gsm = Number(fg.fabricGSM || fg.gsm || 0);
-    const width = Number(fg.dimensions?.width || 0);
-    const length = Number(fg.dimensions?.length || 0);
-    const dimUnit = String(fg.dimensionUnit || fg.dimensions?.unit || 'cm').toLowerCase();
-
-    if (gsm > 0 && width > 0 && length > 0) {
-        const widthCm = dimUnit === 'inch' || dimUnit === 'inches' ? width * 2.54 : width;
-        const lengthCm = dimUnit === 'inch' || dimUnit === 'inches' ? length * 2.54 : length;
-        const computedGrams = Number(((2 * widthCm * lengthCm * gsm) / 10000).toFixed(2));
-        if (computedGrams >= 15 && computedGrams <= 500) {
-            return computedGrams;
-        }
-    }
-    return null;
-};
-
-// Helper to evaluate unit conversion feedback (hint or amber warning)
-const getUnitConversionFeedback = (selectedFg, lineUnit, lineQuantity) => {
-    if (!selectedFg) return null;
-    const fgUom = mapFgUomToOption(selectedFg);
-    const selectedUnit = normalizeSoUnit(lineUnit);
-
-    const isCount = (u) => ['Pcs', 'Bags'].includes(u);
-    const isWeight = (u) => u === 'Kg';
-
-    // If matching unit (or both count units), no conversion note needed
-    if (selectedUnit === fgUom || (isCount(selectedUnit) && isCount(fgUom))) {
-        return null;
-    }
-
-    const qty = Number(lineQuantity) || 0;
-    const bagWeightGms = resolveEmptyBagWeightGms(selectedFg);
-    const capacityKg = Number(selectedFg.bagCapacity || 0);
-
-    // From Weight (Kg) to Count (Pcs/Bags)
-    if (isWeight(selectedUnit) && isCount(fgUom)) {
-        if (bagWeightGms && bagWeightGms > 0) {
-            const bagWeightKg = bagWeightGms / 1000;
-            const approxCount = qty > 0 ? Math.round(qty / bagWeightKg) : null;
-            return {
-                type: 'hint',
-                message: approxCount
-                    ? `approx. ${approxCount.toLocaleString('en-IN')} ${fgUom} (${bagWeightGms}g / bag)`
-                    : `Convertible to ${fgUom} (~${bagWeightGms}g / bag)`
-            };
-        }
-        if (capacityKg > 0) {
-            const approxCount = qty > 0 ? Math.round(qty / capacityKg) : null;
-            return {
-                type: 'hint',
-                message: approxCount
-                    ? `approx. ${approxCount.toLocaleString('en-IN')} ${fgUom} (${capacityKg} Kg capacity)`
-                    : `Convertible to ${fgUom} (~${capacityKg} Kg / bag)`
-            };
-        }
-    }
-
-    // From Count (Pcs/Bags) to Weight (Kg)
-    if (isCount(selectedUnit) && isWeight(fgUom)) {
-        if (bagWeightGms && bagWeightGms > 0) {
-            const bagWeightKg = bagWeightGms / 1000;
-            const approxKg = qty > 0 ? Number((qty * bagWeightKg).toFixed(2)) : null;
-            return {
-                type: 'hint',
-                message: approxKg
-                    ? `approx. ${approxKg.toLocaleString('en-IN')} Kg (${bagWeightGms}g / bag)`
-                    : `Convertible to Kg (~${bagWeightGms}g / bag)`
-            };
-        }
-        if (capacityKg > 0) {
-            const approxKg = qty > 0 ? Number((qty * capacityKg).toFixed(2)) : null;
-            return {
-                type: 'hint',
-                message: approxKg
-                    ? `approx. ${approxKg.toLocaleString('en-IN')} Kg (${capacityKg} Kg capacity)`
-                    : `Convertible to Kg (~${capacityKg} Kg / bag)`
-            };
-        }
-    }
-
-    // No conversion exists for this product and unit
-    return {
-        type: 'warning',
-        message: 'No conversion for this product, dispatch must be in this same unit'
-    };
-};
 
 export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, initialData = null }) {
     const isEditMode = Boolean(initialData && initialData._id);
@@ -138,6 +31,11 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
     const [deliveryDue, setDeliveryDue] = useState(getFutureLocalDateString(7));
     const [dispatchLocation, setDispatchLocation] = useState('');
     const [status, setStatus] = useState('CONFIRMED');
+    const [statusRemark, setStatusRemark] = useState('');
+    const [soDeps, setSoDeps] = useState({ hasLinkedWo: false, hasDispatch: false, hasInvoice: false, plannedWorkOrders: [] });
+    const [lastRatesMap, setLastRatesMap] = useState({});
+    const [gstTreatment, setGstTreatment] = useState('TAXABLE');
+    const [exemptionReason, setExemptionReason] = useState('');
     const [notes, setNotes] = useState('');
 
     // Line Items State
@@ -204,7 +102,20 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
             const locId = typeof initialData.dispatchLocation === 'object' ? initialData.dispatchLocation?._id : initialData.dispatchLocation;
             setDispatchLocation(locId || '');
             setStatus(initialData.status || 'CONFIRMED');
+            setStatusRemark('');
+            setGstTreatment(initialData.gstTreatment === 'EXEMPT' ? 'EXEMPT' : 'TAXABLE');
+            setExemptionReason(initialData.exemptionReason || '');
             setNotes(initialData.notes || '');
+
+            if (initialData._id) {
+                axiosInstance.get(`/sales-orders/${initialData._id}`)
+                    .then((res) => {
+                        if (res.data?.success && res.data?.data?.dependencies) {
+                            setSoDeps(res.data.data.dependencies);
+                        }
+                    })
+                    .catch(() => {});
+            }
 
             if (Array.isArray(initialData.items) && initialData.items.length > 0) {
                 setItems(
@@ -230,6 +141,10 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
             setDeliveryDue(initialData?.deliveryDue ? formatToLocalDateString(initialData.deliveryDue) : getFutureLocalDateString(7));
             setDispatchLocation(initialData?.dispatchLocation || '');
             setStatus(initialData?.status || 'CONFIRMED');
+            setStatusRemark('');
+            setSoDeps({ hasLinkedWo: false, hasDispatch: false, hasInvoice: false, plannedWorkOrders: [] });
+            setGstTreatment(initialData?.gstTreatment === 'EXEMPT' ? 'EXEMPT' : 'TAXABLE');
+            setExemptionReason(initialData?.exemptionReason || '');
             setNotes(initialData?.notes || initialData?.description || '');
             if (Array.isArray(initialData?.items) && initialData.items.length > 0) {
                 setItems(initialData.items);
@@ -246,19 +161,68 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
         setDeliveryDue(e.target.value);
     };
 
+    // Fetch last agreed rate for (customerId, fgId)
+    const fetchLastCustomerRate = (custId, fgId) => {
+        if (!custId || !fgId) return;
+        const key = `${custId}__${fgId}`;
+        if (lastRatesMap[key] !== undefined) return;
+        axiosInstance.get(`/sales-orders/last-rate?customerId=${encodeURIComponent(custId)}&finishedGoodId=${encodeURIComponent(fgId)}`)
+            .then((res) => {
+                if (res.data?.success) {
+                    setLastRatesMap((prev) => ({ ...prev, [key]: res.data.data || null }));
+                }
+            })
+            .catch(() => {});
+    };
+
     // Handle Item Field Changes
     const handleItemChange = (index, field, value) => {
         const updated = [...items];
+        const prevUnit = normalizeSoUnit(updated[index].unit);
+        const prevRate = Number(updated[index].ratePerUnit || 0);
         updated[index][field] = value;
 
         if (field === 'finishedGood') {
             const selectedFG = finishedGoods.find((f) => String(f._id) === String(value));
             if (selectedFG) {
                 updated[index].unit = mapFgUomToOption(selectedFG);
-                if (!updated[index].ratePerUnit && selectedFG.pricePerBag) {
-                    updated[index].ratePerUnit = String(selectedFG.pricePerBag);
+            }
+            // Never auto-fill rate from master; keep rate empty for explicit customer agreement
+            updated[index].ratePerUnit = '';
+            updated[index].subtotal = 0;
+            updated[index].rateConversionNote = '';
+            if (customerId && value) {
+                fetchLastCustomerRate(customerId, value);
+            }
+        }
+
+        if (field === 'unit') {
+            const nextUnit = normalizeSoUnit(value);
+            const selectedFG = finishedGoods.find((f) => String(f._id) === String(updated[index].finishedGood));
+            const qty = Number(updated[index].quantity) || 0;
+            const isCount = (u) => ['Pcs', 'Bags'].includes(u);
+
+            if (prevRate > 0 && prevUnit !== nextUnit) {
+                const weightKg = selectedFG ? resolveBagWeightSpec(selectedFG).weightKg : null;
+                if (weightKg && weightKg > 0 && ((isCount(prevUnit) && nextUnit === 'Kg') || (prevUnit === 'Kg' && isCount(nextUnit)))) {
+                    const converted = isCount(prevUnit) && nextUnit === 'Kg'
+                        ? Number((prevRate / weightKg).toFixed(2))
+                        : Number((prevRate * weightKg).toFixed(2));
+                    updated[index].ratePerUnit = String(converted);
+                    updated[index].subtotal = qty * converted;
+                    updated[index].rateConversionNote = `Converted from ₹${prevRate} / ${prevUnit} — please confirm`;
+                } else if (isCount(prevUnit) && isCount(nextUnit)) {
+                    updated[index].rateConversionNote = '';
+                } else {
+                    updated[index].ratePerUnit = '';
+                    updated[index].subtotal = 0;
+                    updated[index].rateConversionNote = `Unit changed to ${nextUnit} — please enter Rate per ${nextUnit === 'Bags' ? 'Bag' : nextUnit}`;
                 }
             }
+        }
+
+        if (field === 'ratePerUnit') {
+            updated[index].rateConversionNote = '';
         }
 
         if (field === 'quantity' || field === 'ratePerUnit') {
@@ -302,17 +266,27 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
         : '0 Pcs';
 
     const subtotal = items.reduce((acc, it) => acc + (Number(it.subtotal) || 0), 0);
-    const gstRate = 18; // Standard 18% GST for Woven Poly Bags
-    const gstAmount = Math.round((subtotal * gstRate) / 100);
+    const isGstExempt = gstTreatment === 'EXEMPT';
+    const gstRate = isGstExempt ? 0 : 18; // Standard 18% GST for Woven Poly Bags
+    const gstAmount = isGstExempt ? 0 : Math.round((subtotal * gstRate) / 100);
     const grandTotal = subtotal + gstAmount;
 
+    const currentStatus = initialData?.status || 'DRAFT';
+    const isCancelledOrder = isEditMode && currentStatus === 'CANCELLED';
+    const isDispatchedOrder = isEditMode && ['DISPATCHED', 'FULLY_DISPATCHED', 'DELIVERED'].includes(currentStatus);
+    const isLockedByDeps = isEditMode && (soDeps.hasLinkedWo || soDeps.hasDispatch || soDeps.hasInvoice);
+    const isStatusChanged = isEditMode && status !== currentStatus;
+    const needsStatusRemark = isStatusChanged && (status === 'DISPATCHED' || status === 'CANCELLED');
+
     const isFormValid =
+        !isCancelledOrder &&
         customerId &&
         deliveryDue &&
         items.length > 0 &&
         items.every(
-            (it) => it.finishedGood && Number(it.quantity) > 0 && Number(it.ratePerUnit) >= 0
-        );
+            (it) => it.finishedGood && Number(it.quantity) > 0 && Number(it.ratePerUnit) > 0
+        ) &&
+        (!needsStatusRemark || Boolean(statusRemark.trim()));
 
     // Save Sales Order
     const handleSubmit = async (e) => {
@@ -346,6 +320,10 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                 deliveryDue,
                 dispatchLocation: dispatchLocation || undefined,
                 status,
+                statusRemark: isStatusChanged ? statusRemark.trim() : undefined,
+                cancellationReason: status === 'CANCELLED' ? statusRemark.trim() : undefined,
+                gstTreatment,
+                exemptionReason: gstTreatment === 'EXEMPT' ? exemptionReason.trim() : '',
                 notes: notes.trim() || undefined,
                 items: items.map((it) => ({
                     finishedGood: it.finishedGood,
@@ -485,6 +463,24 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                 footer={footerButtons}
             >
                 <form id="sales-order-form" onSubmit={handleSubmit} className="space-y-4 text-xs font-sans">
+                    {isCancelledOrder && (
+                        <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-[11px] font-semibold flex items-center gap-2">
+                            <AlertCircle size={14} className="shrink-0" />
+                            <span>This Sales Order is CANCELLED and read-only.</span>
+                        </div>
+                    )}
+                    {isDispatchedOrder && (
+                        <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-[11px] font-semibold flex items-center gap-2">
+                            <AlertCircle size={14} className="shrink-0" />
+                            <span>This Sales Order is {currentStatus.replace(/_/g, ' ')}. Only notes and delivery status updates are allowed.</span>
+                        </div>
+                    )}
+                    {!isCancelledOrder && !isDispatchedOrder && isLockedByDeps && (
+                        <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-[11px] font-semibold flex items-center gap-2">
+                            <AlertCircle size={14} className="shrink-0 text-amber-600" />
+                            <span>Customer, Product, and Unit are locked because linked Work Orders, Dispatches, or Invoices exist. You may increase quantity, update delivery date, notes, or status.</span>
+                        </div>
+                    )}
                     {/* Customer Selection Card */}
                     <div className="bg-card-bg border border-border rounded-xl p-3.5 space-y-2.5">
                         <div className="flex items-center justify-between">
@@ -505,8 +501,18 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                         <SearchableSelect
                             required
                             value={customerId}
-                            onChange={(val) => setCustomerId(val)}
-                            disabled={isLoadingDropdowns}
+                            onChange={(val) => {
+                                setCustomerId(val);
+                                if (!isEditMode && val) {
+                                    const cust = customers.find((c) => c._id === val);
+                                    if (cust && (cust.gstTreatment === 'EXEMPT' || cust.isGstExempt === true)) {
+                                        setGstTreatment('EXEMPT');
+                                    } else {
+                                        setGstTreatment('TAXABLE');
+                                    }
+                                }
+                            }}
+                            disabled={isLoadingDropdowns || isCancelledOrder || isDispatchedOrder || isLockedByDeps}
                             loading={isLoadingDropdowns}
                             placeholder={isLoadingDropdowns ? 'Loading Customers catalog...' : '-- Select Customer / Buyer --'}
                             searchPlaceholder="Search customer by code, name, or GSTIN..."
@@ -627,6 +633,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                                 required
                                                 value={item.finishedGood}
                                                 onChange={(val) => handleItemChange(index, 'finishedGood', val)}
+                                                disabled={isCancelledOrder || isDispatchedOrder || isLockedByDeps}
                                                 placeholder="-- Select Bag Product --"
                                                 searchPlaceholder="Search by code, name, GSM, size, laminated..."
                                                 emptyMessage="No finished bag specifications found"
@@ -670,7 +677,8 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                                 <select
                                                     value={normalizeSoUnit(item.unit)}
                                                     onChange={(e) => handleItemChange(index, 'unit', e.target.value)}
-                                                    className="border border-border rounded p-1.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer shrink-0"
+                                                    disabled={isCancelledOrder || isDispatchedOrder || isLockedByDeps}
+                                                    className="border border-border rounded p-1.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer shrink-0 disabled:opacity-60"
                                                 >
                                                     {ALL_SO_UNITS.map((u) => (
                                                         <option key={u} value={u}>{u}</option>
@@ -681,17 +689,18 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
 
                                         <div className="col-span-3 sm:col-span-2">
                                             <label className="block text-[10px] font-bold uppercase tracking-wider text-text-muted mb-0.5">
-                                                Rate per {item.unit === 'Bags' ? 'Bag' : (item.unit || 'Unit')} *
+                                                Rate per {item.unit === 'Bags' ? 'Bag' : (item.unit || 'Pcs')} *
                                             </label>
                                             <input
                                                 type="number"
                                                 required
-                                                min="0"
+                                                min="0.01"
                                                 step="0.01"
                                                 placeholder="₹"
+                                                disabled={isCancelledOrder || isDispatchedOrder}
                                                 value={item.ratePerUnit}
                                                 onChange={(e) => handleItemChange(index, 'ratePerUnit', e.target.value)}
-                                                className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary"
+                                                className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary disabled:opacity-60"
                                             />
                                         </div>
 
@@ -714,28 +723,130 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                             )}
                                         </div>
 
-                                        {/* Unit Conversion Hint or Warning */}
+                                        {/* Rate Suggestion Chips, Inline Validation & Unit Conversion Hint */}
                                         {selectedFg && (() => {
                                             const feedback = getUnitConversionFeedback(selectedFg, item.unit, item.quantity);
-                                            if (!feedback) return null;
-                                            if (feedback.type === 'hint') {
-                                                return (
-                                                    <div className="col-span-12 px-1 pt-0.5 text-[11px] text-primary font-medium flex items-center gap-1.5">
-                                                        <span className="font-bold">💡</span>
-                                                        <span>{feedback.message}</span>
-                                                    </div>
-                                                );
-                                            }
+                                            const lastRateKey = customerId && item.finishedGood ? `${customerId}__${item.finishedGood}` : null;
+                                            const lastRateInfo = lastRateKey ? lastRatesMap[lastRateKey] : null;
+                                            const wholesale = Number(selectedFg.wholesalePrice || 0);
+                                            const retail = Number(selectedFg.retailPrice || 0);
+                                            const enteredRate = Number(item.ratePerUnit || 0);
+                                            const isRateInvalid = item.ratePerUnit !== '' && enteredRate <= 0;
+                                            const hasWholesaleVariance = wholesale > 0 && enteredRate > 0 && (Math.abs(enteredRate - wholesale) / wholesale) > 0.5;
+                                            const applySuggestedRate = (val) => handleItemChange(index, 'ratePerUnit', String(val));
+
                                             return (
-                                                <div className="col-span-12 px-2 py-1 bg-amber-50 border border-amber-200/80 rounded text-[11px] text-amber-800 font-medium flex items-center gap-1.5 mt-0.5">
-                                                    <AlertCircle size={13} className="text-amber-600 shrink-0" />
-                                                    <span>{feedback.message}</span>
+                                                <div className="col-span-12 space-y-1.5 pt-0.5">
+                                                    {!isCancelledOrder && !isDispatchedOrder && (lastRateInfo?.ratePerUnit > 0 || wholesale > 0 || retail > 0) && (
+                                                        <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                                                            <span className="text-text-muted font-semibold">Suggested rates:</span>
+                                                            {lastRateInfo?.ratePerUnit > 0 && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => applySuggestedRate(lastRateInfo.ratePerUnit)}
+                                                                    className="px-2 py-0.5 rounded-full bg-primary/10 hover:bg-primary/20 text-primary border border-primary/25 font-mono font-bold cursor-pointer transition-colors"
+                                                                >
+                                                                    Last rate for customer: ₹{lastRateInfo.ratePerUnit} / {lastRateInfo.unit || 'Pcs'}
+                                                                </button>
+                                                            )}
+                                                            {wholesale > 0 && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => applySuggestedRate(wholesale)}
+                                                                    className="px-2 py-0.5 rounded-full bg-card-bg hover:bg-border/30 text-text-main border border-border font-mono font-semibold cursor-pointer transition-colors"
+                                                                >
+                                                                    Wholesale: ₹{wholesale}
+                                                                </button>
+                                                            )}
+                                                            {retail > 0 && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => applySuggestedRate(retail)}
+                                                                    className="px-2 py-0.5 rounded-full bg-card-bg hover:bg-border/30 text-text-main border border-border font-mono font-semibold cursor-pointer transition-colors"
+                                                                >
+                                                                    Retail: ₹{retail}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    {item.rateConversionNote && (
+                                                        <div className="px-1 text-[11px] text-indigo-700 font-semibold">
+                                                            {item.rateConversionNote}
+                                                        </div>
+                                                    )}
+                                                    {isRateInvalid && (
+                                                        <div className="px-1 text-[11px] text-rose-600 font-bold">
+                                                            Rate must be greater than 0.
+                                                        </div>
+                                                    )}
+                                                    {hasWholesaleVariance && (
+                                                        <div className="px-2 py-1 bg-amber-50 border border-amber-200/80 rounded text-[11px] text-amber-800 font-medium flex items-center gap-1.5">
+                                                            <AlertCircle size={13} className="text-amber-600 shrink-0" />
+                                                            <span>Entered rate (₹{enteredRate}) differs by more than 50% from master wholesale price (₹{wholesale}).</span>
+                                                        </div>
+                                                    )}
+                                                    {feedback?.type === 'hint' && (
+                                                        <div className="px-1 text-[11px] text-primary font-medium flex items-center gap-1.5">
+                                                            <span className="font-bold">💡</span>
+                                                            <span>{feedback.message}</span>
+                                                        </div>
+                                                    )}
+                                                    {feedback?.type === 'muted' && (
+                                                        <div className="px-1 text-[11px] text-text-muted font-medium">
+                                                            {feedback.message}
+                                                        </div>
+                                                    )}
+                                                    {feedback?.type === 'warning' && (
+                                                        <div className="px-2 py-1 bg-amber-50 border border-amber-200/80 rounded text-[11px] text-amber-800 font-medium flex items-center gap-1.5">
+                                                            <AlertCircle size={13} className="text-amber-600 shrink-0" />
+                                                            <span>{feedback.message}</span>
+                                                        </div>
+                                                    )}
+                                                    {feedback?.warning && (
+                                                        <div className="px-2 py-1 bg-amber-50 border border-amber-200/80 rounded text-[11px] text-amber-800 font-medium flex items-center gap-1.5">
+                                                            <AlertCircle size={13} className="text-amber-600 shrink-0" />
+                                                            <span>{feedback.warning}</span>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             );
                                         })()}
                                     </div>
                                 );
                             })}
+                        </div>
+
+                        {/* GST Treatment Selector */}
+                        <div className="bg-app-bg/60 border border-border/80 rounded-lg p-3 space-y-2.5">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                                <div>
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
+                                        GST Treatment *
+                                    </label>
+                                    <select
+                                        value={gstTreatment}
+                                        onChange={(e) => setGstTreatment(e.target.value)}
+                                        className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                                    >
+                                        <option value="TAXABLE">Taxable (18% GST)</option>
+                                        <option value="EXEMPT">GST Exempt (0% GST)</option>
+                                    </select>
+                                </div>
+                                {isGstExempt && (
+                                    <div>
+                                        <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
+                                            Exemption Reason / Note (Optional)
+                                        </label>
+                                        <input
+                                            type="text"
+                                            placeholder="e.g. Export / SEZ / LUT / Exempt Notification"
+                                            value={exemptionReason}
+                                            onChange={(e) => setExemptionReason(e.target.value)}
+                                            className="w-full border border-border rounded-lg p-2 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                        />
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         {/* Live Financial Summary */}
@@ -749,7 +860,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                 <span className="font-mono font-bold text-text-main">₹{subtotal.toLocaleString()}</span>
                             </div>
                             <div className="flex justify-between items-center text-xs">
-                                <span className="text-text-muted font-medium">Estimated GST (18%):</span>
+                                <span className="text-text-muted font-medium">{isGstExempt ? 'GST (Exempt):' : 'Estimated GST (18%):'}</span>
                                 <span className="font-mono font-bold text-text-main">₹{gstAmount.toLocaleString()}</span>
                             </div>
                             <div className="flex justify-between items-center text-xs pt-1 border-t border-border/70">
@@ -767,15 +878,50 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                             </label>
                             <select
                                 value={status}
-                                onChange={(e) => setStatus(e.target.value)}
-                                className="w-full border border-border rounded-lg p-2.5 bg-card-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                                disabled={isCancelledOrder}
+                                onChange={(e) => {
+                                    setStatus(e.target.value);
+                                    setStatusRemark('');
+                                }}
+                                className="w-full border border-border rounded-lg p-2.5 bg-card-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-60"
                             >
-                                <option value="CONFIRMED">CONFIRMED (Ready for Production)</option>
-                                <option value="DRAFT">DRAFT (Quotation / Proposal)</option>
-                                {isEditMode && <option value="READY_FOR_DISPATCH">READY_FOR_DISPATCH</option>}
-                                {isEditMode && <option value="DISPATCHED">DISPATCHED</option>}
-                                {isEditMode && <option value="CANCELLED">CANCELLED</option>}
+                                {isEditMode ? (
+                                    (() => {
+                                        const allowed = getAllowedSoStatuses(currentStatus, soDeps);
+                                        const allKnown = ['DRAFT', 'CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED', 'DISPATCHED', 'DELIVERED', 'CANCELLED'];
+                                        const ordered = Array.from(new Set([...allowed, ...allKnown]));
+                                        return ordered.map((st) => {
+                                            const isAllowed = allowed.includes(st);
+                                            if (!isAllowed && st === 'PARTIALLY_DISPATCHED') return null;
+                                            return (
+                                                <option key={st} value={st} disabled={!isAllowed}>
+                                                    {SO_STATUS_LABELS[st] || st}{!isAllowed ? ' (Not allowed)' : ''}
+                                                </option>
+                                            );
+                                        });
+                                    })()
+                                ) : (
+                                    <>
+                                        <option value="CONFIRMED">CONFIRMED (Ready for Production)</option>
+                                        <option value="DRAFT">DRAFT (Quotation / Proposal)</option>
+                                    </>
+                                )}
                             </select>
+                            {needsStatusRemark && (
+                                <div className="mt-2">
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-rose-700 mb-1">
+                                        {status === 'CANCELLED' ? 'Cancellation Reason *' : 'Dispatch Override Remark *'}
+                                    </label>
+                                    <input
+                                        type="text"
+                                        required
+                                        placeholder={status === 'CANCELLED' ? 'Enter mandatory reason for cancelling...' : 'Enter remark for manual dispatch status...'}
+                                        value={statusRemark}
+                                        onChange={(e) => setStatusRemark(e.target.value)}
+                                        className="w-full border border-rose-300 rounded-lg p-2 bg-white text-xs text-text-main focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+                            )}
                         </div>
 
                         <div>

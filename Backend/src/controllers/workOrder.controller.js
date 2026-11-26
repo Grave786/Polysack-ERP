@@ -5,7 +5,16 @@ const Customer = require('../models/customer.model');
 const FinishedGood = require('../models/finishedGood.model');
 const Machine = require('../models/machine.model');
 const Tenant = require('../models/tenant.model');
+const SalesOrder = require('../models/salesOrder.model');
 const ProductionLog = require('../models/productionLog.model');
+const { isTenantAdmin, checkIsSuperAdmin } = require('../middlewares/rbac.middleware');
+const {
+    getSoLineId,
+    convertSoQtyToBags,
+    doesWoMatchSoLine,
+    recomputeSalesOrderProductionStatus,
+    getPendingProductionLinesCore
+} = require('../services/soProduction.service');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
 const {
     getStageProductionStatus,
@@ -50,6 +59,110 @@ const generateWorkOrderNumber = async (tenantId) => {
     return `${prefix}${paddedSeq}`;
 };
 
+const validateAndResolveSalesOrderLink = async ({
+    tenantId,
+    salesOrderId,
+    salesOrderLineId,
+    customerId,
+    finishedGoodId,
+    targetQty,
+    allowOverPlan,
+    allowOverPlanReason,
+    excludeWoId = null,
+    user
+}) => {
+    const soDoc = await SalesOrder.findOne({ _id: salesOrderId, tenant: tenantId, isActive: true }).populate(
+        'items.finishedGood',
+        'bagWeightGms weightPerBagGrams fabricGSM gsm dimensions'
+    );
+    if (!soDoc) {
+        return { error: 'Sales Order not found or does not belong to your organization.' };
+    }
+    if (!['CONFIRMED', 'READY_FOR_DISPATCH', 'PARTIALLY_DISPATCHED'].includes(soDoc.status)) {
+        return { error: `Cannot link Work Order to Sales Order ${soDoc.soNumber} with status '${soDoc.status}'. Order must be CONFIRMED.` };
+    }
+    if (String(soDoc.customer) !== String(customerId)) {
+        return { error: `Selected Customer does not match Sales Order ${soDoc.soNumber}'s customer.` };
+    }
+
+    const items = soDoc.items || [];
+    let matchedIdx = -1;
+    if (salesOrderLineId) {
+        matchedIdx = items.findIndex(
+            (it, idx) =>
+                (it._id && String(it._id) === String(salesOrderLineId)) ||
+                getSoLineId(it, idx) === String(salesOrderLineId) ||
+                String(idx) === String(salesOrderLineId)
+        );
+    }
+
+    // Fallback 1: If SO has exactly one line, use it
+    if (matchedIdx === -1 && items.length === 1) {
+        matchedIdx = 0;
+    }
+
+    // Fallback 2: Match by finishedGoodId only when it uniquely identifies one line
+    if (matchedIdx === -1 && finishedGoodId) {
+        const fgMatches = items
+            .map((it, idx) => ({ idx, fgId: String(it.finishedGood?._id || it.finishedGood || '') }))
+            .filter((x) => x.fgId === String(finishedGoodId));
+        if (fgMatches.length === 1) {
+            matchedIdx = fgMatches[0].idx;
+        }
+    }
+
+    if (matchedIdx === -1) {
+        console.error('[SO Line Lookup Failed]', {
+            soNumber: soDoc.soNumber,
+            salesOrderId: String(soDoc._id),
+            sentLineId: salesOrderLineId || null,
+            sentFinishedGoodId: finishedGoodId || null,
+            availableLineIds: items.map((it, idx) => ({ idx, _id: it._id ? String(it._id) : null, fgId: String(it.finishedGood?._id || it.finishedGood || '') }))
+        });
+        return {
+            error: `Selected line item (${salesOrderLineId || 'none'}) was not found on Sales Order ${soDoc.soNumber}.`
+        };
+    }
+
+    const matchedLine = items[matchedIdx];
+    const lineFgId = String(matchedLine.finishedGood?._id || matchedLine.finishedGood);
+    if (lineFgId !== String(finishedGoodId)) {
+        return { error: `Finished Bag Specification does not match the selected line item on ${soDoc.soNumber}.` };
+    }
+
+    const resolvedLineId = getSoLineId(matchedLine, matchedIdx);
+
+    const existingWOs = await WorkOrder.find({
+        tenant: tenantId,
+        salesOrder: soDoc._id,
+        status: { $ne: 'CANCELLED' },
+        isActive: true,
+        ...(excludeWoId ? { _id: { $ne: excludeWoId } } : {})
+    }).select('salesOrderLineId finishedGood targetQuantity').lean();
+
+    const alreadyPlanned = existingWOs
+        .filter((wo) => doesWoMatchSoLine(wo, matchedLine, matchedIdx))
+        .reduce((sum, wo) => sum + Number(wo.targetQuantity || 0), 0);
+
+    const conv = convertSoQtyToBags(matchedLine.quantity, matchedLine.unit, matchedLine.finishedGood);
+    if (conv.hasConversion && conv.convertedBags !== null) {
+        const remainingToPlan = Math.max(0, Number((conv.convertedBags - alreadyPlanned).toFixed(3)));
+        if (Number(targetQty) > remainingToPlan) {
+            const isAdminUser = (await isTenantAdmin(user)) || checkIsSuperAdmin(user);
+            if (!(allowOverPlan === true && isAdminUser && String(allowOverPlanReason || '').trim().length > 0)) {
+                return {
+                    error: `Target quantity (${targetQty}) exceeds remaining-to-plan quantity (${remainingToPlan}) for ${soDoc.soNumber}.`
+                };
+            }
+        }
+    }
+
+    return {
+        soDoc,
+        resolvedLineId
+    };
+};
+
 /**
  * @desc    Create a new Work Order and automatically consume raw materials from BOM
  * @route   POST /api/work-orders
@@ -82,6 +195,11 @@ const createWorkOrder = async (req, res) => {
             targetQuantity,
             priority,
             assignedMachine,
+            salesOrderId,
+            salesOrder,
+            salesOrderLineId,
+            allowOverPlan,
+            allowOverPlanReason,
             jobOrderDetails: incomingJobDetails
         } = req.body;
 
@@ -94,6 +212,28 @@ const createWorkOrder = async (req, res) => {
         }
 
         const numTargetQty = Number(targetQuantity);
+        const requestedSoId = salesOrderId || salesOrder || null;
+
+        let linkedSoDoc = null;
+        let resolvedSoLineId = null;
+        if (requestedSoId) {
+            const linkCheck = await validateAndResolveSalesOrderLink({
+                tenantId,
+                salesOrderId: requestedSoId,
+                salesOrderLineId,
+                customerId: customer,
+                finishedGoodId: finishedGood,
+                targetQty: numTargetQty,
+                allowOverPlan: Boolean(allowOverPlan),
+                allowOverPlanReason,
+                user: req.user
+            });
+            if (linkCheck.error) {
+                return res.status(400).json({ success: false, message: linkCheck.error });
+            }
+            linkedSoDoc = linkCheck.soDoc;
+            resolvedSoLineId = linkCheck.resolvedLineId;
+        }
 
         // 2. Validate tenant-ownership of referenced models
         const customerDoc = await Customer.findOne({ _id: customer, tenant: tenantId });
@@ -480,6 +620,10 @@ const createWorkOrder = async (req, res) => {
             description: incomingDescription,
             remarks: incomingRemarks,
             customer,
+            salesOrder: linkedSoDoc ? linkedSoDoc._id : null,
+            salesOrderLineId: resolvedSoLineId,
+            salesOrderNumber: linkedSoDoc ? linkedSoDoc.soNumber : '',
+            allowOverPlanReason: allowOverPlan && allowOverPlanReason ? String(allowOverPlanReason).trim() : '',
             finishedGood,
             bom: activeBom._id,
             targetQuantity: numTargetQty,
@@ -506,17 +650,29 @@ const createWorkOrder = async (req, res) => {
             session.endSession();
         }
 
+        if (workOrder.salesOrder) {
+            await recomputeSalesOrderProductionStatus(workOrder.salesOrder, tenantId);
+        }
+
+        let soProductionStatus = null;
+        if (linkedSoDoc) {
+            const recomputed = await recomputeSalesOrderProductionStatus(linkedSoDoc._id, tenantId);
+            soProductionStatus = recomputed?.productionStatus || null;
+        }
+
         await workOrder.populate([
             { path: 'customer', select: 'companyName code' },
             { path: 'finishedGood', select: 'name code' },
-            { path: 'assignedMachine', select: 'name code' }
+            { path: 'assignedMachine', select: 'name code' },
+            { path: 'salesOrder', select: 'soNumber status productionStatus deliveryDue' }
         ]);
 
         return res.status(201).json({
             success: true,
-            message: `Work Order '${workOrderNumber}' created successfully. Raw materials consumed atomically.`,
+            message: `Work Order '${workOrderNumber}' created successfully.${linkedSoDoc && soProductionStatus ? ` ${linkedSoDoc.soNumber} is now ${soProductionStatus}.` : ' Raw materials consumed atomically.'}`,
             data: {
                 workOrder,
+                soProductionStatus,
                 stockTransactionsCreated: createdStockTransactions
             }
         });
@@ -727,6 +883,10 @@ const advanceStage = async (req, res) => {
             session.endSession();
         }
 
+        if (workOrder.salesOrder) {
+            await recomputeSalesOrderProductionStatus(workOrder.salesOrder, tenantId);
+        }
+
         await workOrder.populate([
             { path: 'customer', select: 'companyName code' },
             { path: 'finishedGood', select: 'name code' },
@@ -789,6 +949,10 @@ const cancelWorkOrder = async (req, res) => {
         workOrder.status = 'CANCELLED';
         await workOrder.save();
 
+        if (workOrder.salesOrder) {
+            await recomputeSalesOrderProductionStatus(workOrder.salesOrder, tenantId);
+        }
+
         await workOrder.populate([
             { path: 'customer', select: 'companyName code' },
             { path: 'finishedGood', select: 'name code' },
@@ -837,6 +1001,7 @@ const getWorkOrders = async (req, res) => {
         if (search) {
             filter.$or = [
                 { workOrderNumber: { $regex: search, $options: 'i' } },
+                { salesOrderNumber: { $regex: search, $options: 'i' } },
                 { description: { $regex: search, $options: 'i' } },
                 { remarks: { $regex: search, $options: 'i' } },
                 { 'jobOrderDetails.description': { $regex: search, $options: 'i' } }
@@ -850,6 +1015,7 @@ const getWorkOrders = async (req, res) => {
         const [workOrders, total] = await Promise.all([
             WorkOrder.find(filter)
                 .populate('customer', 'companyName code')
+                .populate('salesOrder', 'soNumber status productionStatus deliveryDue')
                 .populate('finishedGood', 'name code')
                 .populate('parentWorkOrder', 'workOrderNumber targetQuantity completedQuantity status')
                 .populate('continuationWorkOrder', 'workOrderNumber targetQuantity completedQuantity status')
@@ -1698,8 +1864,16 @@ const updateWorkOrder = async (req, res) => {
             description,
             remarks,
             inks,
-            jobOrderDetails
+            jobOrderDetails,
+            salesOrderId,
+            salesOrder,
+            salesOrderLineId,
+            allowOverPlan,
+            allowOverPlanReason
         } = req.body;
+
+        const previousSalesOrderId = workOrder.salesOrder ? String(workOrder.salesOrder) : null;
+        const incomingSoId = salesOrderId !== undefined ? salesOrderId : salesOrder;
 
         if (customer) {
             const customerDoc = await Customer.findOne({ _id: customer, tenant: tenantId });
@@ -1798,10 +1972,48 @@ const updateWorkOrder = async (req, res) => {
             workOrder.jobOrderDetails = updatedJOD;
         }
 
+        const effectiveSoId = incomingSoId !== undefined ? incomingSoId : workOrder.salesOrder;
+        const effectiveSoLineId = salesOrderLineId !== undefined ? salesOrderLineId : workOrder.salesOrderLineId;
+        if (effectiveSoId) {
+            const linkCheck = await validateAndResolveSalesOrderLink({
+                tenantId,
+                salesOrderId: effectiveSoId,
+                salesOrderLineId: effectiveSoLineId,
+                customerId: workOrder.customer,
+                finishedGoodId: workOrder.finishedGood,
+                targetQty: workOrder.targetQuantity,
+                allowOverPlan: Boolean(allowOverPlan),
+                allowOverPlanReason,
+                excludeWoId: workOrder._id,
+                user: req.user
+            });
+            if (linkCheck.error) {
+                return res.status(400).json({ success: false, message: linkCheck.error });
+            }
+            workOrder.salesOrder = linkCheck.soDoc._id;
+            workOrder.salesOrderLineId = linkCheck.resolvedLineId;
+            workOrder.salesOrderNumber = linkCheck.soDoc.soNumber;
+            if (allowOverPlan && allowOverPlanReason) {
+                workOrder.allowOverPlanReason = String(allowOverPlanReason).trim();
+            }
+        } else if (incomingSoId === null || incomingSoId === '') {
+            workOrder.salesOrder = null;
+            workOrder.salesOrderLineId = null;
+            workOrder.salesOrderNumber = '';
+        }
+
         await workOrder.save();
+
+        if (previousSalesOrderId && (!workOrder.salesOrder || String(workOrder.salesOrder) !== previousSalesOrderId)) {
+            await recomputeSalesOrderProductionStatus(previousSalesOrderId, tenantId);
+        }
+        if (workOrder.salesOrder) {
+            await recomputeSalesOrderProductionStatus(workOrder.salesOrder, tenantId);
+        }
 
         const updatedWorkOrder = await WorkOrder.findById(workOrder._id)
             .populate('customer', 'companyName code contactPerson phone')
+            .populate('salesOrder', 'soNumber status productionStatus deliveryDue')
             .populate('finishedGood', 'name code')
             .populate('assignedMachine', 'name code currentOperators currentOperator')
             .populate('assignedOperators', 'name employeeCode department')
@@ -2095,6 +2307,39 @@ const unskipStage = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get confirmed Sales Order lines pending production planning
+ * @route   GET /api/work-orders/pending-production
+ * @access  Private (PRODUCTION:READ permission)
+ */
+const getPendingProductionLines = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const result = await getPendingProductionLinesCore(tenantId, req.query);
+        return res.status(200).json({
+            success: true,
+            count: result.data.length,
+            summary: result.summary,
+            pagination: result.pagination,
+            data: result.data
+        });
+    } catch (error) {
+        console.error('Error in getPendingProductionLines:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch pending production lines.',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     createWorkOrder,
     updateWorkOrder,
@@ -2105,6 +2350,7 @@ module.exports = {
     cancelWorkOrder,
     getWorkOrders,
     getWorkOrderById,
+    getPendingProductionLines,
     getAvailableRolls,
     getRollsTraceability,
     skipStage,

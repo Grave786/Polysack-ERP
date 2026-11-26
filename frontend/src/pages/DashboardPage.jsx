@@ -229,6 +229,7 @@ export default function DashboardPage() {
     const [finishedGoods, setFinishedGoods] = useState([]);
     const [machines, setMachines] = useState([]);
     const [payablesSummary, setPayablesSummary] = useState(null);
+    const [pendingForProduction, setPendingForProduction] = useState({ linesCount: 0, totalQty: 0, overdueCount: 0 });
 
     // Fetch datasets on mount depending on user role
     useEffect(() => {
@@ -257,9 +258,10 @@ export default function DashboardPage() {
                 axiosInstance.get('/raw-materials?limit=200'),
                 axiosInstance.get('/finished-goods?limit=200'),
                 axiosInstance.get('/machines?isActive=true&limit=200'),
-                axiosInstance.get('/purchase-orders/payables-summary').catch(() => ({ data: { success: false } }))
+                axiosInstance.get('/purchase-orders/payables-summary').catch(() => ({ data: { success: false } })),
+                axiosInstance.get('/dashboard/summary').catch(() => ({ data: { success: false } }))
             ])
-                .then(([soRes, woRes, invRes, rmRes, fgRes, mchRes, payRes]) => {
+                .then(([soRes, woRes, invRes, rmRes, fgRes, mchRes, payRes, sumRes]) => {
                     if (soRes.data?.success && Array.isArray(soRes.data.data)) setSalesOrders(soRes.data.data);
                     if (woRes.data?.success && Array.isArray(woRes.data.data)) setWorkOrders(woRes.data.data);
                     if (invRes.data?.success && Array.isArray(invRes.data.data)) setInvoices(invRes.data.data);
@@ -267,6 +269,9 @@ export default function DashboardPage() {
                     if (fgRes.data?.success && Array.isArray(fgRes.data.data)) setFinishedGoods(fgRes.data.data);
                     if (mchRes.data?.success && Array.isArray(mchRes.data.data)) setMachines(mchRes.data.data);
                     if (payRes.data?.success && payRes.data.data) setPayablesSummary(payRes.data.data);
+                    if (sumRes.data?.success && sumRes.data?.data?.pendingForProduction) {
+                        setPendingForProduction(sumRes.data.data.pendingForProduction);
+                    }
                 })
                 .catch((err) => {
                     console.error('Error loading dashboard analytics data:', err);
@@ -827,7 +832,7 @@ export default function DashboardPage() {
             </div>
 
             {/* 2. TOP STAT CARDS ROW */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 <div
                     onClick={() => navigate('/sales')}
                     className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
@@ -901,6 +906,27 @@ export default function DashboardPage() {
                     </div>
                     <div className="text-[10px] text-text-muted font-mono pt-1 border-t border-border/40">
                         RM + FG live warehouse stock
+                    </div>
+                </div>
+
+                <div
+                    onClick={() => navigate('/production?tab=pending-production')}
+                    className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-4.5 rounded-xl shadow-2xs space-y-2"
+                >
+                    <div className="flex items-center justify-between text-text-muted">
+                        <span className="text-[11px] font-bold uppercase tracking-wider">PENDING FOR PRODUCTION</span>
+                        <Factory size={18} className="text-indigo-500" />
+                    </div>
+                    <div className="text-2xl font-black text-text-main font-mono">
+                        <AnimatedNumber value={Number(pendingForProduction.linesCount || 0)} suffix=" Lines" />
+                    </div>
+                    <div className={`text-[11px] font-extrabold ${Number(pendingForProduction.overdueCount || 0) > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                        {Number(pendingForProduction.overdueCount || 0) > 0
+                            ? `${pendingForProduction.overdueCount} overdue SO lines`
+                            : 'All pending orders on schedule'}
+                    </div>
+                    <div className="text-[10px] text-text-muted font-mono pt-1 border-t border-border/40">
+                        {Number(pendingForProduction.totalQty || 0).toLocaleString('en-IN')} Bags pending plan
                     </div>
                 </div>
             </div>

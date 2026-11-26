@@ -5,62 +5,7 @@ const Location = require('../models/location.model');
 const FinishedGood = require('../models/finishedGood.model');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
 const { isTenantAdmin } = require('../middlewares/rbac.middleware');
-
-/**
- * Helper to resolve the real empty bag weight in grams (typically 30g - 150g for standard sacks).
- * Priority:
- * 1. Saved bag weight on FinishedGood (bagWeightGms or tareWeightGram) if realistic (15g to 500g).
- * 2. Computed from bag dimensions and fabric GSM:
- *    Tubular sack has 2 layers (front + back):
- *    Weight (grams) = 2 * (Width_cm * Length_cm * GSM) / 10000
- *    (Valid if between 15g and 500g)
- * 3. Default active BOM raw materials quantity sum if clearly per-bag material weight (15g - 500g, or 0.015kg - 0.5kg)
- * 4. Otherwise returns null.
- */
-const resolveEmptyBagWeightGms = (fgDoc, bomDoc = null) => {
-    if (!fgDoc) return null;
-
-    // 1. Saved finished good weight (bagWeightGms or tareWeightGram)
-    const savedWeight = Number(fgDoc.bagWeightGms || fgDoc.tareWeightGram || 0);
-    if (savedWeight >= 15 && savedWeight <= 500) {
-        return savedWeight;
-    }
-
-    // 2. Computed from dimensions and fabric GSM
-    const gsm = Number(fgDoc.fabricGSM || fgDoc.gsm || 0);
-    const width = Number(fgDoc.dimensions?.width || 0);
-    const length = Number(fgDoc.dimensions?.length || 0);
-    const dimUnit = String(fgDoc.dimensionUnit || fgDoc.dimensions?.unit || 'cm').toLowerCase();
-
-    if (gsm > 0 && width > 0 && length > 0) {
-        const widthCm = dimUnit === 'inch' || dimUnit === 'inches' ? width * 2.54 : width;
-        const lengthCm = dimUnit === 'inch' || dimUnit === 'inches' ? length * 2.54 : length;
-        // Tubular woven sack has 2 sides (front and back)
-        const computedGrams = Number(((2 * widthCm * lengthCm * gsm) / 10000).toFixed(2));
-        if (computedGrams >= 15 && computedGrams <= 500) {
-            return computedGrams;
-        }
-    }
-
-    // 3. BOM fallback if provided
-    if (bomDoc && Array.isArray(bomDoc.materials || bomDoc.rawMaterials)) {
-        const mats = bomDoc.materials || bomDoc.rawMaterials;
-        let totalBomWeight = 0;
-        for (const m of mats) {
-            totalBomWeight += Number(m.quantity || m.quantityPerUnit || 0);
-        }
-        // If in kg (e.g. 0.0612 kg -> 61.2g)
-        if (totalBomWeight >= 0.015 && totalBomWeight <= 0.5) {
-            return Number((totalBomWeight * 1000).toFixed(2));
-        }
-        // If in grams (e.g. 61.2g)
-        if (totalBomWeight >= 15 && totalBomWeight <= 500) {
-            return Number(totalBomWeight.toFixed(2));
-        }
-    }
-
-    return null;
-};
+const { resolveEmptyBagWeightGms } = require('../utils/bagWeightHelper');
 
 /**
  * Helper to convert quantity between SO line UOM and Finished Good stock UOM

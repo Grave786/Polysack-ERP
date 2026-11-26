@@ -43,10 +43,12 @@ export default function GenerateInvoiceModal({ isOpen, onClose, onSuccess }) {
     if (!isOpen) return null;
 
     const selectedSO = salesOrders.find((so) => so._id === selectedSoId);
+    const isSoExempt = selectedSO?.gstTreatment === 'EXEMPT';
+    const effectiveGstRate = isSoExempt ? 0 : gstRate;
     const custObj = typeof selectedSO?.customer === 'object' ? selectedSO.customer : null;
     const customerName = custObj?.companyName || 'Registered Customer';
     const totalOrderValue = selectedSO?.totalAmount || selectedSO?.totalValue || 0;
-    const estimatedGst = Math.round((totalOrderValue * gstRate) / 100);
+    const estimatedGst = isSoExempt ? 0 : Math.round((totalOrderValue * effectiveGstRate) / 100);
     const estimatedGrandTotal = totalOrderValue + estimatedGst;
 
     const handleGenerate = async (e) => {
@@ -59,7 +61,7 @@ export default function GenerateInvoiceModal({ isOpen, onClose, onSuccess }) {
         try {
             setIsGenerating(true);
             const res = await axiosInstance.post(`/invoices/from-sales-order/${selectedSoId}`, {
-                gstRate: Number(gstRate)
+                gstRate: Number(effectiveGstRate)
             });
 
             if (res.data?.success) {
@@ -141,17 +143,29 @@ export default function GenerateInvoiceModal({ isOpen, onClose, onSuccess }) {
                             </div>
                             <div className="flex justify-between items-center">
                                 <span className="text-text-muted">GST Rate applied:</span>
-                                <select
-                                    value={gstRate}
-                                    onChange={(e) => setGstRate(Number(e.target.value))}
-                                    className="border border-border rounded px-2 py-0.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none"
-                                >
-                                    <option value={18}>18% GST (Standard)</option>
-                                    <option value={12}>12% GST</option>
-                                    <option value={5}>5% GST</option>
-                                    <option value={0}>0% (Exempt)</option>
-                                </select>
+                                {isSoExempt ? (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                        GST Exempt (0%)
+                                    </span>
+                                ) : (
+                                    <select
+                                        value={gstRate}
+                                        onChange={(e) => setGstRate(Number(e.target.value))}
+                                        className="border border-border rounded px-2 py-0.5 bg-card-bg text-xs font-semibold text-text-main focus:outline-none"
+                                    >
+                                        <option value={18}>18% GST (Standard)</option>
+                                        <option value={12}>12% GST</option>
+                                        <option value={5}>5% GST</option>
+                                        <option value={0}>0% (Exempt)</option>
+                                    </select>
+                                )}
                             </div>
+                            {isSoExempt && selectedSO?.exemptionReason && (
+                                <div className="flex justify-between items-center text-[11px]">
+                                    <span className="text-text-muted">Exemption Reason:</span>
+                                    <span className="font-semibold text-text-main">{selectedSO.exemptionReason}</span>
+                                </div>
+                            )}
                             <div className="flex justify-between items-center pt-2 border-t border-border/80">
                                 <span className="font-bold text-text-main">Estimated Grand Total:</span>
                                 <span className="font-mono font-extrabold text-sm text-primary">₹{estimatedGrandTotal.toLocaleString()}</span>

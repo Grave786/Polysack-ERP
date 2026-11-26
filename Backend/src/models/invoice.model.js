@@ -89,6 +89,16 @@ const InvoiceSchema = new mongoose.Schema({
         min: [0, 'GST rate cannot be negative'],
         max: [28, 'GST rate cannot exceed 28%']
     },
+    gstTreatment: {
+        type: String,
+        enum: ['TAXABLE', 'EXEMPT'],
+        default: 'TAXABLE'
+    },
+    exemptionReason: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     gstAmount: {
         type: Number,
         default: 0,

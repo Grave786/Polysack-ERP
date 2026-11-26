@@ -66,10 +66,90 @@ export default function SalesPage() {
     const [isCreateSoOpen, setIsCreateSoOpen] = useState(false);
     const [editingSoData, setEditingSoData] = useState(null);
     const [viewingSoData, setViewingSoData] = useState(null);
+    const [productionFilter, setProductionFilter] = useState('ALL');
+
+    const handleViewSo = async (row) => {
+        setViewingSoData(row);
+        if (!row?._id) return;
+        try {
+            const res = await axiosInstance.get(`/sales-orders/${row._id}`);
+            if (res.data?.success && res.data?.data) {
+                setViewingSoData(res.data.data);
+            }
+        } catch {
+            // Keep existing row data if detail fetch fails
+        }
+    };
 
     const [isGenerateInvoiceOpen, setIsGenerateInvoiceOpen] = useState(false);
     const [recordingPaymentInvoice, setRecordingPaymentInvoice] = useState(null);
     const [viewingInvoiceData, setViewingInvoiceData] = useState(null);
+    const [statusActionModal, setStatusActionModal] = useState({
+        isOpen: false,
+        salesOrder: null,
+        targetStatus: '',
+        remark: '',
+        cancelLinkedWorkOrders: undefined,
+        plannedWorkOrders: [],
+        requiresWoDecision: false,
+        isSubmitting: false
+    });
+
+    const openStatusActionModal = (so, targetStatus) => {
+        setStatusActionModal({
+            isOpen: true,
+            salesOrder: so,
+            targetStatus,
+            remark: '',
+            cancelLinkedWorkOrders: undefined,
+            plannedWorkOrders: so?.dependencies?.plannedWorkOrders || [],
+            requiresWoDecision: false,
+            isSubmitting: false
+        });
+    };
+
+    const handleConfirmStatusAction = async (e) => {
+        e.preventDefault();
+        const { salesOrder, targetStatus, remark, cancelLinkedWorkOrders } = statusActionModal;
+        if (!salesOrder?._id) return;
+
+        if ((targetStatus === 'CANCELLED' || targetStatus === 'DISPATCHED') && !remark.trim()) {
+            toast.error(targetStatus === 'CANCELLED' ? 'Cancellation reason is required.' : 'Dispatch remark is required.');
+            return;
+        }
+
+        try {
+            setStatusActionModal((prev) => ({ ...prev, isSubmitting: true }));
+            const res = await axiosInstance.patch(`/sales-orders/${salesOrder._id}/status`, {
+                status: targetStatus,
+                remark: remark.trim(),
+                cancellationReason: targetStatus === 'CANCELLED' ? remark.trim() : undefined,
+                ...(cancelLinkedWorkOrders !== undefined ? { cancelLinkedWorkOrders } : {})
+            });
+            if (res.data?.success) {
+                toast.success(res.data.message || `Status updated to ${targetStatus}`);
+                setStatusActionModal((prev) => ({ ...prev, isOpen: false, isSubmitting: false }));
+                setRefreshKey((prev) => prev + 1);
+                if (viewingSoData?._id === salesOrder._id) {
+                    handleViewSo(salesOrder);
+                }
+            }
+        } catch (err) {
+            const data = err.response?.data;
+            if (err.response?.status === 409 && data?.requiresWoDecision) {
+                setStatusActionModal((prev) => ({
+                    ...prev,
+                    isSubmitting: false,
+                    requiresWoDecision: true,
+                    plannedWorkOrders: data.plannedWorkOrders || [],
+                    cancelLinkedWorkOrders: true
+                }));
+                return;
+            }
+            toast.error(data?.message || 'Failed to update Sales Order status.');
+            setStatusActionModal((prev) => ({ ...prev, isSubmitting: false }));
+        }
+    };
 
     // Sales Orders Tab Columns
     const salesOrderColumns = [
@@ -79,7 +159,7 @@ export default function SalesPage() {
             render: (row) => (
                 <button
                     type="button"
-                    onClick={() => setViewingSoData(row)}
+                    onClick={() => handleViewSo(row)}
                     className="font-mono font-bold uppercase text-primary hover:underline text-xs cursor-pointer text-left"
                 >
                     {row.soNumber || '-'}
@@ -171,14 +251,23 @@ export default function SalesPage() {
             header: 'GRAND TOTAL',
             exportValue: (row) => {
                 const subtotal = row.totalAmount !== undefined ? row.totalAmount : (row.totalValue || 0);
+                if (row.gstTreatment === 'EXEMPT') return subtotal;
                 return row.grandTotal !== undefined ? row.grandTotal : Math.round(subtotal * 1.18);
             },
             render: (row) => {
                 const subtotal = row.totalAmount !== undefined ? row.totalAmount : (row.totalValue || 0);
-                const grandTotal = Math.round(subtotal * 1.18); // 18% GST estimate
+                const isExempt = row.gstTreatment === 'EXEMPT';
+                const grandTotal = isExempt ? subtotal : (row.grandTotal !== undefined ? row.grandTotal : Math.round(subtotal * 1.18));
                 return (
-                    <div className="font-mono font-extrabold text-text-main text-xs">
-                        ₹{grandTotal.toLocaleString()}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono font-extrabold text-text-main text-xs">
+                            ₹{grandTotal.toLocaleString()}
+                        </span>
+                        {isExempt && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+                                GST Exempt
+                            </span>
+                        )}
                     </div>
                 );
             }
@@ -214,19 +303,42 @@ export default function SalesPage() {
             }
         },
         {
+            header: 'PRODUCTION',
+            accessor: 'productionStatus',
+            exportValue: (row) => row.productionStatus || 'Not Planned',
+            render: (row) => {
+                const ps = row.productionStatus || 'Not Planned';
+                const badgeCls =
+                    ps === 'Production Completed'
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                        : ps === 'In Production'
+                        ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
+                        : ps === 'Fully Planned'
+                        ? 'bg-blue-100 text-blue-800 border-blue-200'
+                        : ps === 'Partially Planned'
+                        ? 'bg-amber-100 text-amber-800 border-amber-200'
+                        : 'bg-gray-100 text-gray-700 border-gray-200';
+                return (
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border whitespace-nowrap inline-block ${badgeCls}`}>
+                        {ps}
+                    </span>
+                );
+            }
+        },
+        {
             header: 'ACTIONS',
             render: (row) => (
                 <div className="flex items-center gap-1.5 justify-end">
                     <button
                         type="button"
-                        onClick={() => setViewingSoData(row)}
+                        onClick={() => handleViewSo(row)}
                         className="px-2 py-1 bg-app-bg hover:bg-card-bg border border-border text-text-muted hover:text-text-main rounded text-[11px] font-semibold transition-colors cursor-pointer"
                         title="View Details"
                     >
                         <Eye size={13} />
                     </button>
 
-                    {(row.status === 'DRAFT' || row.status === 'CONFIRMED') && (
+                    {row.status !== 'CANCELLED' && (
                         <button
                             type="button"
                             onClick={() => {
@@ -237,6 +349,28 @@ export default function SalesPage() {
                             title="Edit Sales Order"
                         >
                             <Pencil size={13} />
+                        </button>
+                    )}
+
+                    {row.status === 'CONFIRMED' && (
+                        <button
+                            type="button"
+                            onClick={() => openStatusActionModal(row, 'READY_FOR_DISPATCH')}
+                            className="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+                            title="Mark Ready for Dispatch"
+                        >
+                            Ready
+                        </button>
+                    )}
+
+                    {!['DISPATCHED', 'FULLY_DISPATCHED', 'DELIVERED', 'CANCELLED'].includes(row.status) && (
+                        <button
+                            type="button"
+                            onClick={() => openStatusActionModal(row, 'CANCELLED')}
+                            className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+                            title="Cancel Sales Order"
+                        >
+                            Cancel
                         </button>
                     )}
 
@@ -331,11 +465,21 @@ export default function SalesPage() {
         {
             header: 'GRAND TOTAL',
             exportValue: (row) => (row.grandTotal !== undefined ? row.grandTotal : (row.totalAmount || 0)),
-            render: (row) => (
-                <span className="font-mono font-extrabold text-text-main text-xs">
-                    ₹{Number(row.grandTotal !== undefined ? row.grandTotal : (row.totalAmount || 0)).toLocaleString('en-IN')}
-                </span>
-            )
+            render: (row) => {
+                const isExempt = row.gstTreatment === 'EXEMPT' || (Number(row.gstRate) === 0 && Number(row.gstAmount || 0) === 0);
+                return (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono font-extrabold text-text-main text-xs">
+                            ₹{Number(row.grandTotal !== undefined ? row.grandTotal : (row.totalAmount || 0)).toLocaleString('en-IN')}
+                        </span>
+                        {isExempt && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+                                GST Exempt
+                            </span>
+                        )}
+                    </div>
+                );
+            }
         },
         {
             header: 'PAID AMOUNT',
@@ -624,8 +768,28 @@ export default function SalesPage() {
                 onTabChange={handleTabChange}
                 headerActions={renderHeaderActions}
                 topSlot={renderReceivablesSummaryCards}
-                filterSlot={null}
-                extraFilterParams={appliedDashboardFilter && activeTabKey === 'invoices' ? { paymentStatus: 'OUTSTANDING' } : null}
+                filterSlot={activeTabKey === 'sales-orders' ? (
+                    <select
+                        value={productionFilter}
+                        onChange={(e) => setProductionFilter(e.target.value)}
+                        className="px-2.5 py-1.5 bg-card-bg border border-border rounded-lg text-xs font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                        title="Filter by Production Status"
+                    >
+                        <option value="ALL">All Production Statuses</option>
+                        <option value="Not Planned">Not Planned</option>
+                        <option value="Partially Planned">Partially Planned</option>
+                        <option value="Fully Planned">Fully Planned</option>
+                        <option value="In Production">In Production</option>
+                        <option value="Production Completed">Production Completed</option>
+                    </select>
+                ) : null}
+                extraFilterParams={
+                    appliedDashboardFilter && activeTabKey === 'invoices'
+                        ? { paymentStatus: 'OUTSTANDING' }
+                        : activeTabKey === 'sales-orders' && productionFilter !== 'ALL'
+                        ? { productionStatus: productionFilter }
+                        : null
+                }
                 onAddClick={() => {
                     if (activeTabKey === 'invoices') {
                         setIsGenerateInvoiceOpen(true);
@@ -679,6 +843,8 @@ export default function SalesPage() {
                     setEditingSoData(so);
                     setIsCreateSoOpen(true);
                 }}
+                onQuickStatusChange={(so, target) => openStatusActionModal(so, target)}
+                onCancelOrder={(so) => openStatusActionModal(so, 'CANCELLED')}
                 onGenerateInvoice={() => {
                     setIsGenerateInvoiceOpen(true);
                 }}
@@ -693,6 +859,106 @@ export default function SalesPage() {
                     setRecordingPaymentInvoice(inv);
                 }}
             />
+
+            {/* Modal 6: Status Change / Cancel Confirmation */}
+            {statusActionModal.isOpen && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <form
+                        onSubmit={handleConfirmStatusAction}
+                        className="bg-card-bg border border-border rounded-xl shadow-xl w-full max-w-md p-5 space-y-4 font-sans text-xs"
+                    >
+                        <div className="flex justify-between items-center pb-2 border-b border-border">
+                            <h3 className="font-bold text-sm text-text-main">
+                                {statusActionModal.targetStatus === 'CANCELLED'
+                                    ? `Cancel Sales Order ${statusActionModal.salesOrder?.soNumber || ''}`
+                                    : `Update Status to ${statusActionModal.targetStatus.replace(/_/g, ' ')}`}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setStatusActionModal((prev) => ({ ...prev, isOpen: false }))}
+                                className="text-text-muted hover:text-text-main font-bold cursor-pointer"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="space-y-3">
+                            <div>
+                                <label className="block text-[10px] font-bold uppercase tracking-wider text-text-main mb-1">
+                                    {statusActionModal.targetStatus === 'CANCELLED'
+                                        ? 'Cancellation Reason *'
+                                        : statusActionModal.targetStatus === 'DISPATCHED'
+                                        ? 'Dispatch Override Remark *'
+                                        : 'Remark (Optional)'}
+                                </label>
+                                <textarea
+                                    rows={3}
+                                    required={statusActionModal.targetStatus === 'CANCELLED' || statusActionModal.targetStatus === 'DISPATCHED'}
+                                    placeholder={
+                                        statusActionModal.targetStatus === 'CANCELLED'
+                                            ? 'Enter mandatory reason for cancelling this Sales Order...'
+                                            : 'Add an optional note for the audit trail...'
+                                    }
+                                    value={statusActionModal.remark}
+                                    onChange={(e) => setStatusActionModal((prev) => ({ ...prev, remark: e.target.value }))}
+                                    className="w-full border border-border rounded-lg p-2.5 bg-app-bg text-xs text-text-main focus:outline-none focus:border-primary"
+                                />
+                            </div>
+
+                            {statusActionModal.targetStatus === 'CANCELLED' && statusActionModal.requiresWoDecision && statusActionModal.plannedWorkOrders.length > 0 && (
+                                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2 text-[11px] text-amber-900">
+                                    <div className="font-bold">
+                                        Linked planned Work Orders found ({statusActionModal.plannedWorkOrders.map((w) => w.workOrderNumber).join(', ')}). How should they be handled?
+                                    </div>
+                                    <label className="flex items-center gap-2 cursor-pointer font-semibold">
+                                        <input
+                                            type="radio"
+                                            name="woCancelAction"
+                                            checked={statusActionModal.cancelLinkedWorkOrders === true}
+                                            onChange={() => setStatusActionModal((prev) => ({ ...prev, cancelLinkedWorkOrders: true }))}
+                                        />
+                                        <span>Cancel linked planned Work Orders together</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer font-semibold">
+                                        <input
+                                            type="radio"
+                                            name="woCancelAction"
+                                            checked={statusActionModal.cancelLinkedWorkOrders === false}
+                                            onChange={() => setStatusActionModal((prev) => ({ ...prev, cancelLinkedWorkOrders: false }))}
+                                        />
+                                        <span>Release them as unlinked stock Work Orders</span>
+                                    </label>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                            <button
+                                type="button"
+                                onClick={() => setStatusActionModal((prev) => ({ ...prev, isOpen: false }))}
+                                className="px-3.5 py-2 border border-border rounded-lg text-xs font-bold text-text-muted hover:text-text-main cursor-pointer"
+                            >
+                                Back
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={statusActionModal.isSubmitting}
+                                className={`px-4 py-2 rounded-lg text-xs font-extrabold cursor-pointer disabled:opacity-50 ${
+                                    statusActionModal.targetStatus === 'CANCELLED'
+                                        ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                                        : 'bg-primary hover:bg-primary-hover text-sidebar-bg'
+                                }`}
+                            >
+                                {statusActionModal.isSubmitting
+                                    ? 'Updating...'
+                                    : statusActionModal.targetStatus === 'CANCELLED'
+                                    ? 'Confirm Cancel Order'
+                                    : 'Confirm Status Update'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            )}
         </>
     );
 }

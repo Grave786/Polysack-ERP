@@ -10,6 +10,7 @@ const Employee = require('../models/employee.model');
 const Customer = require('../models/customer.model');
 const Supplier = require('../models/supplier.model');
 const GRN = require('../models/grn.model');
+const { getPendingProductionLinesCore } = require('../services/soProduction.service');
 
 /**
  * Helper to calculate percentage change vs previous period
@@ -283,7 +284,19 @@ const getDashboardSummary = async (req, res) => {
                     receivables: totalReceivables,
                     payables: totalPayables,
                     payablesTracked: false
-                }
+                },
+                pendingForProduction: await (async () => {
+                    try {
+                        const res = await getPendingProductionLinesCore(tenantId, { limit: 1 });
+                        return {
+                            linesCount: res.summary?.linesPending || 0,
+                            totalQty: res.summary?.totalQuantityPending || 0,
+                            overdueCount: res.summary?.overdueOrders || 0
+                        };
+                    } catch {
+                        return { linesCount: 0, totalQty: 0, overdueCount: 0 };
+                    }
+                })()
             }
         });
     } catch (error) {

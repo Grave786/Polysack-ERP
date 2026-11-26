@@ -151,7 +151,11 @@ const createInvoiceFromSalesOrder = async (req, res) => {
             };
         });
 
-        const effectiveGstRate = (gstRate !== undefined && !isNaN(Number(gstRate))) ? Number(gstRate) : 18;
+        const isExempt = salesOrder.gstTreatment === 'EXEMPT';
+        const effectiveGstRate = isExempt
+            ? 0
+            : ((gstRate !== undefined && !isNaN(Number(gstRate))) ? Number(gstRate) : (salesOrder.gstRate ?? 18));
+
         if (effectiveGstRate < 0 || effectiveGstRate > 28) {
             return res.status(400).json({
                 success: false,
@@ -160,14 +164,16 @@ const createInvoiceFromSalesOrder = async (req, res) => {
         }
 
         const customerDoc = salesOrder.customer;
-        const gstResult = calculateGstBreakdown({
-            totalTaxable,
-            gstRate: effectiveGstRate,
-            sellerStateCode: tenantDoc.stateCode,
-            customerGstin: customerDoc?.gstin,
-            customerState: customerDoc?.state,
-            isWalkIn: false
-        });
+        const gstResult = isExempt
+            ? { gstRate: 0, gstAmount: 0, cgstAmount: 0, sgstAmount: 0, igstAmount: 0 }
+            : calculateGstBreakdown({
+                totalTaxable,
+                gstRate: effectiveGstRate,
+                sellerStateCode: tenantDoc.stateCode,
+                customerGstin: customerDoc?.gstin,
+                customerState: customerDoc?.state,
+                isWalkIn: false
+            });
 
         const grandTotal = totalTaxable + gstResult.gstAmount;
         const invoiceNumber = await generateInvoiceNumber(tenantId);
@@ -180,6 +186,8 @@ const createInvoiceFromSalesOrder = async (req, res) => {
             customer: salesOrder.customer._id || salesOrder.customer,
             invoiceDate: new Date(),
             items: invoiceItems,
+            gstTreatment: isExempt ? 'EXEMPT' : 'TAXABLE',
+            exemptionReason: isExempt ? (salesOrder.exemptionReason || '') : '',
             gstRate: gstResult.gstRate,
             gstAmount: gstResult.gstAmount,
             cgstAmount: gstResult.cgstAmount,
