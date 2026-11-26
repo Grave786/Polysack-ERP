@@ -1,13 +1,13 @@
 {
     "rewrites": [
         {
-            "source": "/((?!videos/|images/|assets/).*)",
+            "source": "/((?!videos/|images/|assets/|version\\.json).*)",
             "destination": "/index.html"
         }
     ],
     "headers": [
         {
-            "source": "/videos/(.*)",
+            "source": "/assets/(.*)",
             "headers": [
                 {
                     "key": "Cache-Control",
@@ -20,7 +20,25 @@
             "headers": [
                 {
                     "key": "Cache-Control",
-                    "value": "public, max-age=31536000, immutable"
+                    "value": "public, max-age=86400, must-revalidate"
+                }
+            ]
+        },
+        {
+            "source": "/videos/(.*)",
+            "headers": [
+                {
+                    "key": "Cache-Control",
+                    "value": "public, max-age=86400, must-revalidate"
+                }
+            ]
+        },
+        {
+            "source": "/((?!assets/|images/|videos/).*)",
+            "headers": [
+                {
+                    "key": "Cache-Control",
+                    "value": "no-cache, no-store, must-revalidate"
                 }
             ]
         }

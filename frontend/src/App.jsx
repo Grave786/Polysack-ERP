@@ -26,6 +26,7 @@ import ApprovalsPage from './pages/ApprovalsPage';
 import Forbidden403Page from './pages/Forbidden403Page';
 import LandingPage from './pages/LandingPage';
 import NotFoundPage from './pages/NotFoundPage';
+import VersionUpdateBanner from './components/shared/VersionUpdateBanner';
 
 function NotFoundRoute() {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -91,6 +92,7 @@ export default function App() {
 
     return (
         <FacilityProvider>
+            <VersionUpdateBanner />
             <Routes>
             {/* Public Routes */}
             <Route path="/" element={<RootRoute />} />
