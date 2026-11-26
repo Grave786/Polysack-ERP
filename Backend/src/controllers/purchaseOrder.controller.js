@@ -741,6 +741,144 @@ const updatePurchaseOrder = async (req, res) => {
 };
 
 /**
+ * @desc    Update GST & Charges/Adjustments on an Approved / Received Purchase Order
+ * @route   PATCH /api/purchase-orders/:id/charges
+ * @access  Private (PROCUREMENT:UPDATE permission)
+ */
+const updatePoCharges = async (req, res) => {
+    try {
+        const tenantId = req.user?.tenant;
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant context is missing or invalid. Please log in again.'
+            });
+        }
+
+        const purchaseOrder = await PurchaseOrder.findOne({ _id: req.params.id, tenant: tenantId });
+        if (!purchaseOrder) {
+            return res.status(404).json({
+                success: false,
+                message: 'Purchase Order not found.'
+            });
+        }
+
+        if (['CANCELLED', 'REJECTED'].includes(purchaseOrder.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot update charges on a ${purchaseOrder.status} Purchase Order.`
+            });
+        }
+
+        if (req.body.items !== undefined || req.body.supplier !== undefined) {
+            return res.status(400).json({
+                success: false,
+                message: 'Items, quantities, and supplier cannot be modified via charges update.'
+            });
+        }
+
+        const {
+            discountType,
+            discountValue,
+            freightAmount,
+            freightCharges,
+            insuranceAmount,
+            insuranceCharges,
+            otherChargesAmount,
+            otherCharges,
+            otherChargesLabel,
+            gstTreatment,
+            gstRate,
+            autoRoundOff
+        } = req.body;
+
+        const existingItemsSubtotal = Number(purchaseOrder.itemsSubtotal || 0) > 0
+            ? Number(purchaseOrder.itemsSubtotal)
+            : (purchaseOrder.items || []).reduce((s, it) => s + (Number(it.orderedQuantity || 0) * Number(it.ratePerUnit || 0)), 0);
+
+        const resolvedFreight = freightAmount !== undefined ? freightAmount : (freightCharges !== undefined ? freightCharges : (purchaseOrder.freightAmount || 0));
+        const resolvedInsurance = insuranceAmount !== undefined ? insuranceAmount : (insuranceCharges !== undefined ? insuranceCharges : (purchaseOrder.insuranceAmount || 0));
+        const resolvedOther = otherChargesAmount !== undefined ? otherChargesAmount : (otherCharges !== undefined ? otherCharges : (purchaseOrder.otherChargesAmount || 0));
+        const effectiveTreatment = gstTreatment !== undefined ? gstTreatment : (purchaseOrder.gstTreatment || 'TAXABLE');
+        const isExempt = String(effectiveTreatment).trim().toUpperCase() === 'EXEMPT';
+        const effectiveGstRate = isExempt
+            ? 0
+            : (gstRate !== undefined && gstRate !== null && gstRate !== '' && !isNaN(Number(gstRate))
+                ? Math.max(0, Number(gstRate))
+                : (purchaseOrder.gstRate ?? 18));
+
+        const totalsCalc = computeDocumentTotals({
+            itemsSubtotal: existingItemsSubtotal,
+            discountType: discountType !== undefined ? discountType : (purchaseOrder.discountType || 'FIXED'),
+            discountValue: discountValue !== undefined ? discountValue : (purchaseOrder.discountValue || 0),
+            freightAmount: resolvedFreight,
+            insuranceAmount: resolvedInsurance,
+            otherChargesAmount: resolvedOther,
+            otherChargesLabel: otherChargesLabel !== undefined ? otherChargesLabel : (purchaseOrder.otherChargesLabel || ''),
+            gstTreatment: effectiveTreatment,
+            gstRate: effectiveGstRate,
+            autoRoundOff: autoRoundOff !== undefined ? autoRoundOff : (purchaseOrder.autoRoundOff !== false)
+        });
+
+        if (totalsCalc.error) {
+            return res.status(400).json({ success: false, message: totalsCalc.error });
+        }
+
+        purchaseOrder.itemsSubtotal = totalsCalc.itemsSubtotal;
+        purchaseOrder.discountType = totalsCalc.discountType;
+        purchaseOrder.discountValue = totalsCalc.discountValue;
+        purchaseOrder.discountAmount = totalsCalc.discountAmount;
+        purchaseOrder.freightAmount = totalsCalc.freightAmount;
+        purchaseOrder.insuranceAmount = totalsCalc.insuranceAmount;
+        purchaseOrder.otherChargesAmount = totalsCalc.otherChargesAmount;
+        purchaseOrder.otherChargesLabel = totalsCalc.otherChargesLabel;
+        purchaseOrder.taxableValue = totalsCalc.taxableValue;
+        purchaseOrder.gstTreatment = totalsCalc.gstTreatment;
+        purchaseOrder.gstRate = totalsCalc.gstRate;
+        purchaseOrder.gstAmount = totalsCalc.gstAmount;
+        purchaseOrder.taxAmount = totalsCalc.taxAmount;
+        purchaseOrder.autoRoundOff = totalsCalc.autoRoundOff;
+        purchaseOrder.roundOff = totalsCalc.roundOff;
+        purchaseOrder.grandTotal = totalsCalc.grandTotal;
+        purchaseOrder.totalValue = totalsCalc.grandTotal;
+
+        const paidAmount = Number(purchaseOrder.paidAmount || 0);
+        purchaseOrder.balanceAmount = Math.max(0, Number((totalsCalc.grandTotal - paidAmount).toFixed(2)));
+        if (paidAmount <= 0) {
+            purchaseOrder.paymentStatus = 'UNPAID';
+        } else if (paidAmount + 0.01 < totalsCalc.grandTotal) {
+            purchaseOrder.paymentStatus = 'PARTIALLY_PAID';
+        } else {
+            purchaseOrder.paymentStatus = 'PAID';
+        }
+
+        await purchaseOrder.save();
+
+        await purchaseOrder.populate([
+            { path: 'supplier', select: 'name contactPerson phone' },
+            { path: 'deliveryLocation', select: 'name code type' },
+            { path: 'items.rawMaterial', select: 'name code uom' }
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Purchase Order charges and GST updated successfully.',
+            data: purchaseOrder
+        });
+    } catch (error) {
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ success: false, message: error.message });
+        }
+        console.error('Error in updatePoCharges:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to update Purchase Order charges.',
+            error: error.message
+        });
+    }
+};
+
+/**
  * @desc    Update Purchase Order Status (DRAFT -> SENT_TO_SUPPLIER, or CANCELLED)
  * @route   PATCH /api/purchase-orders/:id/status
  * @access  Private (PROCUREMENT:UPDATE permission)
@@ -1518,6 +1656,7 @@ module.exports = {
     exportPurchaseRegisterCsv,
     getPurchaseOrderById,
     updatePurchaseOrder,
+    updatePoCharges,
     updateStatus,
     deletePurchaseOrder,
     recordPoPayment,

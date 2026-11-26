@@ -21,6 +21,7 @@ export default function ProcurementPage() {
 
     const [isCreatePoOpen, setIsCreatePoOpen] = useState(false);
     const [editPo, setEditPo] = useState(null);
+    const [editChargesOnly, setEditChargesOnly] = useState(false);
     const [selectedPoForGrn, setSelectedPoForGrn] = useState(null);
     const [editGrn, setEditGrn] = useState(null);
     const [isGrnPanelOpen, setIsGrnPanelOpen] = useState(false);
@@ -446,6 +447,7 @@ export default function ProcurementPage() {
                             <button
                                 type="button"
                                 onClick={() => {
+                                    setEditChargesOnly(false);
                                     setEditPo(row);
                                     setIsCreatePoOpen(true);
                                 }}
@@ -460,6 +462,7 @@ export default function ProcurementPage() {
                             <button
                                 type="button"
                                 onClick={async () => {
+                                    setEditChargesOnly(false);
                                     try {
                                         const res = await axiosInstance.get(`/purchase-orders/${row._id}`);
                                         if (res.data?.success && res.data.data) {
@@ -476,6 +479,30 @@ export default function ProcurementPage() {
                                 title={row.status === 'PENDING_APPROVAL' ? "Edit Pending Approval PO" : "Edit Sent to Supplier PO"}
                             >
                                 <Pencil size={14} />
+                            </button>
+                        )}
+
+                        {isAdmin && (row.status === 'SENT_TO_SUPPLIER' || row.status === 'PARTIALLY_RECEIVED' || row.status === 'FULLY_RECEIVED') && (
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    setEditChargesOnly(true);
+                                    try {
+                                        const res = await axiosInstance.get(`/purchase-orders/${row._id}`);
+                                        if (res.data?.success && res.data.data) {
+                                            setEditPo(res.data.data);
+                                        } else {
+                                            setEditPo(row);
+                                        }
+                                    } catch {
+                                        setEditPo(row);
+                                    }
+                                    setIsCreatePoOpen(true);
+                                }}
+                                className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+                                title="Edit Charges & GST (Items Locked)"
+                            >
+                                Charges / GST
                             </button>
                         )}
 
@@ -1304,6 +1331,7 @@ export default function ProcurementPage() {
             <button
                 type="button"
                 onClick={() => {
+                    setEditChargesOnly(false);
                     setEditPo(null);
                     setIsCreatePoOpen(true);
                 }}
@@ -1340,9 +1368,11 @@ export default function ProcurementPage() {
             <CreatePurchaseOrderPanel
                 isOpen={isCreatePoOpen}
                 editPo={editPo}
+                financialsOnly={editChargesOnly}
                 onClose={() => {
                     setIsCreatePoOpen(false);
                     setEditPo(null);
+                    setEditChargesOnly(false);
                 }}
                 onSuccess={() => setRefreshKey((prev) => prev + 1)}
             />

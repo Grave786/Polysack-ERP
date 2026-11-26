@@ -8,7 +8,7 @@ import { getTodayLocalDateString, getFutureLocalDateString } from '../../utils/d
 import { computeDocumentTotals } from '../../utils/chargesHelper';
 import ChargesAndAdjustmentsSection from '../shared/ChargesAndAdjustmentsSection';
 
-export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, editPo }) {
+export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, editPo, financialsOnly = false }) {
     const [suppliers, setSuppliers] = useState([]);
     const [locations, setLocations] = useState([]);
     const [rawMaterials, setRawMaterials] = useState([]);
@@ -233,6 +233,36 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
             return;
         }
 
+        if (financialsOnly && editPo?._id) {
+            try {
+                setIsSubmitting(true);
+                const chargesPayload = {
+                    gstTreatment,
+                    gstRate: gstTreatment === 'EXEMPT' ? 0 : Number(gstRate ?? 18),
+                    discountType: charges.discountType,
+                    discountValue: Number(charges.discountValue || 0),
+                    freightAmount: Number(charges.freightAmount || 0),
+                    insuranceAmount: Number(charges.insuranceAmount || 0),
+                    otherChargesAmount: Number(charges.otherChargesAmount || 0),
+                    otherChargesLabel: charges.otherChargesLabel.trim(),
+                    autoRoundOff: charges.autoRoundOff !== false
+                };
+                const res = await axiosInstance.patch(`/purchase-orders/${editPo._id}/charges`, chargesPayload);
+                if (res.data?.success) {
+                    const poNum = res.data.data?.poNumber || editPo.poNumber || '';
+                    toast.success(`Charges & GST updated for ${poNum}!`);
+                    if (onSuccess) onSuccess();
+                    onClose();
+                }
+            } catch (err) {
+                console.error('Error updating Purchase Order charges:', err);
+                toast.error(err.response?.data?.message || 'Failed to update PO charges & GST');
+            } finally {
+                setIsSubmitting(false);
+            }
+            return;
+        }
+
         // Determine target status when editing existing PO
         let statusToSend = targetStatus;
         if (editPo?._id) {
@@ -315,16 +345,31 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
         <SlideOverPanel
             isOpen={isOpen}
             onClose={onClose}
-            title={editPo ? `Edit Purchase Order (${editPo.poNumber || ''})` : "Create Purchase Order"}
-            subtitle={editPo
-                ? (editPo.status === 'SENT_TO_SUPPLIER'
-                    ? "Correct PO details before delivery arrives (Sent to Supplier)"
-                    : editPo.status === 'PENDING_APPROVAL'
-                        ? "Correct PO details while awaiting Tenant Admin approval"
-                        : "Modify draft purchase order details")
-                : "Create purchase order for Tenant Admin approval"}
+            title={
+                financialsOnly
+                    ? `Edit Charges & GST (${editPo?.poNumber || ''})`
+                    : editPo
+                        ? `Edit Purchase Order (${editPo.poNumber || ''})`
+                        : "Create Purchase Order"
+            }
+            subtitle={
+                financialsOnly
+                    ? "Update GST, discount, freight, insurance, or other charges (items & quantities are locked)"
+                    : editPo
+                        ? (editPo.status === 'SENT_TO_SUPPLIER'
+                            ? "Correct PO details before delivery arrives (Sent to Supplier)"
+                            : editPo.status === 'PENDING_APPROVAL'
+                                ? "Correct PO details while awaiting Tenant Admin approval"
+                                : "Modify draft purchase order details")
+                        : "Create purchase order for Tenant Admin approval"
+            }
         >
             <form onSubmit={(e) => { e.preventDefault(); submitOrder(editPo?.status || 'PENDING_APPROVAL'); }} className="space-y-4 font-sans text-xs">
+                {financialsOnly && (
+                    <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-[11px] font-semibold">
+                        Items, quantities, and supplier are locked because this PO is already approved/received. Only GST and charges/adjustments can be updated.
+                    </div>
+                )}
                 {/* Supplier Selection */}
                 <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1">
@@ -338,6 +383,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                     ) : (
                         <SearchableSelect
                             required
+                            disabled={financialsOnly}
                             value={supplier}
                             onChange={(val) => setSupplier(val)}
                             placeholder="-- Select Supplier --"
@@ -363,8 +409,9 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <input
                             type="date"
                             value={poDate}
+                            disabled={financialsOnly}
                             onChange={(e) => setPoDate(e.target.value)}
-                            className="border border-border rounded p-2 text-xs w-full bg-card-bg text-text-main font-mono font-bold focus:outline-none focus:border-primary cursor-pointer"
+                            className="border border-border rounded p-2 text-xs w-full bg-card-bg text-text-main font-mono font-bold focus:outline-none focus:border-primary cursor-pointer disabled:opacity-60"
                             required
                         />
                     </div>
@@ -376,9 +423,10 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <input
                             type="date"
                             required
+                            disabled={financialsOnly}
                             value={expectedDelivery}
                             onChange={handleExpectedDeliveryChange}
-                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                            className="w-full border border-border rounded-md p-2 bg-card-bg text-xs font-mono font-semibold text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-60"
                         />
                     </div>
                 </div>
@@ -389,6 +437,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         Delivery Location
                     </label>
                     <SearchableSelect
+                        disabled={financialsOnly}
                         value={deliveryLocation}
                         onChange={(val) => setDeliveryLocation(val)}
                         placeholder="-- Select Location --"
@@ -410,14 +459,16 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <label className="block text-xs font-bold uppercase tracking-wider text-text-main">
                             Raw Material Items List ({items.length}) *
                         </label>
-                        <button
-                            type="button"
-                            onClick={handleAddItemRow}
-                            className="flex items-center gap-1 text-[11px] font-bold text-primary hover:underline cursor-pointer"
-                        >
-                            <Plus size={13} />
-                            <span>+ Add Item</span>
-                        </button>
+                        {!financialsOnly && (
+                            <button
+                                type="button"
+                                onClick={handleAddItemRow}
+                                className="flex items-center gap-1 text-[11px] font-bold text-primary hover:underline cursor-pointer"
+                            >
+                                <Plus size={13} />
+                                <span>+ Add Item</span>
+                            </button>
+                        )}
                     </div>
 
                     <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
@@ -427,13 +478,15 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                                     <span className="text-[10px] font-extrabold uppercase text-text-muted">
                                         ITEM #{idx + 1}
                                     </span>
-                                    <button
-                                        type="button"
-                                        onClick={() => handleRemoveItemRow(idx)}
-                                        className="text-text-muted hover:text-rose-600 transition-colors p-1 cursor-pointer"
-                                    >
-                                        <Trash2 size={13} />
-                                    </button>
+                                    {!financialsOnly && (
+                                        <button
+                                            type="button"
+                                            onClick={() => handleRemoveItemRow(idx)}
+                                            className="text-text-muted hover:text-rose-600 transition-colors p-1 cursor-pointer"
+                                        >
+                                            <Trash2 size={13} />
+                                        </button>
+                                    )}
                                 </div>
 
                                 <div>
@@ -442,6 +495,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                                     </label>
                                     <SearchableSelect
                                         required
+                                        disabled={financialsOnly}
                                         value={item.rawMaterial}
                                         onChange={(val) => handleItemChange(idx, 'rawMaterial', val)}
                                         placeholder="-- Select Material --"
@@ -471,14 +525,16 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                                                 step="0.001"
                                                 min="0.001"
                                                 required
+                                                disabled={financialsOnly}
                                                 value={item.orderedQuantity}
                                                 onChange={(e) => handleItemChange(idx, 'orderedQuantity', e.target.value)}
-                                                className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary"
+                                                className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-text-main focus:outline-none focus:border-primary disabled:opacity-60"
                                             />
                                             <select
+                                                disabled={financialsOnly}
                                                 value={item.unit || 'Kg'}
                                                 onChange={(e) => handleItemChange(idx, 'unit', e.target.value)}
-                                                className="border border-border rounded p-1.5 bg-card-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary cursor-pointer"
+                                                className="border border-border rounded p-1.5 bg-card-bg text-xs font-bold text-text-main focus:outline-none focus:border-primary cursor-pointer disabled:opacity-60"
                                             >
                                                 <option value="Kg">Kg</option>
                                                 <option value="Roll">Roll</option>
@@ -497,9 +553,10 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                                             step="any"
                                             min="0"
                                             required
+                                            disabled={financialsOnly}
                                             value={item.ratePerUnit}
                                             onChange={(e) => handleItemChange(idx, 'ratePerUnit', e.target.value)}
-                                            className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-primary focus:outline-none focus:border-primary"
+                                            className="w-full border border-border rounded p-1.5 bg-card-bg text-xs font-mono font-bold text-primary focus:outline-none focus:border-primary disabled:opacity-60"
                                         />
                                     </div>
                                 </div>
@@ -602,6 +659,20 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <span className="text-text-muted font-sans text-xs uppercase">Estimated PO Grand Total:</span>
                         <span className="text-sm text-primary">₹{totalsCalc.grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                     </div>
+                    {financialsOnly && editPo && (
+                        <>
+                            <div className="flex justify-between items-center text-xs">
+                                <span className="text-text-muted font-medium">Already Paid:</span>
+                                <span className="font-mono font-bold text-emerald-700">₹{Number(editPo.paidAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            </div>
+                            <div className="flex justify-between items-center text-xs">
+                                <span className="text-text-muted font-semibold">New Balance Due:</span>
+                                <span className="font-mono font-extrabold text-rose-600">
+                                    ₹{Math.max(0, Number((totalsCalc.grandTotal - Number(editPo.paidAmount || 0)).toFixed(2))).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                </span>
+                            </div>
+                        </>
+                    )}
                 </div>
 
                 {/* Submit Actions */}
@@ -613,7 +684,7 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                     >
                         Cancel
                     </button>
-                    {(!editPo || editPo.status === 'DRAFT') && (
+                    {!financialsOnly && (!editPo || editPo.status === 'DRAFT') && (
                         <button
                             type="button"
                             disabled={isSubmitting}
@@ -633,14 +704,16 @@ export default function CreatePurchaseOrderPanel({ isOpen, onClose, onSuccess, e
                         <ShoppingBag size={15} />
                         <span>
                             {isSubmitting
-                                ? (editPo ? 'Saving Changes...' : 'Submitting PO...')
-                                : (editPo
-                                    ? (editPo.status === 'SENT_TO_SUPPLIER'
-                                        ? 'Save & Update Sent PO'
-                                        : editPo.status === 'PENDING_APPROVAL'
-                                            ? 'Update Pending PO'
-                                            : 'Update & Submit for Approval')
-                                    : 'Submit for Approval')}
+                                ? (financialsOnly ? 'Saving Charges...' : (editPo ? 'Saving Changes...' : 'Submitting PO...'))
+                                : (financialsOnly
+                                    ? 'Save Charges & GST'
+                                    : (editPo
+                                        ? (editPo.status === 'SENT_TO_SUPPLIER'
+                                            ? 'Save & Update Sent PO'
+                                            : editPo.status === 'PENDING_APPROVAL'
+                                                ? 'Update Pending PO'
+                                                : 'Update & Submit for Approval')
+                                        : 'Submit for Approval'))}
                         </span>
                     </button>
                 </div>

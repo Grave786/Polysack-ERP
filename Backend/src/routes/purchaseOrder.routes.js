@@ -6,6 +6,7 @@ const {
     getPurchaseRegister,
     getPurchaseOrderById,
     updatePurchaseOrder,
+    updatePoCharges,
     updateStatus,
     deletePurchaseOrder,
     recordPoPayment,
@@ -62,6 +63,13 @@ router.get('/supplier-ledger/:supplierId', authenticate, checkPermission('PROCUR
  * @access  Private (PROCUREMENT:UPDATE)
  */
 router.patch('/:id/payment', authenticate, checkPermission('PROCUREMENT', 'UPDATE'), recordPoPayment);
+
+/**
+ * @route   PATCH /api/purchase-orders/:id/charges
+ * @desc    Update GST & Charges/Adjustments on Approved/Received Purchase Order
+ * @access  Private (PROCUREMENT:UPDATE)
+ */
+router.patch('/:id/charges', authenticate, checkPermission('PROCUREMENT', 'UPDATE'), updatePoCharges);
 
 /**
  * @route   PATCH /api/purchase-orders/:id/status
