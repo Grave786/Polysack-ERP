@@ -19,14 +19,14 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
     const customer = typeof salesOrder.customer === 'object' ? salesOrder.customer : null;
     const se = typeof salesOrder.sourceEnquiry === 'object' ? salesOrder.sourceEnquiry : null;
     const seCust = se?.customer || se?.customerRef;
-    const customerName = 
-        customer?.companyName || 
-        customer?.name || 
-        salesOrder.customerName || 
-        seCust?.companyName || 
-        seCust?.name || 
-        se?.newCustomerDetails?.company || 
-        se?.newCustomerDetails?.name || 
+    const customerName =
+        customer?.companyName ||
+        customer?.name ||
+        salesOrder.customerName ||
+        seCust?.companyName ||
+        seCust?.name ||
+        se?.newCustomerDetails?.company ||
+        se?.newCustomerDetails?.name ||
         'Registered Customer';
     const items = salesOrder.items || [];
     const qtyByUnit = items.reduce((acc, it) => {
@@ -177,37 +177,37 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                     </div>
                     <div className="text-right space-y-0.5">
                         <div className="text-[11px] text-text-muted">
-                            Items Subtotal: <span className="font-mono font-bold text-text-main">₹{Number(salesOrder.itemsSubtotal || subtotal).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            Items Subtotal: <span className="font-mono font-bold text-text-main">₹{itemsSubtotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                         </div>
-                        {Number(salesOrder.discountAmount || 0) > 0 && (
+                        {discountAmount > 0 && (
                             <div className="text-[11px] text-emerald-700">
-                                Less: Discount{salesOrder.discountType === 'PERCENT' ? ` (${salesOrder.discountValue}%)` : ''}: <span className="font-mono font-bold">-₹{Number(salesOrder.discountAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                Less: Discount{salesOrder.discountType === 'PERCENT' ? ` (${salesOrder.discountValue}%)` : ''}: <span className="font-mono font-bold">-₹{discountAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                             </div>
                         )}
-                        {Number(salesOrder.freightAmount || 0) > 0 && (
+                        {freightAmount > 0 && (
                             <div className="text-[11px] text-text-muted">
-                                Freight / Transport: <span className="font-mono font-semibold text-text-main">+₹{Number(salesOrder.freightAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                Freight / Transport: <span className="font-mono font-semibold text-text-main">+₹{freightAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                             </div>
                         )}
-                        {Number(salesOrder.insuranceAmount || 0) > 0 && (
+                        {insuranceAmount > 0 && (
                             <div className="text-[11px] text-text-muted">
-                                Insurance Charges: <span className="font-mono font-semibold text-text-main">+₹{Number(salesOrder.insuranceAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                Insurance Charges: <span className="font-mono font-semibold text-text-main">+₹{insuranceAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                             </div>
                         )}
-                        {Number(salesOrder.otherChargesAmount || 0) > 0 && (
+                        {otherChargesAmount > 0 && (
                             <div className="text-[11px] text-text-muted">
-                                {salesOrder.otherChargesLabel ? `Other (${salesOrder.otherChargesLabel}):` : 'Other Charges:'} <span className="font-mono font-semibold text-text-main">+₹{Number(salesOrder.otherChargesAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                {salesOrder.otherChargesLabel ? `Other (${salesOrder.otherChargesLabel}):` : 'Other Charges:'} <span className="font-mono font-semibold text-text-main">+₹{otherChargesAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                             </div>
                         )}
                         <div className="text-[11px] text-text-muted">
-                            Taxable Value: <span className="font-mono font-bold text-text-main">₹{Number(salesOrder.taxableValue || subtotal).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            Taxable Value: <span className="font-mono font-bold text-text-main">₹{taxableValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                         </div>
                         <div className="text-[11px] text-text-muted">
-                            {isGstExempt ? 'GST (Exempt):' : `Estimated GST (${gstRate}%):`} <span className="font-mono font-bold text-text-main">₹{gstAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            {isGstExempt ? 'GST (Exempt):' : `GST (${gstRate}%):`} <span className="font-mono font-bold text-text-main">₹{gstAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                         </div>
-                        {Number(salesOrder.roundOff || 0) !== 0 && (
+                        {roundOff !== 0 && (
                             <div className="text-[11px] text-text-muted">
-                                Round Off: <span className="font-mono font-semibold text-text-main">{Number(salesOrder.roundOff) > 0 ? `+₹${Number(salesOrder.roundOff).toFixed(2)}` : `-₹${Math.abs(Number(salesOrder.roundOff)).toFixed(2)}`}</span>
+                                Round Off: <span className="font-mono font-semibold text-text-main">{roundOff >= 0 ? `+₹${roundOff.toFixed(2)}` : `-₹${Math.abs(roundOff).toFixed(2)}`}</span>
                             </div>
                         )}
                         {isGstExempt && salesOrder.exemptionReason && (
@@ -229,17 +229,16 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                             <span className="font-bold text-text-main uppercase tracking-wider text-[11px]">
                                 Production Plan
                             </span>
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
-                                salesOrder.productionStatus === 'Production Completed'
-                                    ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                    : salesOrder.productionStatus === 'In Production'
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${salesOrder.productionStatus === 'Production Completed'
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                : salesOrder.productionStatus === 'In Production'
                                     ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
                                     : salesOrder.productionStatus === 'Fully Planned'
-                                    ? 'bg-blue-100 text-blue-800 border-blue-200'
-                                    : salesOrder.productionStatus === 'Partially Planned'
-                                    ? 'bg-amber-100 text-amber-800 border-amber-200'
-                                    : 'bg-gray-100 text-gray-700 border-gray-200'
-                            }`}>
+                                        ? 'bg-blue-100 text-blue-800 border-blue-200'
+                                        : salesOrder.productionStatus === 'Partially Planned'
+                                            ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                            : 'bg-gray-100 text-gray-700 border-gray-200'
+                                }`}>
                                 {salesOrder.productionStatus || 'Not Planned'}
                             </span>
                         </div>
@@ -400,11 +399,10 @@ export default function ViewSalesOrderModal({ isOpen, salesOrder, onClose, onGen
                                     disabled={!isProductionCompleted}
                                     onClick={() => isProductionCompleted && onQuickStatusChange(salesOrder, 'READY_FOR_DISPATCH')}
                                     title={isProductionCompleted ? 'Mark Ready for Dispatch' : 'Complete production before marking ready for dispatch'}
-                                    className={`px-3 py-1.5 border rounded-lg text-xs font-bold transition-colors flex items-center gap-1 ${
-                                        isProductionCompleted
-                                            ? 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-800 cursor-pointer'
-                                            : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-70'
-                                    }`}
+                                    className={`px-3 py-1.5 border rounded-lg text-xs font-bold transition-colors flex items-center gap-1 ${isProductionCompleted
+                                        ? 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-800 cursor-pointer'
+                                        : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-70'
+                                        }`}
                                 >
                                     <Truck size={13} />
                                     <span>Mark Ready for Dispatch</span>

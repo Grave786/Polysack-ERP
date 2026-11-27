@@ -77,8 +77,11 @@ const SalesOrderSchema = new mongoose.Schema({
     discountValue: { type: Number, default: 0, min: 0 },
     discountAmount: { type: Number, default: 0, min: 0 },
     freightAmount: { type: Number, default: 0, min: 0 },
+    freightCharges: { type: Number, default: 0, min: 0 },
     insuranceAmount: { type: Number, default: 0, min: 0 },
+    insuranceCharges: { type: Number, default: 0, min: 0 },
     otherChargesAmount: { type: Number, default: 0, min: 0 },
+    otherCharges: { type: Number, default: 0, min: 0 },
     otherChargesLabel: { type: String, trim: true, default: '' },
     taxableValue: { type: Number, default: 0, min: 0 },
     taxAmount: { type: Number, default: 0, min: 0 },
@@ -109,6 +112,11 @@ const SalesOrderSchema = new mongoose.Schema({
         type: Number,
         default: 0,
         min: [0, 'Grand total cannot be negative']
+    },
+    totalAmount: {
+        type: Number,
+        default: 0,
+        min: [0, 'Total amount cannot be negative']
     },
     status: {
         type: String,

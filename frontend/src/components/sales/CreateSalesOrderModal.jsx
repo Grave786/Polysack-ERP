@@ -130,9 +130,9 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
             setCharges({
                 discountType: initialData.discountType || 'FIXED',
                 discountValue: initialData.discountValue ? String(initialData.discountValue) : '',
-                freightAmount: initialData.freightAmount ? String(initialData.freightAmount) : '',
-                insuranceAmount: initialData.insuranceAmount ? String(initialData.insuranceAmount) : '',
-                otherChargesAmount: initialData.otherChargesAmount ? String(initialData.otherChargesAmount) : '',
+                freightAmount: (initialData.freightAmount ?? initialData.freightCharges) ? String(initialData.freightAmount ?? initialData.freightCharges) : '',
+                insuranceAmount: (initialData.insuranceAmount ?? initialData.insuranceCharges) ? String(initialData.insuranceAmount ?? initialData.insuranceCharges) : '',
+                otherChargesAmount: (initialData.otherChargesAmount ?? initialData.otherCharges) ? String(initialData.otherChargesAmount ?? initialData.otherCharges) : '',
                 otherChargesLabel: initialData.otherChargesLabel || '',
                 autoRoundOff: initialData.autoRoundOff !== false
             });
@@ -386,8 +386,11 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                 discountType: charges.discountType,
                 discountValue: Number(charges.discountValue || 0),
                 freightAmount: Number(charges.freightAmount || 0),
+                freightCharges: Number(charges.freightAmount || 0),
                 insuranceAmount: Number(charges.insuranceAmount || 0),
+                insuranceCharges: Number(charges.insuranceAmount || 0),
                 otherChargesAmount: Number(charges.otherChargesAmount || 0),
+                otherCharges: Number(charges.otherChargesAmount || 0),
                 otherChargesLabel: charges.otherChargesLabel.trim(),
                 autoRoundOff: charges.autoRoundOff !== false,
                 notes: notes.trim() || undefined,

@@ -589,8 +589,11 @@ const createSalesOrder = async (req, res) => {
             discountValue: totalsCalc.discountValue,
             discountAmount: totalsCalc.discountAmount,
             freightAmount: totalsCalc.freightAmount,
+            freightCharges: totalsCalc.freightAmount,
             insuranceAmount: totalsCalc.insuranceAmount,
+            insuranceCharges: totalsCalc.insuranceAmount,
             otherChargesAmount: totalsCalc.otherChargesAmount,
+            otherCharges: totalsCalc.otherChargesAmount,
             otherChargesLabel: totalsCalc.otherChargesLabel,
             taxableValue: totalsCalc.taxableValue,
             gstTreatment: totalsCalc.gstTreatment,
@@ -601,6 +604,7 @@ const createSalesOrder = async (req, res) => {
             autoRoundOff: totalsCalc.autoRoundOff,
             roundOff: totalsCalc.roundOff,
             grandTotal: totalsCalc.grandTotal,
+            totalAmount: totalsCalc.grandTotal,
             status: initialStatus,
             soApprovalStatus: approvalInit.soApprovalStatus,
             approvalRemarks: approvalInit.approvalRemarks,
@@ -696,7 +700,7 @@ const createSalesOrder = async (req, res) => {
             await OrderEnquiry.updateOne(
                 { _id: claimedEnquiryId, salesOrder: null },
                 { $set: { status: prevEnquiryStatus, orderConfirmed: prevEnquiryConfirmed } }
-            ).catch(() => {});
+            ).catch(() => { });
         }
 
         if (error.name === 'CastError') {
@@ -1100,8 +1104,11 @@ const updateSalesOrder = async (req, res) => {
             discountType,
             discountValue,
             freightAmount,
+            freightCharges,
             insuranceAmount,
+            insuranceCharges,
             otherChargesAmount,
+            otherCharges,
             otherChargesLabel,
             autoRoundOff,
             status: requestedStatus,
@@ -1309,8 +1316,11 @@ const updateSalesOrder = async (req, res) => {
         salesOrder.discountValue = totalsCalc.discountValue;
         salesOrder.discountAmount = totalsCalc.discountAmount;
         salesOrder.freightAmount = totalsCalc.freightAmount;
+        salesOrder.freightCharges = totalsCalc.freightAmount;
         salesOrder.insuranceAmount = totalsCalc.insuranceAmount;
+        salesOrder.insuranceCharges = totalsCalc.insuranceAmount;
         salesOrder.otherChargesAmount = totalsCalc.otherChargesAmount;
+        salesOrder.otherCharges = totalsCalc.otherChargesAmount;
         salesOrder.otherChargesLabel = totalsCalc.otherChargesLabel;
         salesOrder.taxableValue = totalsCalc.taxableValue;
         salesOrder.gstTreatment = totalsCalc.gstTreatment;
@@ -1320,6 +1330,7 @@ const updateSalesOrder = async (req, res) => {
         salesOrder.autoRoundOff = totalsCalc.autoRoundOff;
         salesOrder.roundOff = totalsCalc.roundOff;
         salesOrder.grandTotal = totalsCalc.grandTotal;
+        salesOrder.totalAmount = totalsCalc.grandTotal;
         if (totalsCalc.gstTreatment === 'EXEMPT') {
             if (exemptionReason !== undefined) {
                 salesOrder.exemptionReason = String(exemptionReason || '').trim();
