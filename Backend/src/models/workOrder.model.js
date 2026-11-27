@@ -36,6 +36,11 @@ const WorkOrderStageSchema = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    completedKg: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
     goodOutputQty: {
         type: Number,
         default: 0,
@@ -402,6 +407,24 @@ const WorkOrderSchema = new mongoose.Schema({
         required: [true, 'Target Quantity is required'],
         min: [0.001, 'Target Quantity must be at least 0.001']
     },
+    targetPcs: {
+        type: Number,
+        default: null,
+        min: 0
+    },
+    targetKg: {
+        type: Number,
+        default: null,
+        min: 0
+    },
+    targetWeightSource: {
+        type: String,
+        default: null
+    },
+    isEstimatedTargetWeight: {
+        type: Boolean,
+        default: false
+    },
     unit: {
         type: String,
         enum: ['Bags', 'Pcs', 'Kgs', 'Kg', 'Rolls', 'Units'],
@@ -412,7 +435,31 @@ const WorkOrderSchema = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    completedPcs: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    completedKg: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    isEstimatedCompletedWeight: {
+        type: Boolean,
+        default: false
+    },
     balanceQuantity: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    balancePcs: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    balanceKg: {
         type: Number,
         default: 0,
         min: 0
@@ -476,6 +523,38 @@ const WorkOrderSchema = new mongoose.Schema({
         default: () => ({})
     },
     inks: [{ type: String }],
+    approvalStatus: {
+        type: String,
+        enum: ['PENDING_APPROVAL', 'APPROVED', 'REJECTED']
+    },
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
+    approvedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
+    approvedAt: {
+        type: Date,
+        default: null
+    },
+    rejectedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
+    rejectedAt: {
+        type: Date,
+        default: null
+    },
+    rejectionReason: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     isActive: {
         type: Boolean,
         default: true

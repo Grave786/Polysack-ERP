@@ -107,6 +107,10 @@ const TenantSchema = new mongoose.Schema({
         autoApproveSalesOrdersByApprover: {
             type: Boolean,
             default: false
+        },
+        autoApproveWorkOrdersByApprover: {
+            type: Boolean,
+            default: false
         }
     }
 }, { timestamps: true });

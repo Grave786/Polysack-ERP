@@ -295,7 +295,7 @@ const getDispatchableSources = async (req, res) => {
 
         const dispatchableSOList = [];
         for (const so of salesOrders) {
-            const items = (so.items || []).map((it) => {
+            const items = (so.items || []).map((it, idx) => {
                 const fg = it.finishedGood || {};
                 const fgId = fg._id || it.finishedGood;
                 const orderedQty = Number(it.quantity || 0);
@@ -308,6 +308,7 @@ const getDispatchableSources = async (req, res) => {
                 const soLineUom = it.unit || fgUom || 'Pcs';
 
                 return {
+                    salesOrderLineId: it._id ? String(it._id) : `idx_${idx}`,
                     finishedGood: fgId,
                     name: fg.name || 'Finished Goods Bag',
                     code: fg.code || '',
@@ -665,14 +666,41 @@ const createDispatch = async (req, res) => {
         }
 
         const cleanedItems = [];
+        const matchedSoLineIndices = new Set();
+        const totalStockByFg = new Map();
+        const fgMetaById = new Map();
 
-        // 4. Validate items against SalesOrder and Physical Current Stock
+        // 4. Validate items against SalesOrder (by lineId) and aggregate stock requirements per FinishedGood
         const BOM = require('../models/bom.model');
         for (const dispatchItem of items) {
             const fgIdStr = String(dispatchItem.finishedGood);
-            const soItem = soDoc.items.find((i) => String(i.finishedGood) === fgIdStr);
+            const reqLineId = dispatchItem.salesOrderLineId ? String(dispatchItem.salesOrderLineId) : null;
+            let soItemIdx = -1;
+            if (reqLineId) {
+                soItemIdx = soDoc.items.findIndex((i, idx) =>
+                    (i._id && String(i._id) === reqLineId) || `idx_${idx}` === reqLineId
+                );
+            } else {
+                soItemIdx = soDoc.items.findIndex((i, idx) =>
+                    !matchedSoLineIndices.has(idx) && String(i.finishedGood) === fgIdStr
+                );
+            }
+            const soItem = soItemIdx !== -1 ? soDoc.items[soItemIdx] : null;
+            if (soItemIdx !== -1) {
+                if (matchedSoLineIndices.has(soItemIdx)) {
+                    if (useTransaction && session) {
+                        if (session.inTransaction()) await session.abortTransaction();
+                        session.endSession();
+                    }
+                    return res.status(400).json({
+                        success: false,
+                        message: `Duplicate Sales Order line '${reqLineId}' in dispatch items.`
+                    });
+                }
+                matchedSoLineIndices.add(soItemIdx);
+            }
 
-            if (!soItem) {
+            if (!soItem || String(soItem.finishedGood) !== fgIdStr) {
                 if (useTransaction && session) {
                     if (session.inTransaction()) await session.abortTransaction();
                     session.endSession();
@@ -682,6 +710,7 @@ const createDispatch = async (req, res) => {
                     message: `Finished Good '${fgIdStr}' is not part of Sales Order ${soDoc.soNumber}.`
                 });
             }
+            const resolvedLineId = soItem._id ? String(soItem._id) : `idx_${soItemIdx}`;
 
             // Verify physical sellable currentStock on FinishedGood + active BOM
             const fgQuery = FinishedGood.findOne({ _id: dispatchItem.finishedGood, tenant: tenantId }).populate('uom');
@@ -800,8 +829,11 @@ const createDispatch = async (req, res) => {
 
             const stockDeductQty = conversion.convertedQty;
             const currentStockNum = Number(fgDoc.currentStock || 0);
+            const nextAggregatedStock = (totalStockByFg.get(fgIdStr) || 0) + stockDeductQty;
+            totalStockByFg.set(fgIdStr, nextAggregatedStock);
+            fgMetaById.set(fgIdStr, { fgDoc, fgStockUom, currentStockNum });
 
-            if (currentStockNum <= 0 || currentStockNum < stockDeductQty) {
+            if (currentStockNum <= 0 || currentStockNum < nextAggregatedStock) {
                 if (useTransaction && session) {
                     if (session.inTransaction()) await session.abortTransaction();
                     session.endSession();
@@ -810,12 +842,13 @@ const createDispatch = async (req, res) => {
                     success: false,
                     message: currentStockNum <= 0
                         ? `Cannot dispatch '${fgDoc.name}': Item is out of stock (0 ${fgStockUom} available).`
-                        : `Insufficient sellable current stock for '${fgDoc.name}'. Current sellable stock: ${currentStockNum} ${fgStockUom}, requested dispatch requires: ${stockDeductQty % 1 === 0 ? stockDeductQty : stockDeductQty.toFixed(2)} ${fgStockUom} (${numQty} ${soLineUom}).`
+                        : `Insufficient sellable current stock for '${fgDoc.name}'. Current sellable stock: ${currentStockNum} ${fgStockUom}, total requested across lines requires: ${nextAggregatedStock % 1 === 0 ? nextAggregatedStock : nextAggregatedStock.toFixed(2)} ${fgStockUom}.`
                 });
             }
 
             cleanedItems.push({
                 finishedGood: dispatchItem.finishedGood,
+                salesOrderLineId: resolvedLineId,
                 dispatchedQuantity: numQty,
                 unit: soLineUom,
                 stockDeductQty,
@@ -868,8 +901,10 @@ const createDispatch = async (req, res) => {
 
             createdStockTransactions.push(txnResult.transaction);
 
-            // Increment SalesOrder item dispatchedQuantity (in SO line UOM)
-            const soItem = soDoc.items.find((i) => String(i.finishedGood) === String(item.finishedGood));
+            // Increment SalesOrder item dispatchedQuantity (matched by lineId, fallback to finishedGood for legacy)
+            const soItem = item.salesOrderLineId
+                ? soDoc.items.find((i, idx) => (i._id && String(i._id) === String(item.salesOrderLineId)) || `idx_${idx}` === String(item.salesOrderLineId))
+                : soDoc.items.find((i) => String(i.finishedGood) === String(item.finishedGood));
             if (soItem) {
                 soItem.dispatchedQuantity = Number(soItem.dispatchedQuantity || 0) + item.dispatchedQuantity;
             }
@@ -1017,6 +1052,7 @@ const updateDispatch = async (req, res) => {
 
             cleanedItems.push({
                 finishedGood: fgId,
+                salesOrderLineId: it.salesOrderLineId ? String(it.salesOrderLineId) : null,
                 dispatchedQuantity: numQty,
                 dispatchedKg: it.dispatchedKg !== undefined && it.dispatchedKg !== null && it.dispatchedKg !== '' && !isNaN(Number(it.dispatchedKg))
                     ? Number(it.dispatchedKg)
@@ -1037,11 +1073,16 @@ const updateDispatch = async (req, res) => {
         }
         const sessionOption = useTransaction ? { session } : {};
 
-        // 3. Map previous dispatched quantities from existingDispatch
+        // 3. Map previous dispatched quantities from existingDispatch (by salesOrderLineId if present, else finishedGood)
+        const getDispLineKey = (dItem) => (
+            dItem.salesOrderLineId
+                ? `line:${String(dItem.salesOrderLineId)}`
+                : `fg:${String(dItem.finishedGood?._id || dItem.finishedGood)}`
+        );
         const oldThisDispatchQtyMap = new Map();
         for (const it of existingDispatch.items || []) {
-            const fgStr = String(it.finishedGood?._id || it.finishedGood);
-            oldThisDispatchQtyMap.set(fgStr, Number(it.dispatchedQuantity || 0));
+            const k = getDispLineKey(it);
+            oldThisDispatchQtyMap.set(k, (oldThisDispatchQtyMap.get(k) || 0) + Number(it.dispatchedQuantity || 0));
         }
 
         // 4. Branch by Source Type (Sales Order vs POS Invoice)
@@ -1072,17 +1113,22 @@ const updateDispatch = async (req, res) => {
             const otherDispatchesQtyMap = new Map();
             for (const od of otherDispatches) {
                 for (const oi of od.items || []) {
-                    const fgStr = String(oi.finishedGood?._id || oi.finishedGood);
-                    otherDispatchesQtyMap.set(fgStr, (otherDispatchesQtyMap.get(fgStr) || 0) + Number(oi.dispatchedQuantity || 0));
+                    const k = getDispLineKey(oi);
+                    otherDispatchesQtyMap.set(k, (otherDispatchesQtyMap.get(k) || 0) + Number(oi.dispatchedQuantity || 0));
                 }
             }
 
-            // Validate against SO ordered quantities & stock deltas
+            // Validate against SO ordered quantities & aggregated stock deltas per FinishedGood
+            const netStockDeltaByFg = new Map();
             for (const item of cleanedItems) {
                 const fgStr = String(item.finishedGood);
-                const soItem = soDoc.items.find((i) => String(i.finishedGood?._id || i.finishedGood) === fgStr);
+                const reqLineId = item.salesOrderLineId ? String(item.salesOrderLineId) : null;
+                const soItemIdx = reqLineId
+                    ? soDoc.items.findIndex((i, idx) => (i._id && String(i._id) === reqLineId) || `idx_${idx}` === reqLineId)
+                    : soDoc.items.findIndex((i) => String(i.finishedGood?._id || i.finishedGood) === fgStr);
+                const soItem = soItemIdx !== -1 ? soDoc.items[soItemIdx] : null;
 
-                if (!soItem) {
+                if (!soItem || String(soItem.finishedGood?._id || soItem.finishedGood) !== fgStr) {
                     if (useTransaction && session) {
                         if (session.inTransaction()) await session.abortTransaction();
                         session.endSession();
@@ -1093,8 +1139,13 @@ const updateDispatch = async (req, res) => {
                     });
                 }
 
+                const resolvedLineId = soItem._id ? String(soItem._id) : `idx_${soItemIdx}`;
+                if (!item.salesOrderLineId) item.salesOrderLineId = resolvedLineId;
+                const lineKey = `line:${resolvedLineId}`;
+                const legacyFgKey = `fg:${fgStr}`;
+
                 const soLineUom = soItem.unit || 'Pcs';
-                const otherDispatched = otherDispatchesQtyMap.get(fgStr) || 0;
+                const otherDispatched = (otherDispatchesQtyMap.get(lineKey) || 0) + (otherDispatchesQtyMap.get(legacyFgKey) || 0);
                 const maxAllowedForThisDispatch = Number(soItem.quantity || 0) - otherDispatched;
 
                 if (!isUserAdmin && item.dispatchedQuantity > maxAllowedForThisDispatch + 0.0001) {
@@ -1110,7 +1161,7 @@ const updateDispatch = async (req, res) => {
 
                 item.unit = soLineUom;
 
-                const oldQty = oldThisDispatchQtyMap.get(fgStr) || 0;
+                const oldQty = oldThisDispatchQtyMap.get(lineKey) ?? oldThisDispatchQtyMap.get(legacyFgKey) ?? 0;
                 const delta = item.dispatchedQuantity - oldQty;
 
                 if (delta > 0 || delta < 0) {
@@ -1135,14 +1186,16 @@ const updateDispatch = async (req, res) => {
                     const convertedDelta = conversion.convertedQty;
 
                     if (delta > 0) {
-                        if (!fgDoc || Number(fgDoc.currentStock || 0) < convertedDelta) {
+                        const totalRequiredForFg = (netStockDeltaByFg.get(fgStr) || 0) + convertedDelta;
+                        netStockDeltaByFg.set(fgStr, totalRequiredForFg);
+                        if (!fgDoc || Number(fgDoc.currentStock || 0) < totalRequiredForFg) {
                             if (useTransaction && session) {
                                 if (session.inTransaction()) await session.abortTransaction();
                                 session.endSession();
                             }
                             return res.status(400).json({
                                 success: false,
-                                message: `Insufficient sellable current stock for '${fgDoc?.name || fgStr}'. Current stock: ${fgDoc?.currentStock || 0} ${fgStockUom}, additional required: ${convertedDelta % 1 === 0 ? convertedDelta : convertedDelta.toFixed(2)} ${fgStockUom} (+${delta} ${soLineUom}).`
+                                message: `Insufficient sellable current stock for '${fgDoc?.name || fgStr}'. Current stock: ${fgDoc?.currentStock || 0} ${fgStockUom}, additional required: ${totalRequiredForFg % 1 === 0 ? totalRequiredForFg : totalRequiredForFg.toFixed(2)} ${fgStockUom}.`
                             });
                         }
 
@@ -1201,15 +1254,16 @@ const updateDispatch = async (req, res) => {
             }
 
             // Update Sales Order line item dispatched quantities without double counting
-            for (const soItem of soDoc.items) {
+            soDoc.items.forEach((soItem, idx) => {
+                const lineId = soItem._id ? String(soItem._id) : `idx_${idx}`;
                 const fgStr = String(soItem.finishedGood?._id || soItem.finishedGood);
-                const otherDispatched = otherDispatchesQtyMap.get(fgStr) || 0;
+                const otherDispatched = (otherDispatchesQtyMap.get(`line:${lineId}`) || 0) + (idx === 0 ? (otherDispatchesQtyMap.get(`fg:${fgStr}`) || 0) : 0);
                 const thisDispatched = cleanedItems
-                    .filter((ci) => String(ci.finishedGood) === fgStr)
+                    .filter((ci) => (ci.salesOrderLineId ? String(ci.salesOrderLineId) === lineId : String(ci.finishedGood) === fgStr))
                     .reduce((sum, ci) => sum + ci.dispatchedQuantity, 0);
 
                 soItem.dispatchedQuantity = otherDispatched + thisDispatched;
-            }
+            });
 
             // Recompute Sales Order Status
             const allFullyDispatched = soDoc.items.every((i) => (i.dispatchedQuantity || 0) >= (i.quantity || 0) - 0.0001);

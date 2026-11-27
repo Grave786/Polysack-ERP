@@ -38,6 +38,20 @@ const ProductionLogSchema = new mongoose.Schema({
         required: [true, 'Quantity is required'],
         min: [0.0001, 'Quantity must be greater than 0']
     },
+    producedPcs: {
+        type: Number,
+        default: null,
+        min: 0
+    },
+    producedKg: {
+        type: Number,
+        default: null,
+        min: 0
+    },
+    isEstimatedWeight: {
+        type: Boolean,
+        default: false
+    },
     shift: {
         type: mongoose.Schema.Types.Mixed,
         ref: 'Shift',

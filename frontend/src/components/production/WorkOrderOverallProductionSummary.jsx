@@ -160,11 +160,17 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                                     </td>
                                     {stages.map((st) => {
                                         const qty = op.stages?.[st.stageName] || 0;
+                                        const kg = op.stagesKg?.[st.stageName] || 0;
                                         return (
                                             <td key={st.stageName} className="p-3 text-center font-mono font-semibold">
                                                 {qty > 0 ? (
-                                                    <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                                                        {qty.toLocaleString('en-IN')} {woUnit}
+                                                    <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 inline-flex flex-col items-center">
+                                                        <span>{qty.toLocaleString('en-IN')} {woUnit}</span>
+                                                        {kg > 0 && (
+                                                            <span className="text-[9px] text-emerald-600/80 font-normal">
+                                                                {Number(kg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg
+                                                            </span>
+                                                        )}
                                                     </span>
                                                 ) : st.isLegacy ? (
                                                     <span className="text-[10px] text-amber-700 italic font-sans">
@@ -223,12 +229,18 @@ export default function WorkOrderOverallProductionSummary({ workOrderId, lastUpd
                             </td>
                             {stages.map((st) => {
                                 const total = Number(st.totalProduced || 0);
+                                const totalKg = Number(st.totalProducedKg || 0);
                                 const isAchieved = total >= Number(st.targetQuantity || 0) && Number(st.targetQuantity || 0) > 0;
                                 return (
                                     <td key={st.stageName} className="p-3 text-center font-mono">
                                         <div className={`font-extrabold text-xs ${isAchieved ? 'text-emerald-700' : 'text-primary'}`}>
                                             {total.toLocaleString('en-IN')} {woUnit}
                                         </div>
+                                        {totalKg > 0 && (
+                                            <div className="text-[10px] text-text-muted font-normal">
+                                                {totalKg.toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg
+                                            </div>
+                                        )}
                                         <div className="text-[9px] font-sans text-text-muted font-normal mt-0.5">
                                             {st.remainingQuantity > 0 ? (
                                                 <span className="text-amber-600 font-medium">({st.remainingQuantity.toLocaleString('en-IN')} rem)</span>

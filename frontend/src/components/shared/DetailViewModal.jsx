@@ -1133,6 +1133,8 @@ const MASTER_SCHEMAS = {
                 { label: 'Customer / Client', key: (r) => r.customer?.companyName || r.customer?.name || '-', span: 2 },
                 { label: 'Work Title / Requirement', key: (r) => r.description || r.remarks || r.jobOrderDetails?.description || '-', span: 2 },
                 { label: 'Production Status', key: 'status', type: 'status' },
+                { label: 'Approval Status', key: (r) => r.approvalStatus || 'APPROVED', type: 'status' },
+                { label: 'Rejection Reason', key: (r) => (r.approvalStatus === 'REJECTED' ? (r.rejectionReason || 'Rejected') : null), span: 2 },
                 { label: 'Priority Level', key: 'priority', type: 'status' }
             ]
         },
@@ -1140,8 +1142,14 @@ const MASTER_SCHEMAS = {
             title: 'Product & Plant Allocation',
             fields: [
                 { label: 'Finished Bag Specification', key: (r) => r.finishedGood?.name || '-', span: 2 },
-                { label: 'Target Quantity', key: (r) => `${(r.targetQuantity || 0).toLocaleString('en-IN')} ${r.unit || r.jobOrderDetails?.totalOrderQuantityUnit || 'Bags'}` },
-                { label: 'Completed Quantity', key: (r) => `${(r.completedQuantity || 0).toLocaleString('en-IN')} ${r.unit || r.jobOrderDetails?.totalOrderQuantityUnit || 'Bags'}` },
+                {
+                    label: 'Target Quantity',
+                    key: (r) => `${Number(r.targetPcs ?? r.targetQuantity ?? 0).toLocaleString('en-IN')} Bags${Number(r.targetKg || 0) > 0 ? ` (${Number(r.targetKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg)` : ''}`
+                },
+                {
+                    label: 'Completed Quantity',
+                    key: (r) => `${Number(r.completedPcs ?? r.completedQuantity ?? 0).toLocaleString('en-IN')} Bags${Number(r.completedKg || 0) > 0 ? ` (${Number(r.completedKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg)` : ''}`
+                },
                 { label: 'Overall Progress', key: (r) => `${r.progressPercentage || 0}%` },
                 { label: 'Assigned Machine', key: (r) => r.assignedMachine?.name || r.assignedMachine?.code || 'None' },
                 { label: 'Machine Operators', key: (r) => formatOperatorNames(r.assignedMachine) }

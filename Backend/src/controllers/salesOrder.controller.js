@@ -458,12 +458,6 @@ const createSalesOrder = async (req, res) => {
             }
 
             const fgIdStr = String(item.finishedGood);
-            if (finishedGoodIds.has(fgIdStr)) {
-                return res.status(400).json({
-                    success: false,
-                    message: `Duplicate finishedGood '${fgIdStr}' found in items array.`
-                });
-            }
             finishedGoodIds.add(fgIdStr);
 
             const qty = Number(item.quantity);
@@ -1204,8 +1198,11 @@ const updateSalesOrder = async (req, res) => {
                 }
                 for (let idx = 0; idx < items.length; idx++) {
                     const inc = items[idx];
-                    const existing = salesOrder.items.find((i) => String(i.finishedGood) === String(inc.finishedGood));
-                    if (!existing) {
+                    const incLineId = inc._id || inc.lineId;
+                    const existing = incLineId
+                        ? salesOrder.items.find((i) => String(i._id) === String(incLineId))
+                        : salesOrder.items[idx];
+                    if (!existing || String(existing.finishedGood) !== String(inc.finishedGood)) {
                         return res.status(400).json({
                             success: false,
                             message: 'Products cannot be changed once Work Orders, Dispatches, or Invoices exist.'
@@ -1229,8 +1226,10 @@ const updateSalesOrder = async (req, res) => {
             const finishedGoodIds = new Set();
             let computedTotalValue = 0;
             const cleanedItems = [];
+            const matchedExistingIndices = new Set();
 
-            for (const item of items) {
+            for (let idx = 0; idx < items.length; idx++) {
+                const item = items[idx];
                 if (!item.finishedGood || !item.quantity || Number(item.quantity) <= 0 || item.ratePerUnit === undefined || Number(item.ratePerUnit) < 0) {
                     return res.status(400).json({
                         success: false,
@@ -1239,27 +1238,37 @@ const updateSalesOrder = async (req, res) => {
                 }
 
                 const fgIdStr = String(item.finishedGood);
-                if (finishedGoodIds.has(fgIdStr)) {
-                    return res.status(400).json({
-                        success: false,
-                        message: `Duplicate finishedGood '${fgIdStr}' found in items array.`
-                    });
-                }
                 finishedGoodIds.add(fgIdStr);
 
                 const qty = Number(item.quantity);
                 const rate = Number(item.ratePerUnit);
                 computedTotalValue += qty * rate;
 
-                // Preserve existing dispatchedQuantity if item matches
-                const existingItem = salesOrder.items.find(i => String(i.finishedGood) === fgIdStr);
+                // Match existing SO line by line _id first (preserving line _id and dispatchedQuantity)
+                const itemLineId = item._id || item.lineId;
+                let existingIdx = -1;
+                if (itemLineId) {
+                    existingIdx = salesOrder.items.findIndex((i) => String(i._id) === String(itemLineId));
+                }
+                if (existingIdx === -1 && isLockedByDeps && salesOrder.items[idx] && String(salesOrder.items[idx].finishedGood) === fgIdStr) {
+                    existingIdx = idx;
+                }
+                if (existingIdx === -1) {
+                    existingIdx = salesOrder.items.findIndex((i, eIdx) => !matchedExistingIndices.has(eIdx) && String(i.finishedGood) === fgIdStr);
+                }
+                if (existingIdx !== -1) {
+                    matchedExistingIndices.add(existingIdx);
+                }
+                const existingItem = existingIdx !== -1 ? salesOrder.items[existingIdx] : null;
                 const existingDispatched = existingItem ? existingItem.dispatchedQuantity : 0;
 
                 cleanedItems.push({
+                    ...(existingItem?._id ? { _id: existingItem._id } : {}),
                     finishedGood: item.finishedGood,
                     quantity: qty,
                     unit: item.unit || item.uom || existingItem?.unit || '',
                     dispatchedQuantity: existingDispatched,
+                    plannedQuantity: existingItem ? Number(existingItem.plannedQuantity || 0) : 0,
                     ratePerUnit: rate
                 });
             }

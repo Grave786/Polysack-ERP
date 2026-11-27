@@ -2,7 +2,10 @@ const mongoose = require('mongoose');
 const ProductionLog = require('../models/productionLog.model');
 const WorkOrder = require('../models/workOrder.model');
 const Employee = require('../models/employee.model');
+const FinishedGood = require('../models/finishedGood.model');
+const BOM = require('../models/bom.model');
 const { isTenantAdmin } = require('../middlewares/rbac.middleware');
+const { resolveBagWeightSpec } = require('../utils/bagWeightHelper');
 
 /**
  * Format Date object / string to IST YYYY-MM-DD string without toISOString() timezone shift
@@ -145,7 +148,8 @@ const recalculateForwardStageCapsAndSync = async (tenantObjId, woObjId, sessionO
         {
             $group: {
                 _id: { $ifNull: ['$stage', '$stageName'] },
-                total: { $sum: '$quantity' }
+                total: { $sum: '$quantity' },
+                totalKg: { $sum: { $ifNull: ['$producedKg', { $ifNull: ['$netWeight', 0] }] } }
             }
         }
     ];
@@ -155,13 +159,25 @@ const recalculateForwardStageCapsAndSync = async (tenantObjId, woObjId, sessionO
     const aggResult = await aggQuery;
 
     const stageOutputMap = {};
+    const stageKgMap = {};
     (aggResult || []).forEach((row) => {
-        if (row._id) stageOutputMap[String(row._id).toUpperCase()] = Number(row.total || 0);
+        if (row._id) {
+            const key = String(row._id).toUpperCase();
+            stageOutputMap[key] = Number(row.total || 0);
+            stageKgMap[key] = Number(row.totalKg || 0);
+        }
     });
+
+    const [fgDocForWeight, bomDocForWeight] = await Promise.all([
+        workOrder.finishedGood ? FinishedGood.findById(workOrder.finishedGood).lean() : Promise.resolve(null),
+        workOrder.bom ? BOM.findById(workOrder.bom).populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } }).lean() : Promise.resolve(null)
+    ]);
+    const weightSpec = resolveBagWeightSpec(fgDocForWeight, bomDocForWeight);
 
     const exceededStages = [];
     let runningTarget = workOrderOriginalTarget;
     let finalStageCompleted = 0;
+    let finalStageCompletedKg = 0;
 
     for (let i = 0; i < nonSkippedStages.length; i++) {
         const st = nonSkippedStages[i];
@@ -190,9 +206,15 @@ const recalculateForwardStageCapsAndSync = async (tenantObjId, woObjId, sessionO
             });
         }
 
+        let totalProducedKg = stageKgMap[stKey];
+        if (!totalProducedKg || totalProducedKg <= 0) {
+            totalProducedKg = weightSpec?.weightKg ? Number((totalProduced * weightSpec.weightKg).toFixed(2)) : 0;
+        }
+
         const isFinalStage = st.sequence === 8 || st.stageName === 'BALING_PACKING' || i === nonSkippedStages.length - 1;
         if (isFinalStage) {
             finalStageCompleted = Math.min(stageTarget, totalProduced);
+            finalStageCompletedKg = totalProducedKg;
         }
 
         // Output available for next stage is capped to this stage's actual good output (cumulative bottleneck)
@@ -203,7 +225,8 @@ const recalculateForwardStageCapsAndSync = async (tenantObjId, woObjId, sessionO
             {
                 $set: {
                     'stages.$[st].completedQuantity': totalProduced,
-                    'stages.$[st].goodOutputQty': totalProduced
+                    'stages.$[st].goodOutputQty': totalProduced,
+                    'stages.$[st].completedKg': totalProducedKg
                 }
             },
             {
@@ -214,9 +237,15 @@ const recalculateForwardStageCapsAndSync = async (tenantObjId, woObjId, sessionO
     }
 
     const shortfall = Math.max(0, workOrderOriginalTarget - finalStageCompleted);
+    const targetKgVal = Number(workOrder.targetKg || (weightSpec?.weightKg ? Number((workOrderOriginalTarget * weightSpec.weightKg).toFixed(2)) : 0));
+    const balanceKgVal = Math.max(0, Number((targetKgVal - finalStageCompletedKg).toFixed(2)));
     const woUpdateSet = {
         completedQuantity: finalStageCompleted,
-        balanceQuantity: shortfall
+        completedPcs: finalStageCompleted,
+        completedKg: Number(finalStageCompletedKg.toFixed(2)),
+        balanceQuantity: shortfall,
+        balancePcs: shortfall,
+        balanceKg: balanceKgVal
     };
     const specialBalanceStatuses = ['CONTINUED', 'PENDING_APPROVAL', 'REJECTED'];
     if (!specialBalanceStatuses.includes(workOrder.balanceStatus)) {
@@ -469,8 +498,22 @@ const createProductionLog = async (req, res) => {
             });
         }
 
-        // 2. Block production log creation on CANCELLED and REJECTED Work Orders.
+        // 2. Block production log creation on non-approved, CANCELLED and REJECTED Work Orders.
         // For COMPLETED Work Orders: only Tenant Admin may add corrective/compensating entries (remaining cap is still enforced below).
+        const woApprovalStatus = workOrder.approvalStatus || 'APPROVED';
+        if (woApprovalStatus === 'PENDING_APPROVAL') {
+            return res.status(400).json({
+                success: false,
+                message: 'Work Order is awaiting approval.'
+            });
+        }
+        if (woApprovalStatus === 'REJECTED') {
+            return res.status(400).json({
+                success: false,
+                message: 'Work Order was rejected and cannot accept production logs.'
+            });
+        }
+
         const woStatusUpper = String(workOrder.status || '').toUpperCase();
         const isAdminUser = await isTenantAdmin(req.user);
         if (woStatusUpper === 'CANCELLED' || woStatusUpper === 'REJECTED') {
@@ -627,10 +670,32 @@ const createProductionLog = async (req, res) => {
             });
         }
 
-        // 10. Create ProductionLog entry
-        const parsedNetWeight = (isBalingStage && netWeight !== undefined && netWeight !== null && netWeight !== '')
-            ? Number(netWeight)
-            : null;
+        // 10. Create ProductionLog entry (never trust client totals; recompute Kg if no actual Kg sent)
+        const rawActualKg = (netWeight !== undefined && netWeight !== null && netWeight !== '')
+            ? netWeight
+            : req.body.producedKg;
+        const hasProvidedKg = rawActualKg !== undefined && rawActualKg !== null && rawActualKg !== '';
+        const parsedActualKg = hasProvidedKg ? Number(rawActualKg) : null;
+        if (hasProvidedKg && (isNaN(parsedActualKg) || parsedActualKg <= 0)) {
+            if (useTransaction && session) {
+                await session.abortTransaction();
+                session.endSession();
+            }
+            return res.status(400).json({
+                success: false,
+                message: 'Quantity Produced (Kg) must be a positive number greater than 0.'
+            });
+        }
+
+        const [fgDocForLog, bomDocForLog] = await Promise.all([
+            workOrder.finishedGood ? FinishedGood.findById(workOrder.finishedGood).lean() : Promise.resolve(null),
+            workOrder.bom ? BOM.findById(workOrder.bom).populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } }).lean() : Promise.resolve(null)
+        ]);
+        const logWeightSpec = resolveBagWeightSpec(fgDocForLog, bomDocForLog);
+        const hasActualKg = parsedActualKg !== null && !isNaN(parsedActualKg) && parsedActualKg > 0;
+        const producedKg = hasActualKg
+            ? Number(parsedActualKg.toFixed(2))
+            : (logWeightSpec?.weightKg ? Number((numQty * logWeightSpec.weightKg).toFixed(2)) : 0);
 
         const createdLogs = await ProductionLog.create([{
             tenant: tenantObjId,
@@ -641,8 +706,11 @@ const createProductionLog = async (req, res) => {
             operator: operator ? (operator._id || operator) : null,
             date: logDate,
             quantity: numQty,
+            producedPcs: numQty,
+            producedKg,
+            isEstimatedWeight: !hasActualKg,
             shift: shift || null,
-            netWeight: parsedNetWeight,
+            netWeight: isBalingStage ? parsedActualKg : (hasActualKg ? parsedActualKg : null),
             remarks: remarks || notes || '',
             notes: notes || remarks || '',
             loggedBy: req.user?._id || req.user?.id,
@@ -744,14 +812,32 @@ const getProductionLogs = async (req, res) => {
             .sort({ date: 1, createdAt: 1 })
             .lean();
 
-        const formattedLogs = logs.map((l) => ({
-            ...l,
-            operator: l.operator || {
-                name: l.remarks?.includes('legacy') ? 'Legacy Entry (Auto-migrated)' : 'Legacy Entry',
-                employeeCode: 'LEGACY',
-                department: 'PRODUCTION'
-            }
-        }));
+        const woDocForLogs = await WorkOrder.findById(woId).select('finishedGood bom').lean();
+        const [fgForLogs, bomForLogs] = await Promise.all([
+            woDocForLogs?.finishedGood ? FinishedGood.findById(woDocForLogs.finishedGood).lean() : Promise.resolve(null),
+            woDocForLogs?.bom ? BOM.findById(woDocForLogs.bom).populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } }).lean() : Promise.resolve(null)
+        ]);
+        const logsWeightSpec = resolveBagWeightSpec(fgForLogs, bomForLogs);
+
+        const formattedLogs = logs.map((l) => {
+            const qtyPcs = Number(l.producedPcs ?? l.quantity ?? 0);
+            const hasActual = l.producedKg !== undefined && l.producedKg !== null && Number(l.producedKg) > 0;
+            const netWt = l.netWeight !== undefined && l.netWeight !== null && Number(l.netWeight) > 0 ? Number(l.netWeight) : null;
+            const qtyKg = hasActual
+                ? Number(l.producedKg)
+                : (netWt !== null ? netWt : (logsWeightSpec?.weightKg ? Number((qtyPcs * logsWeightSpec.weightKg).toFixed(2)) : 0));
+            return {
+                ...l,
+                producedPcs: qtyPcs,
+                producedKg: qtyKg,
+                isEstimatedWeight: l.isEstimatedWeight !== undefined ? l.isEstimatedWeight : (netWt === null && !hasActual),
+                operator: l.operator || {
+                    name: l.remarks?.includes('legacy') ? 'Legacy Entry (Auto-migrated)' : 'Legacy Entry',
+                    employeeCode: 'LEGACY',
+                    department: 'PRODUCTION'
+                }
+            };
+        });
 
         return res.status(200).json({
             success: true,
@@ -813,20 +899,25 @@ const getProductionLogsSummary = async (req, res) => {
             isExceedingPreviousStage
         } = status;
 
-        // Populate machine and operators for assigned list
-        const populatedWO = await WorkOrder.findOne({ _id: workOrder._id, tenant: tenantObjId })
-            .populate({
-                path: 'assignedMachine',
-                populate: [
-                    { path: 'currentOperators', select: 'name employeeCode department designation' },
-                    { path: 'currentOperator', select: 'name employeeCode department designation' }
-                ]
-            })
-            .populate('assignedOperators', 'name employeeCode department designation')
-            .populate('jobOrderDetails.assignedOperators', 'name employeeCode department designation');
+        // Populate machine and operators for assigned list + FG/BOM for bag weight read-time defaults
+        const [populatedWO, fgDocSum, bomDocSum] = await Promise.all([
+            WorkOrder.findOne({ _id: workOrder._id, tenant: tenantObjId })
+                .populate({
+                    path: 'assignedMachine',
+                    populate: [
+                        { path: 'currentOperators', select: 'name employeeCode department designation' },
+                        { path: 'currentOperator', select: 'name employeeCode department designation' }
+                    ]
+                })
+                .populate('assignedOperators', 'name employeeCode department designation')
+                .populate('jobOrderDetails.assignedOperators', 'name employeeCode department designation'),
+            workOrder.finishedGood ? FinishedGood.findById(workOrder.finishedGood).lean() : Promise.resolve(null),
+            workOrder.bom ? BOM.findById(workOrder.bom).populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } }).lean() : Promise.resolve(null)
+        ]);
+        const sumWeightSpec = resolveBagWeightSpec(fgDocSum, bomDocSum);
 
         // 2. Fetch all logs for this stage
-        const logs = await ProductionLog.find({
+        const rawLogs = await ProductionLog.find({
             tenant: tenantObjId,
             workOrder: new mongoose.Types.ObjectId(woId),
             $or: [
@@ -840,8 +931,26 @@ const getProductionLogsSummary = async (req, res) => {
             .sort({ date: 1, createdAt: 1 })
             .lean();
 
-        // 3. Aggregate by Operator
+        const logs = rawLogs.map((l) => {
+            const pcs = Number(l.producedPcs ?? l.quantity ?? 0);
+            const hasStoredKg = l.producedKg !== undefined && l.producedKg !== null && Number(l.producedKg) > 0;
+            const hasNetWt = l.netWeight !== undefined && l.netWeight !== null && Number(l.netWeight) > 0;
+            const kg = hasStoredKg
+                ? Number(l.producedKg)
+                : (hasNetWt
+                    ? Number(l.netWeight)
+                    : (sumWeightSpec?.weightKg ? Number((pcs * sumWeightSpec.weightKg).toFixed(2)) : 0));
+            return {
+                ...l,
+                producedPcs: pcs,
+                producedKg: kg,
+                isEstimatedWeight: hasStoredKg ? Boolean(l.isEstimatedWeight) : !hasNetWt
+            };
+        });
+
+        // 3. Aggregate by Operator (Bags + Kg)
         const operatorMap = {};
+        let totalProducedKg = 0;
         logs.forEach((log) => {
             const op = log.operator;
             const isLegacy = !op || log.remarks?.includes('legacy');
@@ -854,10 +963,13 @@ const getProductionLogsSummary = async (req, res) => {
                     operatorName: opName,
                     employeeCode: op?.employeeCode || (isLegacy ? 'LEGACY' : ''),
                     department: op?.department || 'PRODUCTION',
-                    total: 0
+                    total: 0,
+                    totalKg: 0
                 };
             }
             operatorMap[opId].total += Number(log.quantity || 0);
+            operatorMap[opId].totalKg = Number((operatorMap[opId].totalKg + Number(log.producedKg || 0)).toFixed(2));
+            totalProducedKg = Number((totalProducedKg + Number(log.producedKg || 0)).toFixed(2));
         });
 
         const byOperator = Object.values(operatorMap);
@@ -873,14 +985,17 @@ const getProductionLogsSummary = async (req, res) => {
             const opId = op?._id ? String(op._id) : 'legacy-entry';
             const opName = op?.name || (op?.employeeCode ? `${op.employeeCode} - ${op.name}` : (isLegacy ? 'Legacy Entry (Auto-migrated)' : 'Unassigned Operator'));
             const qty = Number(log.quantity || 0);
+            const kg = Number(log.producedKg || 0);
 
             if (!dateMap[dateStr]) {
                 dateMap[dateStr] = {
                     date: dateStr,
-                    total: 0
+                    total: 0,
+                    totalKg: 0
                 };
             }
             dateMap[dateStr].total += qty;
+            dateMap[dateStr].totalKg = Number((dateMap[dateStr].totalKg + kg).toFixed(2));
 
             if (!dateOperatorMatrix[dateStr]) {
                 dateOperatorMatrix[dateStr] = {};
@@ -890,10 +1005,12 @@ const getProductionLogsSummary = async (req, res) => {
                     operatorId: opId,
                     operatorName: opName,
                     quantity: 0,
+                    producedKg: 0,
                     netWeight: 0
                 };
             }
             dateOperatorMatrix[dateStr][opId].quantity += qty;
+            dateOperatorMatrix[dateStr][opId].producedKg = Number((dateOperatorMatrix[dateStr][opId].producedKg + kg).toFixed(2));
             if (log.netWeight) {
                 dateOperatorMatrix[dateStr][opId].netWeight += Number(log.netWeight || 0);
             }
@@ -905,6 +1022,7 @@ const getProductionLogsSummary = async (req, res) => {
         const matrix = sortedDates.map((d) => ({
             date: d,
             total: dateMap[d]?.total || 0,
+            totalKg: dateMap[d]?.totalKg || 0,
             entries: Object.values(dateOperatorMatrix[d] || {})
         }));
 
@@ -967,7 +1085,10 @@ const getProductionLogsSummary = async (req, res) => {
                 stageTargetQuantity,
                 workOrderOriginalTarget,
                 totalProduced,
+                totalProducedKg,
+                stageTargetKg: sumWeightSpec?.weightKg ? Number((stageTargetQuantity * sumWeightSpec.weightKg).toFixed(2)) : 0,
                 remainingQuantity,
+                remainingKg: sumWeightSpec?.weightKg ? Number((remainingQuantity * sumWeightSpec.weightKg).toFixed(2)) : 0,
                 hasNoTarget,
                 isFirstActiveStage,
                 previousStage,
@@ -1054,7 +1175,7 @@ const updateProductionLog = async (req, res) => {
             });
         }
 
-        const { operator, date, quantity, shift, remarks, notes, netWeight } = req.body;
+        const { operator, date, quantity, shift, remarks, notes, netWeight, producedKg } = req.body;
         const stageName = log.stage || log.stageName;
         const isBalingStage = stageName === 'BALING_PACKING' || log.stageSequence === 8;
 
@@ -1158,9 +1279,32 @@ const updateProductionLog = async (req, res) => {
         }
 
         if (shift !== undefined) log.shift = shift || null;
-        if (netWeight !== undefined) {
-            log.netWeight = (netWeight !== null && netWeight !== '' && !isNaN(Number(netWeight))) ? Number(netWeight) : null;
+        const incomingKgRaw = netWeight !== undefined ? netWeight : producedKg;
+        if (incomingKgRaw !== undefined) {
+            if (incomingKgRaw !== null && incomingKgRaw !== '' && !isNaN(Number(incomingKgRaw)) && Number(incomingKgRaw) > 0) {
+                const kgVal = Number(Number(incomingKgRaw).toFixed(2));
+                log.producedKg = kgVal;
+                log.isEstimatedWeight = false;
+                if (isBalingStage || netWeight !== undefined) log.netWeight = kgVal;
+            } else {
+                const [fgDocUpd, bomDocUpd] = await Promise.all([
+                    workOrder.finishedGood ? FinishedGood.findById(workOrder.finishedGood).lean() : Promise.resolve(null),
+                    workOrder.bom ? BOM.findById(workOrder.bom).populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } }).lean() : Promise.resolve(null)
+                ]);
+                const specUpd = resolveBagWeightSpec(fgDocUpd, bomDocUpd);
+                log.producedKg = specUpd?.weightKg ? Number((Number(log.quantity || 0) * specUpd.weightKg).toFixed(2)) : 0;
+                log.isEstimatedWeight = true;
+                if (netWeight !== undefined) log.netWeight = null;
+            }
+        } else if (quantity !== undefined && log.isEstimatedWeight) {
+            const [fgDocUpd, bomDocUpd] = await Promise.all([
+                workOrder.finishedGood ? FinishedGood.findById(workOrder.finishedGood).lean() : Promise.resolve(null),
+                workOrder.bom ? BOM.findById(workOrder.bom).populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } }).lean() : Promise.resolve(null)
+            ]);
+            const specUpd = resolveBagWeightSpec(fgDocUpd, bomDocUpd);
+            log.producedKg = specUpd?.weightKg ? Number((Number(log.quantity || 0) * specUpd.weightKg).toFixed(2)) : 0;
         }
+        log.producedPcs = Number(log.quantity || 0);
         if (remarks !== undefined) log.remarks = remarks;
         if (notes !== undefined) log.notes = notes;
 
@@ -1324,7 +1468,7 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
 
         const workOrder = await WorkOrder.findOne({ _id: woId, tenant: tenantObjId })
             .populate('customer', 'name companyName')
-            .populate('finishedGood', 'name code')
+            .populate('finishedGood', 'name code bagWeightGms tareWeightGram weightPerBagGrams fabricGSM gsm dimensions')
             .lean();
 
         if (!workOrder) {
@@ -1353,12 +1497,16 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
         }
 
         // Fetch all production logs for this work order across all stages
-        const allLogs = await ProductionLog.find({
-            tenant: tenantObjId,
-            workOrder: new mongoose.Types.ObjectId(woId)
-        })
-            .populate('operator', 'name employeeCode department')
-            .lean();
+        const [allLogs, bomDocOverall] = await Promise.all([
+            ProductionLog.find({
+                tenant: tenantObjId,
+                workOrder: new mongoose.Types.ObjectId(woId)
+            })
+                .populate('operator', 'name employeeCode department')
+                .lean(),
+            workOrder.bom ? BOM.findById(workOrder.bom).populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } }).lean() : Promise.resolve(null)
+        ]);
+        const overallWeightSpec = resolveBagWeightSpec(workOrder.finishedGood, bomDocOverall);
 
         const stageSummaries = [];
         const operatorMap = {};
@@ -1377,6 +1525,7 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
             const stageTarget = isFirst ? Number(workOrder.targetQuantity || 0) : previousStageOutput;
 
             let stageTotalProduced = 0;
+            let stageTotalKg = 0;
             let isLegacy = false;
             let legacyQuantity = 0;
             const stageByOperator = {};
@@ -1384,7 +1533,13 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
             if (stageLogs.length > 0) {
                 stageLogs.forEach((log) => {
                     const qty = Number(log.quantity || 0);
+                    const logKg = (log.producedKg !== undefined && log.producedKg !== null && Number(log.producedKg) > 0)
+                        ? Number(log.producedKg)
+                        : ((log.netWeight !== undefined && log.netWeight !== null && Number(log.netWeight) > 0)
+                            ? Number(log.netWeight)
+                            : (overallWeightSpec?.weightKg ? Number((qty * overallWeightSpec.weightKg).toFixed(2)) : 0));
                     stageTotalProduced += qty;
+                    stageTotalKg = Number((stageTotalKg + logKg).toFixed(2));
 
                     const op = log.operator;
                     const opId = op?._id ? String(op._id) : 'legacy-unassigned';
@@ -1396,10 +1551,12 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
                             operatorId: opId,
                             operatorName: opName,
                             employeeCode: opCode,
-                            quantity: 0
+                            quantity: 0,
+                            producedKg: 0
                         };
                     }
                     stageByOperator[opId].quantity += qty;
+                    stageByOperator[opId].producedKg = Number((stageByOperator[opId].producedKg + logKg).toFixed(2));
 
                     // Global operator map across WO
                     if (!operatorMap[opId]) {
@@ -1408,11 +1565,15 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
                             operatorName: opName,
                             employeeCode: opCode,
                             totalAcrossStages: 0,
-                            stages: {}
+                            totalKgAcrossStages: 0,
+                            stages: {},
+                            stagesKg: {}
                         };
                     }
                     operatorMap[opId].totalAcrossStages += qty;
+                    operatorMap[opId].totalKgAcrossStages = Number((operatorMap[opId].totalKgAcrossStages + logKg).toFixed(2));
                     operatorMap[opId].stages[stName] = (operatorMap[opId].stages[stName] || 0) + qty;
+                    operatorMap[opId].stagesKg[stName] = Number(((operatorMap[opId].stagesKg[stName] || 0) + logKg).toFixed(2));
                 });
             } else {
                 // No logs recorded for this stage - check for legacy completedQuantity
@@ -1436,6 +1597,7 @@ const getWorkOrderOverallProductionSummary = async (req, res) => {
                 status: st.status,
                 targetQuantity: stageTarget,
                 totalProduced: stageTotalProduced,
+                totalProducedKg: stageTotalKg || (overallWeightSpec?.weightKg && stageTotalProduced > 0 ? Number((stageTotalProduced * overallWeightSpec.weightKg).toFixed(2)) : 0),
                 remainingQuantity: stageRemaining,
                 isLegacy,
                 legacyQuantity,

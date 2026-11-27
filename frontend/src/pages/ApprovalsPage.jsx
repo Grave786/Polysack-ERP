@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import axiosInstance from '../api/axiosInstance';
 import { useAuthStore } from '../store/authStore';
-import { hasApprovalPermission } from '../utils/permissionUtils';
+import { hasApprovalPermission, isTenantAdmin, checkIsSuperAdmin } from '../utils/permissionUtils';
 import toast from 'react-hot-toast';
 import { formatDate, formatDateTime } from '../utils/dateUtils';
 
@@ -51,6 +51,7 @@ const getWaitingTime = (dateVal) => {
 export default function ApprovalsPage() {
     const user = useAuthStore((state) => state.user);
     const canDecide = hasApprovalPermission(user);
+    const isAdmin = isTenantAdmin(user) || checkIsSuperAdmin(user);
 
     if (!canDecide) {
         return <Navigate to="/403" state={{ message: "You do not have permission to access the Approvals module." }} replace />;
@@ -371,6 +372,7 @@ export default function ApprovalsPage() {
                             <option value="NSL">New Sales Lead / Order Enquiry</option>
                             <option value="SO">Sales Order</option>
                             <option value="PO">PO (Purchase Order)</option>
+                            <option value="WO">Work Order</option>
                             <option value="CONTINUATION_WO">Continuation WO</option>
                         </select>
                     </div>
@@ -435,9 +437,11 @@ export default function ApprovalsPage() {
                                                         ? 'bg-purple-50 text-purple-800 border-purple-200'
                                                         : row.type === 'NSL'
                                                         ? 'bg-sky-50 text-sky-800 border-sky-200'
+                                                        : row.type === 'WO'
+                                                        ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
                                                         : 'bg-blue-50 text-blue-800 border-blue-200'
                                                 }`}>
-                                                    {row.type === 'NSL' ? 'New Sales Lead / Order Enquiry' : row.type === 'SO' ? 'Sales Order' : row.type}
+                                                    {row.type === 'NSL' ? 'New Sales Lead / Order Enquiry' : row.type === 'SO' ? 'Sales Order' : row.type === 'WO' ? 'Work Order' : row.type}
                                                 </span>
                                             </td>
                                             <td className="py-3 px-4 font-mono font-semibold text-text-main whitespace-nowrap">
@@ -478,8 +482,8 @@ export default function ApprovalsPage() {
                                                         <Eye size={14} />
                                                     </button>
 
-                                                    {/* Approve button (for Pending & canDecide) */}
-                                                    {row.status === 'Pending' && canDecide && (
+                                                    {/* Approve button (for Pending & authorized decider; WO is Tenant Admin only) */}
+                                                    {row.status === 'Pending' && (row.type === 'WO' ? isAdmin : canDecide) && (
                                                         <button
                                                             type="button"
                                                             onClick={() => handleApprove(row)}
@@ -492,8 +496,8 @@ export default function ApprovalsPage() {
                                                         </button>
                                                     )}
 
-                                                    {/* Reject button (for Pending & canDecide) */}
-                                                    {row.status === 'Pending' && canDecide && (
+                                                    {/* Reject button (for Pending & authorized decider; WO is Tenant Admin only) */}
+                                                    {row.status === 'Pending' && (row.type === 'WO' ? isAdmin : canDecide) && (
                                                         <button
                                                             type="button"
                                                             onClick={() => openRejectModal(row)}
@@ -989,6 +993,78 @@ export default function ApprovalsPage() {
                                 </div>
                             )}
 
+                            {/* Work Order Reference Details */}
+                            {viewRecord.type === 'WO' && viewRecord.referenceId && (
+                                <div className="space-y-3">
+                                    <div className="text-[11px] font-extrabold uppercase tracking-widest text-text-muted border-b border-border pb-1">
+                                        Work Order Details
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-app-bg p-3.5 rounded-xl border border-border">
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Work Order #</span>
+                                            <span className="font-mono font-extrabold text-primary text-sm">
+                                                {viewRecord.referenceId.workOrderNumber || viewRecord.referenceNo}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Customer</span>
+                                            <span className="font-extrabold text-text-main text-sm">
+                                                {viewRecord.referenceId.customer?.companyName || viewRecord.referenceId.customer?.name || 'Customer'}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Finished Good</span>
+                                            <span className="font-bold text-text-main">
+                                                {viewRecord.referenceId.finishedGood?.name || viewRecord.referenceId.finishedGood?.code || 'Finished Good'}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Linked Sales Order</span>
+                                            <span className="font-mono font-semibold text-text-main">
+                                                {viewRecord.referenceId.salesOrder?.soNumber || viewRecord.referenceId.salesOrderNumber || 'Unlinked'}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Target Quantity</span>
+                                            <span className="font-mono font-extrabold text-text-main">
+                                                {Number(viewRecord.referenceId.targetPcs ?? viewRecord.referenceId.targetQuantity ?? 0).toLocaleString('en-IN')} Bags
+                                                {Number(viewRecord.referenceId.targetKg || 0) > 0 && (
+                                                    <span className="text-text-muted font-normal ml-1">
+                                                        ({Number(viewRecord.referenceId.targetKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg)
+                                                    </span>
+                                                )}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block">Priority / Due Date</span>
+                                            <span className="font-semibold text-text-main">
+                                                {viewRecord.referenceId.priority || 'MEDIUM'}
+                                                {(viewRecord.referenceId.jobOrderDetails?.expectedDeliveryDate || viewRecord.referenceId.salesOrder?.deliveryDue) && (
+                                                    <span className="font-mono text-text-muted ml-2">
+                                                        • Due {formatISTDate(viewRecord.referenceId.jobOrderDetails?.expectedDeliveryDate || viewRecord.referenceId.salesOrder?.deliveryDue)}
+                                                    </span>
+                                                )}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {(viewRecord.referenceId.description || viewRecord.referenceId.remarks) && (
+                                        <div className="bg-app-bg p-3 rounded-xl border border-border">
+                                            <span className="text-[10px] uppercase font-bold text-text-muted block mb-1">Work Order Description & Remarks</span>
+                                            <p className="text-xs text-text-main whitespace-pre-wrap font-sans">
+                                                {viewRecord.referenceId.description || viewRecord.referenceId.remarks}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             {/* Continuation WO Reference Details */}
                             {viewRecord.type === 'CONTINUATION_WO' && viewRecord.referenceId && (
                                 <div className="space-y-3">
@@ -1062,7 +1138,7 @@ export default function ApprovalsPage() {
                                 Close
                             </button>
 
-                            {viewRecord.status === 'Pending' && canDecide && (
+                            {viewRecord.status === 'Pending' && (viewRecord.type === 'WO' ? isAdmin : canDecide) && (
                                 <div className="flex items-center gap-2">
                                     <button
                                         type="button"

@@ -67,6 +67,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
     const [customer, setCustomer] = useState('');
     const [finishedGood, setFinishedGood] = useState('');
     const [targetQuantity, setTargetQuantity] = useState('');
+    const [targetKg, setTargetKg] = useState('');
     const [priority, setPriority] = useState('MEDIUM');
     const [assignedMachine, setAssignedMachine] = useState('');
     const [assignedOperators, setAssignedOperators] = useState([]);
@@ -140,6 +141,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
         setAllowOverPlan(false);
         setAllowOverPlanReason('');
         setTargetQuantity('');
+        setTargetKg('');
         setAssignedMachine('');
         setAssignedOperators([]);
         setPriority('MEDIUM');
@@ -266,9 +268,18 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
             }
         }
         if (line.hasUnitConversion && line.remainingQuantity > 0) {
-            setTargetQuantity(String(line.remainingQuantity));
+            const remBags = Number(line.remainingQuantity);
+            setTargetQuantity(String(remBags));
+            const matchedFg = fgList.find((fg) => fg._id === fgId) || (typeof line.finishedGood === 'object' ? line.finishedGood : null);
+            const spec = resolveBagWeightSpec(matchedFg);
+            if (spec?.weightKg) {
+                setTargetKg(String(Number((remBags * spec.weightKg).toFixed(2))));
+            } else if (line.remainingKg) {
+                setTargetKg(String(line.remainingKg));
+            }
         } else if (!line.hasUnitConversion) {
             setTargetQuantity('');
+            setTargetKg('');
         }
         if (line.orderDate) {
             try {
@@ -312,7 +323,16 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
             setAllowOverPlanReason(workOrderToEdit.allowOverPlanReason || '');
             setCustomer(custId);
             setFinishedGood(fgId);
-            setTargetQuantity(workOrderToEdit.targetQuantity !== undefined && workOrderToEdit.targetQuantity !== null ? String(workOrderToEdit.targetQuantity) : '');
+            const initBags = workOrderToEdit.targetPcs ?? workOrderToEdit.targetQuantity;
+            setTargetQuantity(initBags !== undefined && initBags !== null ? String(initBags) : '');
+            if (workOrderToEdit.targetKg !== undefined && workOrderToEdit.targetKg !== null && Number(workOrderToEdit.targetKg) > 0) {
+                setTargetKg(String(workOrderToEdit.targetKg));
+            } else if (initBags && workOrderToEdit.finishedGood && typeof workOrderToEdit.finishedGood === 'object') {
+                const initSpec = resolveBagWeightSpec(workOrderToEdit.finishedGood);
+                setTargetKg(initSpec?.weightKg ? String(Number((Number(initBags) * initSpec.weightKg).toFixed(2))) : '');
+            } else {
+                setTargetKg('');
+            }
             setPriority(workOrderToEdit.priority || 'MEDIUM');
             setAssignedMachine(mchId);
             setAssignedOperators(ops);
@@ -543,11 +563,61 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
         linesForSelectedSo.find((l) => l.lineId === selectedSalesOrderLineId) ||
         (initialSoLine && initialSoLine.salesOrderId === selectedSalesOrderId && initialSoLine.lineId === selectedSalesOrderLineId ? initialSoLine : null);
 
+    const activeFgObj = finishedGoods.find((fg) => String(fg._id) === String(finishedGood))
+        || (workOrderToEdit?.finishedGood && typeof workOrderToEdit.finishedGood === 'object' && String(workOrderToEdit.finishedGood._id) === String(finishedGood)
+            ? workOrderToEdit.finishedGood
+            : null);
+    const activeBagSpec = resolveBagWeightSpec(activeFgObj);
+
+    const handleTargetBagsChange = (val) => {
+        setTargetQuantity(val);
+        const n = Number(val);
+        if (val !== '' && !isNaN(n) && n > 0 && activeBagSpec?.weightKg) {
+            setTargetKg(String(Number((n * activeBagSpec.weightKg).toFixed(2))));
+        } else if (val === '') {
+            setTargetKg('');
+        }
+    };
+
+    const handleTargetKgChange = (val) => {
+        setTargetKg(val);
+        const n = Number(val);
+        if (val !== '' && !isNaN(n) && n > 0 && activeBagSpec?.weightKg) {
+            setTargetQuantity(String(Math.floor(n / activeBagSpec.weightKg)));
+        } else if (val === '') {
+            setTargetQuantity('');
+        }
+    };
+
+    const ownWoBagsInEdit = (
+        workOrderToEdit &&
+        selectedSoLine &&
+        String(workOrderToEdit.salesOrder?._id || workOrderToEdit.salesOrder || '') === String(selectedSoLine.salesOrderId) &&
+        (!workOrderToEdit.salesOrderLineId || String(workOrderToEdit.salesOrderLineId) === String(selectedSoLine.lineId))
+    ) ? Number(workOrderToEdit.targetPcs ?? workOrderToEdit.targetQuantity ?? 0) : 0;
+
+    const effectivePlannedBags = selectedSoLine
+        ? Math.max(0, Number((Number(selectedSoLine.plannedQuantity || 0) - ownWoBagsInEdit).toFixed(3)))
+        : 0;
+    const effectiveRemainingBags = selectedSoLine
+        ? Math.max(0, Number((Number(selectedSoLine.convertedOrderedBags || 0) - effectivePlannedBags).toFixed(3)))
+        : 0;
+    const effectiveRemainingKg = selectedSoLine
+        ? (activeBagSpec?.weightKg
+            ? Number((effectiveRemainingBags * activeBagSpec.weightKg).toFixed(2))
+            : (selectedSoLine.remainingKg ?? null))
+        : null;
+    const effectivePlannedKg = selectedSoLine
+        ? (activeBagSpec?.weightKg
+            ? Number((effectivePlannedBags * activeBagSpec.weightKg).toFixed(2))
+            : (selectedSoLine.plannedKg ?? 0))
+        : 0;
+
     const isOverPlanning = Boolean(
         selectedSoLine &&
         selectedSoLine.hasUnitConversion &&
         targetQuantity !== '' &&
-        Number(targetQuantity) > Number(selectedSoLine.remainingQuantity || 0)
+        Number(targetQuantity) > effectiveRemainingBags
     );
 
     const handleSalesOrderChange = (newSoId) => {
@@ -872,7 +942,8 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                 customer,
                 finishedGood,
                 targetQuantity: targetQtyNum,
-                unit: totalOrderQuantityUnit || 'Bags',
+                targetPcs: targetQtyNum,
+                unit: 'Bags',
                 priority: priority || 'MEDIUM',
                 assignedMachine: assignedMachine || null,
                 assignedOperators: assignedOperators || [],
@@ -1054,12 +1125,18 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                         )}
 
                         {selectedSoLine && (() => {
-                            const lineCountUnit = ['Pcs', 'Bags'].includes(selectedSoLine.orderedUnit) ? selectedSoLine.orderedUnit : 'Bags';
+                            const soUnit = selectedSoLine.orderedUnit || 'Bags';
+                            const isKgSo = ['kg', 'kgs', 'kilogram', 'kilograms'].includes(String(soUnit).toLowerCase());
+                            const orderedBags = Number(selectedSoLine.convertedOrderedBags || selectedSoLine.orderedQuantity || 0);
+                            const plannedPrimary = isKgSo ? `${effectivePlannedKg.toLocaleString('en-IN')} Kg` : `${effectivePlannedBags.toLocaleString('en-IN')} ${soUnit}`;
+                            const remainingPrimary = isKgSo && effectiveRemainingKg !== null
+                                ? `${effectiveRemainingKg.toLocaleString('en-IN')} Kg`
+                                : `${effectiveRemainingBags.toLocaleString('en-IN')} ${soUnit}`;
                             return (
                             <div className="p-2.5 bg-card-bg border border-border rounded-md space-y-2 text-[11px]">
                                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-1.5">
                                     <span className="font-mono font-bold text-primary">
-                                        Against {selectedSoLine.soNumber} - line {selectedSoLine.lineIndex || 1} of {selectedSoLine.totalLines || 1} - Ordered {Number(selectedSoLine.orderedQuantity || 0).toLocaleString('en-IN')} {selectedSoLine.orderedUnit} - Already planned {Number(selectedSoLine.plannedQuantity || 0).toLocaleString('en-IN')} - Remaining {selectedSoLine.hasUnitConversion ? Number(selectedSoLine.remainingQuantity || 0).toLocaleString('en-IN') : 'Manual'}
+                                        Against {selectedSoLine.soNumber} - line {selectedSoLine.lineIndex || 1} of {selectedSoLine.totalLines || 1} - Ordered {Number(selectedSoLine.orderedQuantity || 0).toLocaleString('en-IN')} {soUnit}{isKgSo ? ` (about ${orderedBags.toLocaleString('en-IN')} Bags)` : ''} - Already planned {plannedPrimary}{isKgSo ? ` (${effectivePlannedBags.toLocaleString('en-IN')} Bags)` : ''} - Remaining {selectedSoLine.hasUnitConversion ? `${remainingPrimary}${isKgSo ? ` (${effectiveRemainingBags.toLocaleString('en-IN')} Bags)` : ''}` : 'Manual'}
                                     </span>
                                     <span className="text-text-muted font-semibold">
                                         Due: <span className={selectedSoLine.isOverdue ? 'text-rose-600 font-bold' : 'text-text-main font-bold'}>{formatDate(selectedSoLine.deliveryDue)}</span>
@@ -1068,26 +1145,35 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono">
                                     <div>
                                         <span className="text-[10px] text-text-muted uppercase block">Ordered</span>
-                                        <span className="font-bold text-text-main">
-                                            {Number(selectedSoLine.orderedQuantity || 0).toLocaleString('en-IN')} {selectedSoLine.orderedUnit}
+                                        <span className="font-bold text-text-main block">
+                                            {Number(selectedSoLine.orderedQuantity || 0).toLocaleString('en-IN')} {soUnit}
                                         </span>
+                                        {isKgSo && (
+                                            <span className="text-[10px] text-text-muted">({orderedBags.toLocaleString('en-IN')} Bags)</span>
+                                        )}
                                     </div>
                                     <div>
                                         <span className="text-[10px] text-text-muted uppercase block">Planned</span>
-                                        <span className="font-bold text-amber-700">
-                                            {Number(selectedSoLine.plannedQuantity || 0).toLocaleString('en-IN')} {lineCountUnit}
+                                        <span className="font-bold text-amber-700 block">
+                                            {plannedPrimary}
                                         </span>
+                                        {isKgSo && (
+                                            <span className="text-[10px] text-text-muted">({effectivePlannedBags.toLocaleString('en-IN')} Bags)</span>
+                                        )}
                                     </div>
                                     <div>
                                         <span className="text-[10px] text-text-muted uppercase block">Remaining</span>
-                                        <span className="font-extrabold text-primary">
-                                            {selectedSoLine.hasUnitConversion ? `${Number(selectedSoLine.remainingQuantity || 0).toLocaleString('en-IN')} ${lineCountUnit}` : 'Manual'}
+                                        <span className="font-extrabold text-primary block">
+                                            {selectedSoLine.hasUnitConversion ? remainingPrimary : 'Manual'}
                                         </span>
+                                        {selectedSoLine.hasUnitConversion && isKgSo && (
+                                            <span className="text-[10px] text-text-muted">({effectiveRemainingBags.toLocaleString('en-IN')} Bags)</span>
+                                        )}
                                     </div>
                                     <div>
                                         <span className="text-[10px] text-text-muted uppercase block">FG Stock</span>
                                         <span className="font-bold text-emerald-700">
-                                            {Number(selectedSoLine.fgCurrentStock || 0).toLocaleString('en-IN')} {lineCountUnit}
+                                            {Number(selectedSoLine.fgCurrentStock || 0).toLocaleString('en-IN')} Bags
                                             {selectedSoLine.shortfall > 0 ? ` (Short: ${Number(selectedSoLine.shortfall).toLocaleString('en-IN')})` : ''}
                                         </span>
                                     </div>
@@ -1184,41 +1270,43 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                         />
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-start">
                         <div>
                             <label className="block text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
-                                Target Production Quantity ({totalOrderQuantityUnit || 'Bags'}) *
+                                Target Quantity (Bags) *
                             </label>
                             <input
                                 type="number"
                                 required
-                                step="0.001"
-                                min="0.001"
-                                max={initialSoLine && selectedSoLine?.hasUnitConversion && !allowOverPlan ? selectedSoLine.remainingQuantity : undefined}
-                                placeholder="e.g. 20000"
+                                step="1"
+                                min="1"
+                                max={selectedSoLine?.hasUnitConversion && !allowOverPlan ? effectiveRemainingBags : undefined}
+                                placeholder="e.g. 3500"
                                 value={targetQuantity}
-                                onChange={(e) => setTargetQuantity(e.target.value)}
+                                onChange={(e) => handleTargetBagsChange(e.target.value)}
                                 className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-bold"
                             />
-                            {selectedSoLine?.hasUnitConversion && (
-                                <p className="text-[10px] text-text-muted mt-1 font-mono">
-                                    Max remaining to plan: <strong>{Number(selectedSoLine.remainingQuantity || 0).toLocaleString('en-IN')} {totalOrderQuantityUnit || 'Bags'}</strong>
-                                </p>
-                            )}
-                            {(() => {
-                                const fgObj = finishedGoods.find((fg) => String(fg._id) === String(finishedGood));
-                                const qtyNum = Number(targetQuantity || 0);
-                                if (!fgObj || qtyNum <= 0) return null;
-                                const spec = resolveBagWeightSpec(fgObj);
-                                if (!spec?.weightKg) return null;
-                                const reqKg = Number((qtyNum * spec.weightKg).toFixed(2));
-                                return (
-                                    <p className={`text-[10px] mt-1 font-mono ${spec.isUnrealistic ? 'text-amber-700 font-semibold' : 'text-primary font-semibold'}`}>
-                                        Material required for {qtyNum.toLocaleString('en-IN')} bags: <strong>{reqKg.toLocaleString('en-IN')} Kg</strong> ({spec.weightGrams} g/bag{spec.source ? ` • ${spec.source}` : ''})
-                                        {spec.warning ? ` — ${spec.warning}` : ''}
-                                    </p>
-                                );
-                            })()}
+                        </div>
+
+                        <div>
+                            <label className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-text-main mb-1.5">
+                                <span>Target Quantity (Kg)</span>
+                                {activeBagSpec?.source === 'Estimated' && (
+                                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200 normal-case">
+                                        estimated
+                                    </span>
+                                )}
+                            </label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                min="0.01"
+                                disabled={!activeBagSpec?.weightKg}
+                                placeholder={activeBagSpec?.weightKg ? 'e.g. 80.50' : 'Weight N/A'}
+                                value={targetKg}
+                                onChange={(e) => handleTargetKgChange(e.target.value)}
+                                className="w-full border border-border rounded-md p-2.5 bg-card-bg text-xs text-text-main focus:outline-none focus:border-primary font-mono font-bold disabled:opacity-60"
+                            />
                         </div>
 
                         <div>
@@ -1235,6 +1323,24 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                                 <option value="HIGH">High</option>
                             </select>
                         </div>
+
+                        <div className="sm:col-span-3 space-y-1">
+                            {selectedSoLine?.hasUnitConversion && (
+                                <p className="text-[10px] text-text-muted font-mono">
+                                    Max remaining to plan:{' '}
+                                    <strong>
+                                        {effectiveRemainingBags.toLocaleString('en-IN')} Bags
+                                        {effectiveRemainingKg !== null ? ` (${effectiveRemainingKg.toLocaleString('en-IN')} Kg)` : ''}
+                                    </strong>
+                                </p>
+                            )}
+                            {activeBagSpec?.weightKg && (
+                                <p className={`text-[10px] font-mono ${activeBagSpec.isUnrealistic ? 'text-amber-700 font-semibold' : 'text-primary font-semibold'}`}>
+                                    Avg {activeBagSpec.weightGrams} g / bag ({activeBagSpec.source === 'Estimated' ? 'estimated' : activeBagSpec.source})
+                                    {activeBagSpec.warning ? ` — ${activeBagSpec.warning}` : ''}
+                                </p>
+                            )}
+                        </div>
                     </div>
 
                     {isOverPlanning && (
@@ -1242,7 +1348,7 @@ export default function CreateWorkOrderModal({ isOpen, onClose, onSuccess, workO
                             <div className="flex items-start gap-1.5 font-semibold">
                                 <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-600" />
                                 <span>
-                                    Target quantity ({Number(targetQuantity).toLocaleString('en-IN')}) exceeds remaining SO quantity ({Number(selectedSoLine.remainingQuantity).toLocaleString('en-IN')} Bags).
+                                    Target quantity ({Number(targetQuantity).toLocaleString('en-IN')} Bags) exceeds remaining SO quantity ({effectiveRemainingBags.toLocaleString('en-IN')} Bags{effectiveRemainingKg !== null ? ` / ${effectiveRemainingKg.toLocaleString('en-IN')} Kg` : ''}).
                                 </span>
                             </div>
                             <label className="flex items-center gap-2 cursor-pointer font-bold">

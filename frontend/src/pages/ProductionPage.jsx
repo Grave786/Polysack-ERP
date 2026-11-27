@@ -64,6 +64,7 @@ export default function ProductionPage() {
     const [cancelModalOpen, setCancelModalOpen] = useState(false);
     const [woToCancel, setWoToCancel] = useState(null);
     const [isCancelling, setIsCancelling] = useState(false);
+    const [approvalFilter, setApprovalFilter] = useState('ALL');
 
     useEffect(() => {
         axiosInstance.get('/work-orders/pending-production?limit=1')
@@ -232,27 +233,39 @@ export default function ProductionPage() {
                 {
                     header: 'TARGET QTY',
                     accessor: 'targetQuantity',
-                    exportValue: (row) => row.targetQuantity || 0,
+                    exportValue: (row) => `${Number(row.targetPcs ?? row.targetQuantity ?? 0)} Bags (${Number(row.targetKg || 0).toFixed(2)} Kg)`,
                     render: (row) => {
-                        const u = row.unit || row.jobOrderDetails?.totalOrderQuantityUnit || 'Bags';
+                        const bags = Number(row.targetPcs ?? row.targetQuantity ?? 0);
+                        const kg = Number(row.targetKg || 0);
                         return (
-                            <span className="font-mono font-medium">
-                                {Number(row.targetQuantity || 0).toLocaleString('en-IN')} <span className="text-[10px] text-text-muted">{u}</span>
-                            </span>
+                            <div className="font-mono leading-tight">
+                                <span className="font-bold text-text-main">
+                                    {bags.toLocaleString('en-IN')} <span className="text-[10px] text-text-muted font-normal">Bags</span>
+                                </span>
+                                {kg > 0 && (
+                                    <span className="block text-[10px] text-text-muted">
+                                        ({kg.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Kg{row.isEstimatedTargetWeight ? ' est.' : ''})
+                                    </span>
+                                )}
+                            </div>
                         );
                     }
                 },
                 {
                     header: 'COMPLETED QTY',
-                    exportValue: (row) => row.completedQuantity || 0,
+                    exportValue: (row) => `${Number(row.completedPcs ?? row.completedQuantity ?? 0)} Bags / ${Number(row.completedKg || 0).toFixed(2)} Kg`,
                     render: (row) => {
-                        const u = row.unit || row.jobOrderDetails?.totalOrderQuantityUnit || 'Bags';
+                        const compBags = Number(row.completedPcs ?? row.completedQuantity ?? 0);
+                        const compKg = Number(row.completedKg || 0);
+                        const balBags = Number(row.balancePcs ?? row.balanceQuantity ?? 0);
+                        const balKg = Number(row.balanceKg || 0);
                         return (
                             <div className="space-y-1">
-                                <span className="font-extrabold text-text-main font-mono">
-                                    {Number(row.completedQuantity || 0).toLocaleString('en-IN')} <span className="text-[10px] text-text-muted font-normal">{u}</span>
+                                <span className="font-extrabold text-text-main font-mono block">
+                                    {compBags.toLocaleString('en-IN')} <span className="text-[10px] text-text-muted font-normal">Bags</span>
+                                    <span className="text-[10px] text-text-muted font-normal"> / {compKg.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Kg</span>
                                 </span>
-                                {row.balanceQuantity > 0 && (
+                                {balBags > 0 && (
                                     <div>
                                         {row.continuationWorkOrder ? (
                                             <span className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-950/50 px-1.5 py-0.5 rounded border border-blue-300 dark:border-blue-800/60 whitespace-nowrap">
@@ -260,7 +273,7 @@ export default function ProductionPage() {
                                             </span>
                                         ) : (
                                             <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/50 px-1.5 py-0.5 rounded border border-amber-300 dark:border-amber-800/60 whitespace-nowrap">
-                                                Balance: {Number(row.balanceQuantity).toLocaleString('en-IN')} {u} Pending
+                                                Balance: {balBags.toLocaleString('en-IN')} Bags{balKg > 0 ? ` (${balKg.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Kg)` : ''} Pending
                                             </span>
                                         )}
                                     </div>
@@ -345,7 +358,7 @@ export default function ProductionPage() {
                 },
                 {
                     header: 'STATUS',
-                    exportValue: (row) => row.status || 'PENDING',
+                    exportValue: (row) => `${row.status || 'PENDING'} (${row.approvalStatus || 'APPROVED'})`,
                     render: (row) => {
                         const status = row.status || 'PENDING';
                         const badgeStyle =
@@ -358,78 +371,117 @@ export default function ProductionPage() {
                                         : 'bg-gray-100 text-gray-700 border border-gray-300';
                         const label = status === 'IN_PROGRESS' ? 'In Progress' : status;
 
+                        const appStatus = row.approvalStatus || 'APPROVED';
+                        const appBadgeStyle =
+                            appStatus === 'APPROVED'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-300'
+                                : appStatus === 'REJECTED'
+                                    ? 'bg-rose-50 text-rose-700 border border-rose-300'
+                                    : 'bg-amber-50 text-amber-800 border border-amber-300';
+                        const appLabel =
+                            appStatus === 'APPROVED'
+                                ? 'Approved'
+                                : appStatus === 'REJECTED'
+                                    ? 'Rejected'
+                                    : 'Pending Approval';
+
                         return (
-                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider inline-block ${badgeStyle}`}>
-                                {label}
-                            </span>
+                            <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-1">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider inline-block ${badgeStyle}`}>
+                                        {label}
+                                    </span>
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider inline-block ${appBadgeStyle}`}>
+                                        {appLabel}
+                                    </span>
+                                </div>
+                                {appStatus === 'REJECTED' && row.rejectionReason && (
+                                    <p className="text-[10px] text-rose-700 font-medium max-w-[200px] truncate" title={row.rejectionReason}>
+                                        Reason: {row.rejectionReason}
+                                    </p>
+                                )}
+                            </div>
                         );
                     }
                 },
                 {
                     header: 'ACTIONS',
-                    render: (row) => (
-                        <div className="flex items-center gap-1.5">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setViewOrderRecord(row);
-                                }}
-                                className="text-gray-500 hover:text-blue-600 mr-2 cursor-pointer"
-                                title="View Details"
-                            >
-                                <Eye size={14} />
-                            </button>
-                            {isAdmin && (
+                    render: (row) => {
+                        const appStatus = row.approvalStatus || 'APPROVED';
+                        const isApproved = appStatus === 'APPROVED';
+                        const isCreator = row.createdBy && String(row.createdBy?._id || row.createdBy) === String(user?._id);
+                        const canEditRow = isAdmin || (!isApproved && isCreator);
+
+                        return (
+                            <div className="flex items-center gap-1.5">
                                 <button
                                     type="button"
                                     onClick={() => {
-                                        setEditOrderRecord(row);
+                                        setViewOrderRecord(row);
                                     }}
                                     className="text-gray-500 hover:text-blue-600 mr-2 cursor-pointer"
-                                    title="Edit Work Order"
+                                    title="View Details"
                                 >
-                                    <Pencil size={14} />
+                                    <Eye size={14} />
                                 </button>
-                            )}
-                            <button
-                                type="button"
-                                onClick={() => handleTrackJob(row._id)}
-                                className="bg-sidebar-bg hover:bg-black text-white px-2.5 py-1 rounded-md text-xs font-bold flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
-                            >
-                                <Activity size={13} />
-                                <span>Track</span>
-                            </button>
-                            {row.continuationWorkOrder ? (
+                                {canEditRow && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setEditOrderRecord(row);
+                                        }}
+                                        className="text-gray-500 hover:text-blue-600 mr-2 cursor-pointer"
+                                        title={appStatus === 'REJECTED' ? 'Edit & Resubmit Work Order' : 'Edit Work Order'}
+                                    >
+                                        <Pencil size={14} />
+                                    </button>
+                                )}
                                 <button
                                     type="button"
-                                    onClick={() => handleTrackJob(row.continuationWorkOrder?._id || row.continuationWorkOrder)}
-                                    className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold px-2 py-1 rounded-md text-xs transition-all shadow-2xs cursor-pointer whitespace-nowrap"
-                                    title="View continuation Work Order"
+                                    disabled={!isApproved}
+                                    onClick={() => { if (isApproved) handleTrackJob(row._id); }}
+                                    className={`px-2.5 py-1 rounded-md text-xs font-bold flex items-center gap-1 transition-all shadow-2xs ${
+                                        isApproved
+                                            ? 'bg-sidebar-bg hover:bg-black text-white cursor-pointer'
+                                            : 'bg-gray-200 text-gray-500 cursor-not-allowed opacity-70'
+                                    }`}
+                                    title={!isApproved ? (appStatus === 'REJECTED' ? 'Work Order was rejected' : 'Work Order is awaiting approval') : 'Track Stage Progress'}
                                 >
-                                    Continuation ({row.continuationWorkOrder?.workOrderNumber || 'WO'})
+                                    <Activity size={13} />
+                                    <span>Track</span>
                                 </button>
-                            ) : (row.status === 'COMPLETED' && row.balanceQuantity > 0 && (
-                                <button
-                                    type="button"
-                                    onClick={() => handleResumeBalance(row._id)}
-                                    className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold px-2 py-1 rounded-md text-xs transition-all shadow-2xs cursor-pointer whitespace-nowrap"
-                                    title="Resume balance production for remaining bags"
-                                >
-                                    Resume Balance
-                                </button>
-                            ))}
-                            {row.status !== 'COMPLETED' && row.status !== 'CANCELLED' && (
-                                <button
-                                    type="button"
-                                    onClick={() => { setWoToCancel(row); setCancelModalOpen(true); }}
-                                    className="border border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-900 px-2 py-1 rounded-md text-xs font-bold transition-all cursor-pointer"
-                                    title="Cancel Work Order"
-                                >
-                                    Cancel
-                                </button>
-                            )}
-                        </div>
-                    )
+                                {row.continuationWorkOrder ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleTrackJob(row.continuationWorkOrder?._id || row.continuationWorkOrder)}
+                                        className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold px-2 py-1 rounded-md text-xs transition-all shadow-2xs cursor-pointer whitespace-nowrap"
+                                        title="View continuation Work Order"
+                                    >
+                                        Continuation ({row.continuationWorkOrder?.workOrderNumber || 'WO'})
+                                    </button>
+                                ) : (isApproved && row.status === 'COMPLETED' && row.balanceQuantity > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleResumeBalance(row._id)}
+                                        className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold px-2 py-1 rounded-md text-xs transition-all shadow-2xs cursor-pointer whitespace-nowrap"
+                                        title="Resume balance production for remaining bags"
+                                    >
+                                        Resume Balance
+                                    </button>
+                                ))}
+                                {row.status !== 'COMPLETED' && row.status !== 'CANCELLED' && (
+                                    <button
+                                        type="button"
+                                        onClick={() => { setWoToCancel(row); setCancelModalOpen(true); }}
+                                        className="border border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-900 px-2 py-1 rounded-md text-xs font-bold transition-all cursor-pointer"
+                                        title="Cancel Work Order"
+                                    >
+                                        Cancel
+                                    </button>
+                                )}
+                            </div>
+                        );
+                    }
                 }
             ]
         },
@@ -473,6 +525,22 @@ export default function ProductionPage() {
                     }
                 }}
                 headerActions={createWorkOrderButton}
+                extraFilterControls={activeTabKey === 'work-orders' ? (
+                    <div className="flex items-center gap-1.5 bg-card-bg border border-border rounded-lg px-2.5 py-1.5 text-xs text-text-main shadow-2xs select-none">
+                        <span className="text-[11px] font-bold text-text-muted">Approval:</span>
+                        <select
+                            value={approvalFilter}
+                            onChange={(e) => setApprovalFilter(e.target.value)}
+                            className="bg-transparent text-xs font-semibold text-text-main focus:outline-none cursor-pointer"
+                        >
+                            <option value="ALL">All Approvals</option>
+                            <option value="PENDING_APPROVAL">Pending Approval</option>
+                            <option value="APPROVED">Approved</option>
+                            <option value="REJECTED">Rejected</option>
+                        </select>
+                    </div>
+                ) : null}
+                extraFilterParams={activeTabKey === 'work-orders' && approvalFilter !== 'ALL' ? { approvalStatus: approvalFilter } : undefined}
             />
 
             <CreateWorkOrderModal

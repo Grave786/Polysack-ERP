@@ -6,6 +6,11 @@ const DispatchItemSchema = new mongoose.Schema({
         ref: 'FinishedGood',
         required: [true, 'Finished Good reference is required in Dispatch item']
     },
+    salesOrderLineId: {
+        type: String,
+        trim: true,
+        default: null
+    },
     dispatchedQuantity: {
         type: Number,
         required: [true, 'Dispatched quantity is required'],

@@ -21,6 +21,59 @@ const {
     recalculateForwardStageCapsAndSync,
     getValidOperatorIds
 } = require('./productionLog.controller');
+const { resolveBagWeightSpec } = require('../utils/bagWeightHelper');
+const { createWorkOrderApprovalRequest } = require('../services/approval.service');
+
+const computeWoTargetMetrics = (targetQtyPcs, fgDoc, bomDoc = null) => {
+    const targetPcs = Math.max(0, Number(targetQtyPcs || 0));
+    const spec = resolveBagWeightSpec(fgDoc, bomDoc);
+    const targetKg = spec?.weightKg ? Number((targetPcs * spec.weightKg).toFixed(2)) : 0;
+    return {
+        targetPcs,
+        targetKg,
+        targetWeightSource: spec?.source || null,
+        isEstimatedTargetWeight: spec?.source === 'Estimated',
+        bagWeightGrams: spec?.weightGrams || null,
+        bagWeightKg: spec?.weightKg || null
+    };
+};
+
+const enrichWorkOrderWithUnits = (woDoc, bomByFgId = null) => {
+    const woObj = woDoc?.toObject ? woDoc.toObject() : { ...woDoc };
+    const fgObj = woObj.finishedGood && typeof woObj.finishedGood === 'object' ? woObj.finishedGood : null;
+    const fgIdStr = fgObj?._id ? String(fgObj._id) : String(woObj.finishedGood || '');
+    const bomDoc = woObj.bom && typeof woObj.bom === 'object' ? woObj.bom : (bomByFgId?.get(fgIdStr) || null);
+    const spec = resolveBagWeightSpec(fgObj, bomDoc);
+
+    const targetPcs = Number(woObj.targetPcs ?? woObj.targetQuantity ?? 0);
+    const targetKg = (woObj.targetKg !== undefined && woObj.targetKg !== null && Number(woObj.targetKg) > 0)
+        ? Number(woObj.targetKg)
+        : (spec?.weightKg ? Number((targetPcs * spec.weightKg).toFixed(2)) : 0);
+
+    const completedPcs = Number(woObj.completedPcs ?? woObj.completedQuantity ?? 0);
+    const completedKg = (woObj.completedKg !== undefined && woObj.completedKg !== null && Number(woObj.completedKg) > 0)
+        ? Number(woObj.completedKg)
+        : (spec?.weightKg ? Number((completedPcs * spec.weightKg).toFixed(2)) : 0);
+
+    const balancePcs = Number(woObj.balancePcs ?? woObj.balanceQuantity ?? Math.max(0, targetPcs - completedPcs));
+    const balanceKg = (woObj.balanceKg !== undefined && woObj.balanceKg !== null && (Number(woObj.balanceKg) > 0 || balancePcs === 0))
+        ? Number(woObj.balanceKg)
+        : Math.max(0, Number((targetKg - completedKg).toFixed(2)));
+
+    woObj.unit = 'Bags';
+    woObj.approvalStatus = woObj.approvalStatus || 'APPROVED';
+    woObj.targetPcs = targetPcs;
+    woObj.targetKg = targetKg;
+    woObj.targetWeightSource = woObj.targetWeightSource || spec?.source || null;
+    woObj.isEstimatedTargetWeight = woObj.isEstimatedTargetWeight || spec?.source === 'Estimated';
+    woObj.completedPcs = completedPcs;
+    woObj.completedKg = completedKg;
+    woObj.balancePcs = balancePcs;
+    woObj.balanceKg = balanceKg;
+    woObj.avgBagWeightGrams = spec?.weightGrams || null;
+    woObj.avgBagWeightKg = spec?.weightKg || null;
+    return woObj;
+};
 
 const ALL_8_STAGES = [
     'TAPE_EXTRUSION',
@@ -136,13 +189,14 @@ const validateAndResolveSalesOrderLink = async ({
         tenant: tenantId,
         salesOrder: soDoc._id,
         status: { $ne: 'CANCELLED' },
+        approvalStatus: { $ne: 'REJECTED' },
         isActive: true,
         ...(excludeWoId ? { _id: { $ne: excludeWoId } } : {})
-    }).select('salesOrderLineId finishedGood targetQuantity').lean();
+    }).select('salesOrderLineId finishedGood targetQuantity targetPcs').lean();
 
     const alreadyPlanned = existingWOs
         .filter((wo) => doesWoMatchSoLine(wo, matchedLine, matchedIdx))
-        .reduce((sum, wo) => sum + Number(wo.targetQuantity || 0), 0);
+        .reduce((sum, wo) => sum + Number(wo.targetPcs ?? wo.targetQuantity ?? 0), 0);
 
     const conv = convertSoQtyToBags(matchedLine.quantity, matchedLine.unit, matchedLine.finishedGood);
     if (conv.hasConversion && conv.convertedBags !== null) {
@@ -188,6 +242,13 @@ const createWorkOrder = async (req, res) => {
         delete req.body.workOrderNumber;
         delete req.body.stages;
         delete req.body.selectedStages;
+        delete req.body.approvalStatus;
+        delete req.body.approvedBy;
+        delete req.body.approvedAt;
+        delete req.body.rejectedBy;
+        delete req.body.rejectedAt;
+        delete req.body.rejectionReason;
+        delete req.body.createdBy;
 
         const {
             customer,
@@ -293,6 +354,8 @@ const createWorkOrder = async (req, res) => {
 
         // 4. Fetch Tenant production settings fresh from database & setup 8 pipeline stages
         const tenantDoc = await Tenant.findById(tenantId).lean();
+        const isAdminUser = (await isTenantAdmin(req.user)) || checkIsSuperAdmin(req.user);
+        const isAutoApproved = tenantDoc?.approvalSettings?.autoApproveWorkOrdersByApprover === true && isAdminUser;
         const startingStageKey = tenantDoc?.productionSettings?.activeStartingStage || 'FLEXO_PRINTING';
 
         const ALL_STAGE_NAMES = [
@@ -309,7 +372,7 @@ const createWorkOrder = async (req, res) => {
         let startingIndex = ALL_STAGE_NAMES.indexOf(startingStageKey);
         if (startingIndex === -1) startingIndex = 3; // Default to FLEXO_PRINTING (Index 3, Step 4)
 
-        console.log(`🏭 [WORK ORDER CREATE] Tenant: ${tenantId} | activeStartingStage: ${startingStageKey} | startingIndex: ${startingIndex} (${ALL_STAGE_NAMES[startingIndex]})`);
+        console.log(`🏭 [WORK ORDER CREATE] Tenant: ${tenantId} | activeStartingStage: ${startingStageKey} | startingIndex: ${startingIndex} (${ALL_STAGE_NAMES[startingIndex]}) | autoApproved: ${isAutoApproved}`);
 
         const workOrderNumber = await generateWorkOrderNumber(tenantId);
         const now = new Date();
@@ -326,7 +389,7 @@ const createWorkOrder = async (req, res) => {
                     goodOutputQty: 0,
                     rejectedQty: 0
                 };
-            } else if (!firstActiveAssigned) {
+            } else if (isAutoApproved && !firstActiveAssigned) {
                 firstActiveAssigned = true;
                 return {
                     stageName,
@@ -348,7 +411,7 @@ const createWorkOrder = async (req, res) => {
             }
         });
 
-        // 5. Setup Mongoose session for atomic WorkOrder creation + Stock Consumption
+        // 5. Setup Mongoose session for atomic WorkOrder creation (+ Stock Consumption only when auto-approved)
         try {
             session = await mongoose.startSession();
             session.startTransaction();
@@ -359,22 +422,24 @@ const createWorkOrder = async (req, res) => {
         const sessionOption = useTransaction ? { session } : {};
         const createdStockTransactions = [];
 
-        // Step A: Immediately consume raw materials for each BOM item
-        for (const item of activeBom.items) {
-            const requiredQty = item.quantityPerUnit * numTargetQty;
+        // Step A: Consume raw materials ONLY when auto-approved; otherwise deferred until Tenant Admin approval
+        if (isAutoApproved) {
+            for (const item of activeBom.items) {
+                const requiredQty = item.quantityPerUnit * numTargetQty;
 
-            const txnResult = await executeStockTransactionCore({
-                tenantId,
-                referenceNumber: workOrderNumber,
-                itemType: 'RAW_MATERIAL',
-                item: item.rawMaterial,
-                transactionType: 'PRODUCTION_CONSUMPTION',
-                quantity: requiredQty,
-                notes: `Auto-consumed for WorkOrder ${workOrderNumber}`,
-                performedBy: req.user._id || req.user.id
-            }, sessionOption);
+                const txnResult = await executeStockTransactionCore({
+                    tenantId,
+                    referenceNumber: workOrderNumber,
+                    itemType: 'RAW_MATERIAL',
+                    item: item.rawMaterial,
+                    transactionType: 'PRODUCTION_CONSUMPTION',
+                    quantity: requiredQty,
+                    notes: `Auto-consumed for WorkOrder ${workOrderNumber}`,
+                    performedBy: req.user._id || req.user.id
+                }, sessionOption);
 
-            createdStockTransactions.push(txnResult.transaction);
+                createdStockTransactions.push(txnResult.transaction);
+            }
         }
 
         // Step B: Build optional Job Order / Job Card details with full Roll Traceability & FIFO auto-allocation
@@ -432,6 +497,7 @@ const createWorkOrder = async (req, res) => {
         const activeWorkOrders = await WorkOrder.find({
             tenant: tenantId,
             status: { $ne: 'CANCELLED' },
+            approvalStatus: { $ne: 'REJECTED' },
             'jobOrderDetails.rolls.0': { $exists: true }
         })
             .select('workOrderNumber jobOrderDetails.rolls')
@@ -612,8 +678,8 @@ const createWorkOrder = async (req, res) => {
             remarks: incomingRemarks
         };
 
-        // Step C: Create WorkOrder document
-        const woUnit = req.body.unit || rawJobDetails.totalOrderQuantityUnit || 'Bags';
+        // Step C: Create WorkOrder document (always store target in Bags and compute Kg server-side)
+        const targetMetrics = computeWoTargetMetrics(numTargetQty, fgDoc, activeBom);
         const woDocs = await WorkOrder.create([{
             tenant: tenantId,
             workOrderNumber,
@@ -627,16 +693,29 @@ const createWorkOrder = async (req, res) => {
             finishedGood,
             bom: activeBom._id,
             targetQuantity: numTargetQty,
-            unit: woUnit,
+            targetPcs: targetMetrics.targetPcs,
+            targetKg: targetMetrics.targetKg,
+            targetWeightSource: targetMetrics.targetWeightSource,
+            isEstimatedTargetWeight: targetMetrics.isEstimatedTargetWeight,
+            unit: 'Bags',
             completedQuantity: 0,
+            completedPcs: 0,
+            completedKg: 0,
+            balanceQuantity: numTargetQty,
+            balancePcs: targetMetrics.targetPcs,
+            balanceKg: targetMetrics.targetKg,
             priority: priority || 'MEDIUM',
-            status: 'IN_PROGRESS',
+            status: isAutoApproved ? 'IN_PROGRESS' : 'PENDING',
+            approvalStatus: isAutoApproved ? 'APPROVED' : 'PENDING_APPROVAL',
+            createdBy: req.user._id || req.user.id,
+            approvedBy: isAutoApproved ? (req.user._id || req.user.id) : null,
+            approvedAt: isAutoApproved ? now : null,
             assignedMachine: assignedMachine || null,
             assignedOperators: Array.isArray(req.body.assignedOperators) ? req.body.assignedOperators.filter(Boolean) : (Array.isArray(rawJobDetails.assignedOperators) ? rawJobDetails.assignedOperators.filter(Boolean) : []),
             stages,
             jobOrderDetails: {
                 ...jobOrderDetails,
-                totalOrderQuantityUnit: rawJobDetails.totalOrderQuantityUnit || woUnit,
+                totalOrderQuantityUnit: rawJobDetails.totalOrderQuantityUnit || 'Bags',
                 assignedOperators: Array.isArray(req.body.assignedOperators) ? req.body.assignedOperators.filter(Boolean) : (Array.isArray(rawJobDetails.assignedOperators) ? rawJobDetails.assignedOperators.filter(Boolean) : [])
             },
             inks: Array.isArray(req.body.inks) ? req.body.inks.filter(Boolean) : (Array.isArray(req.body.inksRequired) ? req.body.inksRequired : []),
@@ -650,28 +729,35 @@ const createWorkOrder = async (req, res) => {
             session.endSession();
         }
 
-        if (workOrder.salesOrder) {
-            await recomputeSalesOrderProductionStatus(workOrder.salesOrder, tenantId);
-        }
-
         let soProductionStatus = null;
         if (linkedSoDoc) {
             const recomputed = await recomputeSalesOrderProductionStatus(linkedSoDoc._id, tenantId);
             soProductionStatus = recomputed?.productionStatus || null;
         }
 
+        let approval = null;
+        if (!isAutoApproved) {
+            approval = await createWorkOrderApprovalRequest(workOrder, req.user);
+        }
+
         await workOrder.populate([
             { path: 'customer', select: 'companyName code' },
             { path: 'finishedGood', select: 'name code' },
             { path: 'assignedMachine', select: 'name code' },
-            { path: 'salesOrder', select: 'soNumber status productionStatus deliveryDue' }
+            { path: 'salesOrder', select: 'soNumber status productionStatus deliveryDue' },
+            { path: 'createdBy', select: 'name email' }
         ]);
+
+        const createMsg = isAutoApproved
+            ? `Work Order '${workOrderNumber}' created successfully.${linkedSoDoc && soProductionStatus ? ` ${linkedSoDoc.soNumber} is now ${soProductionStatus}.` : ' Raw materials consumed atomically.'}`
+            : `Work Order '${workOrderNumber}' created and submitted for Tenant Admin approval.${linkedSoDoc && soProductionStatus ? ` ${linkedSoDoc.soNumber} is now ${soProductionStatus}.` : ''}`;
 
         return res.status(201).json({
             success: true,
-            message: `Work Order '${workOrderNumber}' created successfully.${linkedSoDoc && soProductionStatus ? ` ${linkedSoDoc.soNumber} is now ${soProductionStatus}.` : ' Raw materials consumed atomically.'}`,
+            message: createMsg,
             data: {
-                workOrder,
+                workOrder: enrichWorkOrderWithUnits(workOrder),
+                approval,
                 soProductionStatus,
                 stockTransactionsCreated: createdStockTransactions
             }
@@ -748,6 +834,17 @@ const advanceStage = async (req, res) => {
         if (!workOrder) {
             if (useTransaction && session) { await session.abortTransaction(); session.endSession(); }
             return res.status(404).json({ success: false, message: 'Work Order not found.' });
+        }
+
+        const woApprovalStatus = workOrder.approvalStatus || 'APPROVED';
+        if (woApprovalStatus !== 'APPROVED') {
+            if (useTransaction && session) { await session.abortTransaction(); session.endSession(); }
+            return res.status(400).json({
+                success: false,
+                message: woApprovalStatus === 'REJECTED'
+                    ? 'Work Order was rejected and cannot advance stages.'
+                    : 'Work Order is awaiting approval.'
+            });
         }
 
         const woStatusUpper = String(workOrder.status || '').toUpperCase();
@@ -989,23 +1086,43 @@ const getWorkOrders = async (req, res) => {
             });
         }
 
-        const { status, customer, finishedGood, priority, search, page = 1, limit = 20 } = req.query;
+        const { status, approvalStatus, customer, finishedGood, priority, search, page = 1, limit = 20 } = req.query;
 
         const filter = { tenant: tenantId };
+        const andConditions = [];
 
         if (status) filter.status = status;
+        if (approvalStatus && approvalStatus !== 'ALL' && approvalStatus !== 'All') {
+            if (approvalStatus === 'APPROVED') {
+                andConditions.push({
+                    $or: [
+                        { approvalStatus: 'APPROVED' },
+                        { approvalStatus: { $exists: false } },
+                        { approvalStatus: null }
+                    ]
+                });
+            } else {
+                filter.approvalStatus = approvalStatus;
+            }
+        }
         if (customer) filter.customer = customer;
         if (finishedGood) filter.finishedGood = finishedGood;
         if (priority) filter.priority = priority;
 
         if (search) {
-            filter.$or = [
-                { workOrderNumber: { $regex: search, $options: 'i' } },
-                { salesOrderNumber: { $regex: search, $options: 'i' } },
-                { description: { $regex: search, $options: 'i' } },
-                { remarks: { $regex: search, $options: 'i' } },
-                { 'jobOrderDetails.description': { $regex: search, $options: 'i' } }
-            ];
+            andConditions.push({
+                $or: [
+                    { workOrderNumber: { $regex: search, $options: 'i' } },
+                    { salesOrderNumber: { $regex: search, $options: 'i' } },
+                    { description: { $regex: search, $options: 'i' } },
+                    { remarks: { $regex: search, $options: 'i' } },
+                    { 'jobOrderDetails.description': { $regex: search, $options: 'i' } }
+                ]
+            });
+        }
+
+        if (andConditions.length > 0) {
+            filter.$and = andConditions;
         }
 
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -1016,7 +1133,10 @@ const getWorkOrders = async (req, res) => {
             WorkOrder.find(filter)
                 .populate('customer', 'companyName code')
                 .populate('salesOrder', 'soNumber status productionStatus deliveryDue')
-                .populate('finishedGood', 'name code')
+                .populate('finishedGood', 'name code uom bagWeightGms tareWeightGram weightPerBagGrams fabricGSM gsm dimensions dimensionUnit')
+                .populate('createdBy', 'name email')
+                .populate('approvedBy', 'name email')
+                .populate('rejectedBy', 'name email')
                 .populate('parentWorkOrder', 'workOrderNumber targetQuantity completedQuantity status')
                 .populate('continuationWorkOrder', 'workOrderNumber targetQuantity completedQuantity status')
                 .populate({
@@ -1033,16 +1153,30 @@ const getWorkOrders = async (req, res) => {
             WorkOrder.countDocuments(filter)
         ]);
 
+        const fgIds = Array.from(new Set(workOrders.map((w) => String(w.finishedGood?._id || w.finishedGood || '')).filter(Boolean)));
+        const activeBoms = fgIds.length > 0
+            ? await BOM.find({ tenant: tenantId, finishedGood: { $in: fgIds }, isActive: true })
+                .populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } })
+                .lean()
+            : [];
+        const bomByFgId = new Map();
+        activeBoms.forEach((b) => {
+            const k = String(b.finishedGood);
+            if (!bomByFgId.has(k) || b.isDefault) bomByFgId.set(k, b);
+        });
+
+        const enrichedWorkOrders = workOrders.map((w) => enrichWorkOrderWithUnits(w, bomByFgId));
+
         return res.status(200).json({
             success: true,
-            count: workOrders.length,
+            count: enrichedWorkOrders.length,
             pagination: {
                 total,
                 page: pageNum,
                 limit: limitNum,
                 pages: Math.ceil(total / limitNum) || 1
             },
-            data: workOrders
+            data: enrichedWorkOrders
         });
     } catch (error) {
         console.error('Error in getWorkOrders:', error);
@@ -1370,8 +1504,11 @@ const getWorkOrderById = async (req, res) => {
 
         const workOrder = await WorkOrder.findOne({ _id: req.params.id, tenant: tenantId })
             .populate('customer', 'companyName code contactPerson phone')
-            .populate('finishedGood', 'name code uom currentStock')
+            .populate('finishedGood', 'name code uom currentStock bagWeightGms tareWeightGram weightPerBagGrams fabricGSM gsm dimensions dimensionUnit')
             .populate('bom')
+            .populate('createdBy', 'name email')
+            .populate('approvedBy', 'name email')
+            .populate('rejectedBy', 'name email')
             .populate('assignedOperators', 'name employeeCode department')
             .populate('jobOrderDetails.assignedOperators', 'name employeeCode department')
             .populate('parentWorkOrder', 'workOrderNumber targetQuantity completedQuantity status')
@@ -1484,7 +1621,7 @@ const getWorkOrderById = async (req, res) => {
                 await workOrder.save();
             }
 
-            const woData = workOrder.toObject ? workOrder.toObject() : workOrder;
+            const woData = enrichWorkOrderWithUnits(workOrder);
             woData.exceededStages = exceededStages;
 
             return res.status(200).json({
@@ -1496,7 +1633,7 @@ const getWorkOrderById = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            data: workOrder
+            data: enrichWorkOrderWithUnits(workOrder)
         });
     } catch (error) {
         console.error('Error in getWorkOrderById:', error);
@@ -1525,6 +1662,16 @@ const updateStageSpec = async (req, res) => {
         const workOrder = await WorkOrder.findOne({ _id: req.params.id, tenant: tenantId });
         if (!workOrder) {
             return res.status(404).json({ success: false, message: 'Work Order not found.' });
+        }
+
+        const woApprovalStatus = workOrder.approvalStatus || 'APPROVED';
+        if (woApprovalStatus !== 'APPROVED') {
+            return res.status(400).json({
+                success: false,
+                message: woApprovalStatus === 'REJECTED'
+                    ? 'Work Order was rejected and cannot update stage specs.'
+                    : 'Work Order is awaiting approval.'
+            });
         }
 
         const stage = workOrder.stages.find(s => s.stageName === stageName || (stageName === 'BALING_PACKING' && s.sequence === 8));
@@ -1576,6 +1723,16 @@ const resumeBalanceProduction = async (req, res) => {
         const workOrder = await WorkOrder.findOne({ _id: req.params.id, tenant: tenantId });
         if (!workOrder) {
             return res.status(404).json({ success: false, message: 'Work Order not found.' });
+        }
+
+        const woApprovalStatus = workOrder.approvalStatus || 'APPROVED';
+        if (woApprovalStatus !== 'APPROVED') {
+            return res.status(400).json({
+                success: false,
+                message: woApprovalStatus === 'REJECTED'
+                    ? 'Work Order was rejected.'
+                    : 'Work Order is awaiting approval.'
+            });
         }
 
         if (workOrder.status === 'CANCELLED') {
@@ -1806,6 +1963,8 @@ const createContinuationWorkOrderCore = async (parentWorkOrderId, tenantId, sess
         balanceStatus: 'RESOLVED',
         priority: workOrder.priority || 'MEDIUM',
         status: 'IN_PROGRESS',
+        approvalStatus: 'APPROVED',
+        approvedAt: now,
         assignedMachine: workOrder.assignedMachine?._id || workOrder.assignedMachine || null,
         assignedOperators: workOrder.assignedOperators || [],
         description: `Continuation of ${workOrder.workOrderNumber} (Balance: ${pendingBalance.toLocaleString('en-IN')} ${woUnit})`,
@@ -1851,6 +2010,25 @@ const updateWorkOrder = async (req, res) => {
             return res.status(404).json({
                 success: false,
                 message: 'Work Order not found.'
+            });
+        }
+
+        const effectiveApprovalStatus = workOrder.approvalStatus || 'APPROVED';
+        const isAdminUser = (await isTenantAdmin(req.user)) || checkIsSuperAdmin(req.user);
+        const currentUserId = String(req.user?._id || req.user?.id || '');
+        const isCreator = Boolean(workOrder.createdBy && currentUserId && String(workOrder.createdBy) === currentUserId);
+
+        if (effectiveApprovalStatus === 'APPROVED') {
+            if (!isAdminUser) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Only Tenant Admin can edit an approved Work Order.'
+                });
+            }
+        } else if (!isAdminUser && !isCreator) {
+            return res.status(403).json({
+                success: false,
+                message: 'Forbidden: Only the creator or Tenant Admin can edit this Work Order.'
             });
         }
 
@@ -1953,9 +2131,7 @@ const updateWorkOrder = async (req, res) => {
             workOrder.inks = inks.filter(i => i && String(i).trim() !== '').map(i => String(i).trim());
         }
 
-        if (req.body.unit) {
-            workOrder.unit = req.body.unit;
-        }
+        workOrder.unit = 'Bags';
 
         if (jobOrderDetails && typeof jobOrderDetails === 'object') {
             const currentJOD = workOrder.jobOrderDetails ? (workOrder.jobOrderDetails.toObject ? workOrder.jobOrderDetails.toObject() : workOrder.jobOrderDetails) : {};
@@ -1966,11 +2142,23 @@ const updateWorkOrder = async (req, res) => {
             if (jobOrderDetails.assignedOperators !== undefined) {
                 updatedJOD.assignedOperators = await getValidOperatorIds(jobOrderDetails.assignedOperators, tenantId);
             }
-            if (jobOrderDetails.totalOrderQuantityUnit) {
-                workOrder.unit = req.body.unit || jobOrderDetails.totalOrderQuantityUnit;
-            }
             workOrder.jobOrderDetails = updatedJOD;
         }
+
+        // Recompute targetPcs / targetKg / balancePcs / balanceKg strictly on server
+        const [fgDocForTarget, bomDocForTarget] = await Promise.all([
+            FinishedGood.findById(workOrder.finishedGood).lean(),
+            workOrder.bom ? BOM.findById(workOrder.bom).populate({ path: 'items.rawMaterial', select: 'name code uom', populate: { path: 'uom', select: 'name symbol abbreviation' } }).lean() : Promise.resolve(null)
+        ]);
+        const targetMetrics = computeWoTargetMetrics(workOrder.targetQuantity, fgDocForTarget, bomDocForTarget);
+        workOrder.targetPcs = targetMetrics.targetPcs;
+        workOrder.targetKg = targetMetrics.targetKg;
+        workOrder.targetWeightSource = targetMetrics.targetWeightSource;
+        workOrder.isEstimatedTargetWeight = targetMetrics.isEstimatedTargetWeight;
+        const compPcs = Number(workOrder.completedPcs ?? workOrder.completedQuantity ?? 0);
+        const compKg = Number(workOrder.completedKg || 0);
+        workOrder.balancePcs = Math.max(0, targetMetrics.targetPcs - compPcs);
+        workOrder.balanceKg = Math.max(0, Number((targetMetrics.targetKg - compKg).toFixed(2)));
 
         const effectiveSoId = incomingSoId !== undefined ? incomingSoId : workOrder.salesOrder;
         const effectiveSoLineId = salesOrderLineId !== undefined ? salesOrderLineId : workOrder.salesOrderLineId;
@@ -2002,6 +2190,15 @@ const updateWorkOrder = async (req, res) => {
             workOrder.salesOrderNumber = '';
         }
 
+        const wasRejected = effectiveApprovalStatus === 'REJECTED';
+        if (wasRejected) {
+            workOrder.approvalStatus = 'PENDING_APPROVAL';
+            workOrder.rejectedBy = null;
+            workOrder.rejectedAt = null;
+            workOrder.rejectionReason = '';
+            workOrder.status = 'PENDING';
+        }
+
         await workOrder.save();
 
         if (previousSalesOrderId && (!workOrder.salesOrder || String(workOrder.salesOrder) !== previousSalesOrderId)) {
@@ -2011,18 +2208,27 @@ const updateWorkOrder = async (req, res) => {
             await recomputeSalesOrderProductionStatus(workOrder.salesOrder, tenantId);
         }
 
+        if (wasRejected) {
+            await createWorkOrderApprovalRequest(workOrder, req.user);
+        }
+
         const updatedWorkOrder = await WorkOrder.findById(workOrder._id)
             .populate('customer', 'companyName code contactPerson phone')
             .populate('salesOrder', 'soNumber status productionStatus deliveryDue')
-            .populate('finishedGood', 'name code')
+            .populate('finishedGood', 'name code uom bagWeightGms tareWeightGram weightPerBagGrams fabricGSM gsm dimensions dimensionUnit')
+            .populate('createdBy', 'name email')
+            .populate('approvedBy', 'name email')
+            .populate('rejectedBy', 'name email')
             .populate('assignedMachine', 'name code currentOperators currentOperator')
             .populate('assignedOperators', 'name employeeCode department')
             .populate('stages.machine', 'name code currentOperators currentOperator');
 
         return res.status(200).json({
             success: true,
-            message: `Work Order ${workOrder.workOrderNumber} updated successfully.`,
-            data: updatedWorkOrder
+            message: wasRejected
+                ? `Work Order ${workOrder.workOrderNumber} updated and resubmitted for Tenant Admin approval.`
+                : `Work Order ${workOrder.workOrderNumber} updated successfully.`,
+            data: enrichWorkOrderWithUnits(updatedWorkOrder)
         });
     } catch (error) {
         console.error('Error in updateWorkOrder:', error);
@@ -2063,6 +2269,15 @@ const skipStage = async (req, res) => {
             return res.status(404).json({
                 success: false,
                 message: 'Work Order not found.'
+            });
+        }
+
+        if ((workOrder.approvalStatus || 'APPROVED') !== 'APPROVED') {
+            return res.status(400).json({
+                success: false,
+                message: (workOrder.approvalStatus === 'REJECTED')
+                    ? 'Work Order was rejected and cannot skip stages.'
+                    : 'Work Order is awaiting approval.'
             });
         }
 
@@ -2205,6 +2420,15 @@ const unskipStage = async (req, res) => {
             return res.status(404).json({
                 success: false,
                 message: 'Work Order not found.'
+            });
+        }
+
+        if ((workOrder.approvalStatus || 'APPROVED') !== 'APPROVED') {
+            return res.status(400).json({
+                success: false,
+                message: (workOrder.approvalStatus === 'REJECTED')
+                    ? 'Work Order was rejected and cannot un-skip stages.'
+                    : 'Work Order is awaiting approval.'
             });
         }
 

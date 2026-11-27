@@ -15,7 +15,7 @@ const ApprovalSchema = new mongoose.Schema({
     type: {
         type: String,
         required: [true, 'Approval type is required'],
-        enum: ['NSL', 'PO', 'CONTINUATION_WO', 'SO']
+        enum: ['NSL', 'PO', 'CONTINUATION_WO', 'SO', 'WO']
     },
     referenceModel: {
         type: String,

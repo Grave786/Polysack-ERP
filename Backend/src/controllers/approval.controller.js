@@ -5,13 +5,14 @@ const PurchaseOrder = require('../models/purchaseOrder.model');
 const OrderEnquiry = require('../models/orderEnquiry.model');
 const SalesOrder = require('../models/salesOrder.model');
 const WorkOrder = require('../models/workOrder.model');
-const { hasApprovalPermission } = require('../middlewares/rbac.middleware');
+const { hasApprovalPermission, isTenantAdmin, checkIsSuperAdmin } = require('../middlewares/rbac.middleware');
 const {
     getApprovalHandler,
     markApprovalNotificationsRead,
     syncPendingPurchaseOrderApprovals,
     syncPendingNslApprovals,
-    syncPendingSalesOrderApprovals
+    syncPendingSalesOrderApprovals,
+    syncPendingWorkOrderApprovals
 } = require('../services/approval.service');
 
 /**
@@ -31,12 +32,13 @@ const getApprovals = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Tenant context is missing.' });
         }
 
-        // Idempotently create missing Approvals for any pending POs, NSLs, and Sales Orders
+        // Idempotently create missing Approvals for any pending POs, NSLs, Sales Orders, and Work Orders
         try {
             await Promise.all([
                 syncPendingPurchaseOrderApprovals(tenantId),
                 syncPendingNslApprovals(tenantId),
-                syncPendingSalesOrderApprovals(tenantId)
+                syncPendingSalesOrderApprovals(tenantId),
+                syncPendingWorkOrderApprovals(tenantId)
             ]);
         } catch (syncErr) {
             console.error('[getApprovals] sync error (non-fatal):', syncErr);
@@ -161,7 +163,8 @@ const getPendingCount = async (req, res) => {
             await Promise.all([
                 syncPendingPurchaseOrderApprovals(tenantId),
                 syncPendingNslApprovals(tenantId),
-                syncPendingSalesOrderApprovals(tenantId)
+                syncPendingSalesOrderApprovals(tenantId),
+                syncPendingWorkOrderApprovals(tenantId)
             ]);
         } catch (syncErr) {
             console.error('[getPendingCount] sync error (non-fatal):', syncErr);
@@ -251,10 +254,12 @@ const getApprovalById = async (req, res) => {
                         .populate({ path: 'items.finishedGood', select: 'name code uom', populate: { path: 'uom', select: 'name symbol' } })
                         .lean();
                     if (soDoc) approval.referenceId = soDoc;
-                } else if (approval.referenceModel === 'WorkOrder' || approval.type === 'CONTINUATION_WO') {
+                } else if (approval.referenceModel === 'WorkOrder' || approval.type === 'CONTINUATION_WO' || approval.type === 'WO') {
                     const woDoc = await WorkOrder.findById(approval.referenceId._id || approval.referenceId)
                         .populate('customer', 'companyName code contactPerson phone')
                         .populate('finishedGood', 'name code unit')
+                        .populate('salesOrder', 'soNumber deliveryDue')
+                        .populate('createdBy', 'name email')
                         .populate('assignedMachine', 'name code')
                         .populate('parentWorkOrder', 'workOrderNumber targetQuantity completedQuantity status')
                         .populate('continuationWorkOrder', 'workOrderNumber targetQuantity completedQuantity status')
@@ -307,6 +312,27 @@ const approveApproval = async (req, res) => {
         }
         const targetObjectId = new mongoose.Types.ObjectId(idParam);
 
+        const peekApproval = await Approval.findOne({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            $or: [{ _id: targetObjectId }, { referenceId: targetObjectId }]
+        }).select('type status').lean();
+
+        if (peekApproval?.type === 'WO') {
+            const isAdminUser = (await isTenantAdmin(req.user)) || checkIsSuperAdmin(req.user);
+            if (!isAdminUser) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Only Tenant Admin can approve Work Orders.'
+                });
+            }
+            if (peekApproval.status !== 'Pending') {
+                return res.status(400).json({
+                    success: false,
+                    message: `Only PENDING_APPROVAL Work Orders can be approved (current status: ${peekApproval.status}).`
+                });
+            }
+        }
+
         const approveQuery = {
             tenant: new mongoose.Types.ObjectId(tenantId),
             status: 'Pending',
@@ -332,7 +358,8 @@ const approveApproval = async (req, res) => {
             await Promise.all([
                 syncPendingNslApprovals(tenantId),
                 syncPendingSalesOrderApprovals(tenantId),
-                syncPendingPurchaseOrderApprovals(tenantId)
+                syncPendingPurchaseOrderApprovals(tenantId),
+                syncPendingWorkOrderApprovals(tenantId)
             ]).catch(() => {});
             updatedApproval = await Approval.findOneAndUpdate(approveQuery, approveUpdate, { new: true });
         }
@@ -350,16 +377,39 @@ const approveApproval = async (req, res) => {
                 return res.status(404).json({ success: false, message: 'Approval request not found.' });
             }
 
-            return res.status(409).json({
+            const statusCode = existing.type === 'WO' ? 400 : 409;
+            return res.status(statusCode).json({
                 success: false,
                 message: `This approval request was already ${existing.status.toLowerCase()} and cannot be decided again.`
             });
         }
 
-        // Execute registered onApprove handler
+        if (updatedApproval.type === 'WO') {
+            const isAdminUser = (await isTenantAdmin(req.user)) || checkIsSuperAdmin(req.user);
+            if (!isAdminUser) {
+                await Approval.updateOne(
+                    { _id: updatedApproval._id },
+                    { $set: { status: 'Pending', decidedBy: null, decidedAt: null, remarks: '', nextReminderAt: new Date() } }
+                );
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Only Tenant Admin can approve Work Orders.'
+                });
+            }
+        }
+
+        // Execute registered onApprove handler (revert Approval to Pending if side-effect throws)
         const handler = getApprovalHandler(updatedApproval.type);
         if (handler && handler.onApprove) {
-            await handler.onApprove(updatedApproval);
+            try {
+                await handler.onApprove(updatedApproval);
+            } catch (handlerErr) {
+                await Approval.updateOne(
+                    { _id: updatedApproval._id },
+                    { $set: { status: 'Pending', decidedBy: null, decidedAt: null, remarks: '', nextReminderAt: new Date() } }
+                ).catch(() => {});
+                throw handlerErr;
+            }
         }
 
         // Side-effects (non-fatal)
@@ -419,6 +469,27 @@ const rejectApproval = async (req, res) => {
         }
         const targetObjectId = new mongoose.Types.ObjectId(idParam);
 
+        const peekApproval = await Approval.findOne({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            $or: [{ _id: targetObjectId }, { referenceId: targetObjectId }]
+        }).select('type status').lean();
+
+        if (peekApproval?.type === 'WO') {
+            const isAdminUser = (await isTenantAdmin(req.user)) || checkIsSuperAdmin(req.user);
+            if (!isAdminUser) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Only Tenant Admin can reject Work Orders.'
+                });
+            }
+            if (peekApproval.status !== 'Pending') {
+                return res.status(400).json({
+                    success: false,
+                    message: `Only PENDING_APPROVAL Work Orders can be rejected (current status: ${peekApproval.status}).`
+                });
+            }
+        }
+
         const rejectQuery = {
             tenant: new mongoose.Types.ObjectId(tenantId),
             status: 'Pending',
@@ -444,7 +515,8 @@ const rejectApproval = async (req, res) => {
             await Promise.all([
                 syncPendingNslApprovals(tenantId),
                 syncPendingSalesOrderApprovals(tenantId),
-                syncPendingPurchaseOrderApprovals(tenantId)
+                syncPendingPurchaseOrderApprovals(tenantId),
+                syncPendingWorkOrderApprovals(tenantId)
             ]).catch(() => {});
             updatedApproval = await Approval.findOneAndUpdate(rejectQuery, rejectUpdate, { new: true });
         }
@@ -462,16 +534,39 @@ const rejectApproval = async (req, res) => {
                 return res.status(404).json({ success: false, message: 'Approval request not found.' });
             }
 
-            return res.status(409).json({
+            const statusCode = existing.type === 'WO' ? 400 : 409;
+            return res.status(statusCode).json({
                 success: false,
                 message: `This approval request was already ${existing.status.toLowerCase()} and cannot be decided again.`
             });
         }
 
+        if (updatedApproval.type === 'WO') {
+            const isAdminUser = (await isTenantAdmin(req.user)) || checkIsSuperAdmin(req.user);
+            if (!isAdminUser) {
+                await Approval.updateOne(
+                    { _id: updatedApproval._id },
+                    { $set: { status: 'Pending', decidedBy: null, decidedAt: null, remarks: '', nextReminderAt: new Date() } }
+                );
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Only Tenant Admin can reject Work Orders.'
+                });
+            }
+        }
+
         // Execute registered onReject handler
         const handler = getApprovalHandler(updatedApproval.type);
         if (handler && handler.onReject) {
-            await handler.onReject(updatedApproval);
+            try {
+                await handler.onReject(updatedApproval);
+            } catch (handlerErr) {
+                await Approval.updateOne(
+                    { _id: updatedApproval._id },
+                    { $set: { status: 'Pending', decidedBy: null, decidedAt: null, remarks: '', nextReminderAt: new Date() } }
+                ).catch(() => {});
+                throw handlerErr;
+            }
         }
 
         // Side-effects (non-fatal)

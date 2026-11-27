@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const SalesOrder = require('../models/salesOrder.model');
 const WorkOrder = require('../models/workOrder.model');
 const Notification = require('../models/notification.model');
-const { getAvgBagWeightKg } = require('../utils/bagWeightHelper');
+const { getAvgBagWeightKg, resolveBagWeightSpec } = require('../utils/bagWeightHelper');
 
 /**
  * Resolve a stable line identifier for a Sales Order item (handles legacy items without _id).
@@ -55,6 +55,21 @@ const convertSoQtyToBags = (qty, unit, finishedGood, bomDoc = null) => {
     };
 };
 
+const convertBagsToSoUnit = (bagsQty, unit, finishedGood, bomDoc = null) => {
+    const numBags = Number(bagsQty || 0);
+    const u = String(unit || 'Pcs').trim().toLowerCase();
+    if (['pcs', 'pc', 'bags', 'bag', 'units', 'unit', ''].includes(u)) {
+        return { convertedQty: numBags, hasConversion: true };
+    }
+    if (['kg', 'kgs', 'kilogram', 'kilograms'].includes(u)) {
+        const avgKg = getAvgBagWeightKg(finishedGood, bomDoc);
+        if (avgKg && avgKg > 0) {
+            return { convertedQty: Number((numBags * avgKg).toFixed(2)), hasConversion: true };
+        }
+    }
+    return { convertedQty: null, hasConversion: false };
+};
+
 /**
  * Match a WorkOrder to a specific SO line item.
  */
@@ -89,8 +104,9 @@ const recomputeSalesOrderProductionStatus = async (salesOrderId, tenantId, sessi
         tenant: tenantId,
         salesOrder: salesOrder._id,
         status: { $ne: 'CANCELLED' },
+        approvalStatus: { $ne: 'REJECTED' },
         isActive: true
-    }).select('salesOrderLineId finishedGood targetQuantity completedQuantity status');
+    }).select('salesOrderLineId finishedGood targetQuantity targetPcs targetKg completedQuantity status approvalStatus');
     if (sessionOption?.session) woQuery.session(sessionOption.session);
     const linkedWOs = await woQuery.lean();
 
@@ -99,17 +115,21 @@ const recomputeSalesOrderProductionStatus = async (salesOrderId, tenantId, sessi
 
     (salesOrder.items || []).forEach((item, idx) => {
         const lineWOs = linkedWOs.filter((wo) => doesWoMatchSoLine(wo, item, idx));
-        const plannedQty = lineWOs.reduce((sum, wo) => sum + Number(wo.targetQuantity || 0), 0);
-        item.plannedQuantity = Math.max(0, Number(plannedQty.toFixed(3)));
+        const plannedBags = lineWOs.reduce((sum, wo) => sum + Number(wo.targetPcs ?? wo.targetQuantity ?? 0), 0);
+        const plannedSoConv = convertBagsToSoUnit(plannedBags, item.unit, item.finishedGood);
+        const plannedInSoUnit = plannedSoConv.hasConversion && plannedSoConv.convertedQty !== null
+            ? plannedSoConv.convertedQty
+            : plannedBags;
+        item.plannedQuantity = Math.max(0, Number(plannedInSoUnit.toFixed(3)));
 
-        if (item.plannedQuantity > 0) anyLinePlanned = true;
+        if (plannedBags > 0) anyLinePlanned = true;
 
         const conv = convertSoQtyToBags(item.quantity, item.unit, item.finishedGood);
         const requiredBags = conv.hasConversion && conv.convertedBags !== null
             ? conv.convertedBags
             : Number(item.quantity || 0);
 
-        if (item.plannedQuantity < requiredBags) {
+        if (plannedBags < requiredBags) {
             allLinesFullyPlanned = false;
         }
     });
@@ -192,9 +212,10 @@ const getPendingProductionLinesCore = async (tenantId, queryParams = {}) => {
             tenant: tenantId,
             salesOrder: { $in: soIds },
             status: { $ne: 'CANCELLED' },
+            approvalStatus: { $ne: 'REJECTED' },
             isActive: true
         })
-            .select('workOrderNumber salesOrder salesOrderLineId finishedGood targetQuantity completedQuantity status')
+            .select('workOrderNumber salesOrder salesOrderLineId finishedGood targetQuantity targetPcs completedQuantity status approvalStatus')
             .sort({ createdAt: -1 })
             .lean()
         : [];
@@ -253,13 +274,22 @@ const getPendingProductionLinesCore = async (tenantId, queryParams = {}) => {
 
             const lineId = getSoLineId(item, idx);
             const lineWOs = soWOs.filter((wo) => doesWoMatchSoLine(wo, item, idx));
-            const plannedQty = lineWOs.reduce((sum, wo) => sum + Number(wo.targetQuantity || 0), 0);
+            const plannedBags = lineWOs.reduce((sum, wo) => sum + Number(wo.targetPcs ?? wo.targetQuantity ?? 0), 0);
 
             const orderedQty = Number(item.quantity || 0);
             const unit = item.unit || fg.uom?.symbol || fg.uom?.name || 'Pcs';
-            const conv = convertSoQtyToBags(orderedQty, unit, fg, bomByFgId.get(String(fg._id)) || null);
+            const fgBom = bomByFgId.get(String(fg._id)) || null;
+            const bagSpec = resolveBagWeightSpec(fg, fgBom);
+            const conv = convertSoQtyToBags(orderedQty, unit, fg, fgBom);
             const orderedBags = conv.hasConversion && conv.convertedBags !== null ? conv.convertedBags : orderedQty;
-            const remainingQty = Math.max(0, Number((orderedBags - plannedQty).toFixed(3)));
+            const remainingQty = Math.max(0, Number((orderedBags - plannedBags).toFixed(3)));
+            const plannedInSoConv = convertBagsToSoUnit(plannedBags, unit, fg, fgBom);
+            const plannedInSoUnit = plannedInSoConv.hasConversion && plannedInSoConv.convertedQty !== null ? plannedInSoConv.convertedQty : plannedBags;
+            const remainingInSoUnit = ['kg', 'kgs', 'kilogram', 'kilograms'].includes(String(unit || '').toLowerCase())
+                ? Math.max(0, Number((orderedQty - plannedInSoUnit).toFixed(2)))
+                : remainingQty;
+            const plannedKg = bagSpec?.weightKg ? Number((plannedBags * bagSpec.weightKg).toFixed(2)) : 0;
+            const remainingKg = bagSpec?.weightKg ? Number((remainingQty * bagSpec.weightKg).toFixed(2)) : 0;
 
             if (remainingQty <= 0) return;
 
@@ -317,8 +347,17 @@ const getPendingProductionLinesCore = async (tenantId, queryParams = {}) => {
                 convertedOrderedBags: orderedBags,
                 hasUnitConversion: conv.hasConversion,
                 conversionNote: conv.conversionNote,
-                plannedQuantity: plannedQty,
+                plannedQuantity: plannedBags,
+                plannedBags,
+                plannedInSoUnit,
+                plannedKg,
                 remainingQuantity: remainingQty,
+                remainingBags: remainingQty,
+                remainingInSoUnit,
+                remainingKg,
+                avgBagWeightGrams: bagSpec?.weightGrams || null,
+                avgBagWeightKg: bagSpec?.weightKg || null,
+                weightSource: bagSpec?.source || null,
                 fgCurrentStock: fgStock,
                 shortfall,
                 linkedWorkOrders: lineWOs.map((w) => ({

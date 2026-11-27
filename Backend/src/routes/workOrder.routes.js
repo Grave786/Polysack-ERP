@@ -120,11 +120,11 @@ router.get('/:id', authenticate, checkPermission('PRODUCTION', 'READ'), getWorkO
 
 /**
  * @route   PUT /api/work-orders/:id
- * @desc    Update Work Order details (Tenant Admin only)
- * @access  Private (Tenant Admin only)
+ * @desc    Update Work Order details (Creator/Admin for Pending/Rejected, Tenant Admin only for Approved)
+ * @access  Private (PRODUCTION:UPDATE)
  */
-router.put('/:id', authenticate, requireTenantAdmin, updateWorkOrder);
-router.patch('/:id', authenticate, requireTenantAdmin, updateWorkOrder);
+router.put('/:id', authenticate, checkPermission('PRODUCTION', 'UPDATE'), updateWorkOrder);
+router.patch('/:id', authenticate, checkPermission('PRODUCTION', 'UPDATE'), updateWorkOrder);
 
 /**
  * @route   PATCH /api/work-orders/:id/advance-stage

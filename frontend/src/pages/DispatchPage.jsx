@@ -124,6 +124,7 @@ export default function DispatchPage() {
             const numPcs = Number(it.dispatchedQuantity || 0);
 
             return {
+                salesOrderLineId: it.salesOrderLineId || null,
                 finishedGood: fgId,
                 finishedGoodName: fgName,
                 orderedQuantity: numPcs,
@@ -184,7 +185,9 @@ export default function DispatchPage() {
                             setDispatchItems((prevItems) =>
                                 prevItems.map((pi) => {
                                     const matchedItem = (matchedSrc.items || []).find(
-                                        (mi) => String(mi.finishedGood?._id || mi.finishedGood) === String(pi.finishedGood)
+                                        (mi) => (pi.salesOrderLineId && mi.salesOrderLineId
+                                            ? String(mi.salesOrderLineId) === String(pi.salesOrderLineId)
+                                            : String(mi.finishedGood?._id || mi.finishedGood) === String(pi.finishedGood))
                                     );
                                     if (matchedItem) {
                                         const extraRemaining = Number(matchedItem.remainingQuantity || 0);
@@ -258,6 +261,7 @@ export default function DispatchPage() {
                     : '';
 
                 return {
+                    salesOrderLineId: item.salesOrderLineId || null,
                     finishedGood: fgId,
                     finishedGoodName: fgName,
                     orderedQuantity: orderedQty,
@@ -394,7 +398,8 @@ export default function DispatchPage() {
             return;
         }
 
-        // Validate quantities do not exceed remaining or available physical stock
+        // Validate quantities do not exceed remaining or available physical stock (aggregated per product)
+        const totalPcsByFg = new Map();
         for (const it of dispatchItems) {
             const numPcs = Number(it.dispatchedPcs ?? it.dispatchedQuantity ?? 0);
             const numKg = Number(it.dispatchedKg || 0);
@@ -419,6 +424,17 @@ export default function DispatchPage() {
                 );
                 return;
             }
+            if (hasStockCap) {
+                const fgKey = String(it.finishedGood);
+                const nextTotal = (totalPcsByFg.get(fgKey) || 0) + numPcs;
+                totalPcsByFg.set(fgKey, nextTotal);
+                if (nextTotal > it.currentStock + 0.0001) {
+                    toast.error(
+                        `Total requested across lines for '${it.finishedGoodName}' (${nextTotal} Pcs) exceeds available stock (${it.currentStock} Pcs).`
+                    );
+                    return;
+                }
+            }
         }
 
         try {
@@ -436,6 +452,7 @@ export default function DispatchPage() {
                 driverPhone: formData.driverPhone.trim(),
                 notes: formData.notes.trim(),
                 items: dispatchItems.map((item) => ({
+                    salesOrderLineId: item.salesOrderLineId || undefined,
                     finishedGood: item.finishedGood,
                     dispatchedQuantity: Number(item.dispatchedQuantity || 0),
                     dispatchedPcs: item.dispatchedPcs !== '' && item.dispatchedPcs !== undefined ? Number(item.dispatchedPcs) : undefined,

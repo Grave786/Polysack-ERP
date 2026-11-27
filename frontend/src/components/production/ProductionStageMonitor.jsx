@@ -317,7 +317,9 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
         );
     }
 
-    const isFinishedOrCancelled = workOrder.status === 'COMPLETED' || workOrder.status === 'CANCELLED' || !activeStage;
+    const woApprovalStatus = workOrder?.approvalStatus || 'APPROVED';
+    const isWoApproved = woApprovalStatus === 'APPROVED';
+    const isFinishedOrCancelled = !isWoApproved || workOrder.status === 'COMPLETED' || workOrder.status === 'CANCELLED' || !activeStage;
     const woUnit = workOrder.unit || workOrder.jobOrderDetails?.totalOrderQuantityUnit || 'Bags';
 
     const clientName = workOrder.customer?.companyName || workOrder.customer?.name || 'Unassigned';
@@ -338,6 +340,27 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
 
     return (
         <div className="space-y-4 font-sans">
+            {/* Approval Gate Banner for non-approved Work Orders */}
+            {!isWoApproved && (
+                <div className={`border rounded-lg p-3 flex items-center gap-3 ${
+                    woApprovalStatus === 'REJECTED'
+                        ? 'bg-rose-50 border-rose-200 text-rose-900'
+                        : 'bg-amber-50 border-amber-200 text-amber-900'
+                }`}>
+                    <AlertCircle size={18} className={woApprovalStatus === 'REJECTED' ? 'text-rose-600 shrink-0' : 'text-amber-600 shrink-0'} />
+                    <div className="text-xs font-medium flex-1">
+                        <strong className="font-extrabold">
+                            {woApprovalStatus === 'REJECTED'
+                                ? 'Work Order Rejected:'
+                                : 'Work Order Awaiting Tenant Admin Approval:'}
+                        </strong>{' '}
+                        {woApprovalStatus === 'REJECTED'
+                            ? (workOrder.rejectionReason || 'This Work Order was rejected. Edit and resubmit to request approval again.')
+                            : 'Raw material consumption, stage advancement, and production logging are disabled until approved.'}
+                    </div>
+                </div>
+            )}
+
             {/* Parent Work Order Notice Banner */}
             {workOrder.parentWorkOrder && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center gap-3">
@@ -509,14 +532,25 @@ export default function ProductionStageMonitor({ workOrderId, onSelectWorkOrder 
                                 COMPLETED / WO TARGET
                             </span>
                             <div className="mt-0.5 font-mono">
-                                <span className="text-base font-bold text-primary">{workOrder.completedQuantity || 0}</span>
+                                <span className="text-base font-bold text-primary">{Number(workOrder.completedPcs ?? workOrder.completedQuantity ?? 0).toLocaleString('en-IN')}</span>
                                 <span className="text-xs font-bold text-text-muted mx-1">/</span>
-                                <span className="text-base font-bold text-text-main">{workOrder.targetQuantity || 0}</span>
-                                <span className="text-[10px] text-text-muted ml-1 font-sans font-normal">{woUnit}</span>
+                                <span className="text-base font-bold text-text-main">{Number(workOrder.targetPcs ?? workOrder.targetQuantity ?? 0).toLocaleString('en-IN')}</span>
+                                <span className="text-[10px] text-text-muted ml-1 font-sans font-normal">Bags</span>
                             </div>
-                            {Number(workOrder.balanceQuantity || 0) > 0 && (
+                            {(workOrder.targetKg != null || workOrder.completedKg != null) && (
+                                <div className="text-[11px] font-mono text-text-muted mt-0.5">
+                                    <span>{Number(workOrder.completedKg || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                                    <span className="mx-1">/</span>
+                                    <span>{Number(workOrder.targetKg || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg</span>
+                                    {(workOrder.isEstimatedTargetWeight || workOrder.isEstimatedCompletedWeight) && (
+                                        <span className="ml-1 text-[10px] italic font-sans">(est.)</span>
+                                    )}
+                                </div>
+                            )}
+                            {Number(workOrder.balancePcs ?? workOrder.balanceQuantity ?? 0) > 0 && (
                                 <span className="inline-block text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.2 rounded mt-0.5">
-                                    Balance: {Number(workOrder.balanceQuantity).toLocaleString('en-IN')} {woUnit} Pending
+                                    Balance: {Number(workOrder.balancePcs ?? workOrder.balanceQuantity).toLocaleString('en-IN')} Bags
+                                    {workOrder.balanceKg != null ? ` (${Number(workOrder.balanceKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg)` : ''} Pending
                                 </span>
                             )}
                         </div>

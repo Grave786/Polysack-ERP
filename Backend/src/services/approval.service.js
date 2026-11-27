@@ -170,6 +170,149 @@ const approvalRegistry = {
                 }
             );
         }
+    },
+    WO: {
+        onApprove: async (approval, externalSession = null) => {
+            const WorkOrder = require('../models/workOrder.model');
+            const BOM = require('../models/bom.model');
+            const { executeStockTransactionCore } = require('../controllers/stockTransaction.controller');
+
+            const tenantId = String(approval.tenant);
+            let session = externalSession;
+            let ownSession = false;
+            let useTransaction = true;
+
+            if (!session) {
+                try {
+                    session = await mongoose.startSession();
+                    session.startTransaction();
+                    ownSession = true;
+                } catch (err) {
+                    useTransaction = false;
+                    session = null;
+                }
+            }
+
+            const sessionOption = session ? { session } : {};
+
+            try {
+                const woQuery = WorkOrder.findOne({ _id: approval.referenceId, tenant: approval.tenant });
+                if (session) woQuery.session(session);
+                const workOrder = await woQuery;
+
+                if (!workOrder) {
+                    const notFoundErr = new Error('Work Order not found.');
+                    notFoundErr.statusCode = 404;
+                    throw notFoundErr;
+                }
+
+                const currentApprovalStatus = workOrder.approvalStatus || 'APPROVED';
+                if (currentApprovalStatus !== 'PENDING_APPROVAL') {
+                    const invalidErr = new Error(`Only PENDING_APPROVAL Work Orders can be approved (current: ${currentApprovalStatus}).`);
+                    invalidErr.statusCode = 400;
+                    throw invalidErr;
+                }
+
+                const bomQuery = BOM.findById(workOrder.bom);
+                if (session) bomQuery.session(session);
+                const activeBom = await bomQuery;
+                if (!activeBom) {
+                    const bomErr = new Error('Active Bill of Materials (BOM) not found for this Work Order.');
+                    bomErr.statusCode = 400;
+                    throw bomErr;
+                }
+
+                const numTargetQty = Number(workOrder.targetPcs ?? workOrder.targetQuantity ?? 0);
+                for (const item of (activeBom.items || [])) {
+                    const requiredQty = Number(item.quantityPerUnit || 0) * numTargetQty;
+                    if (requiredQty > 0) {
+                        await executeStockTransactionCore({
+                            tenantId,
+                            referenceNumber: workOrder.workOrderNumber,
+                            itemType: 'RAW_MATERIAL',
+                            item: item.rawMaterial,
+                            transactionType: 'PRODUCTION_CONSUMPTION',
+                            quantity: requiredQty,
+                            notes: `Consumed on approval for WorkOrder ${workOrder.workOrderNumber}`,
+                            performedBy: approval.decidedBy
+                        }, sessionOption);
+                    }
+                }
+
+                const now = approval.decidedAt || new Date();
+                const hasActiveStage = (workOrder.stages || []).some((s) => s.status === 'ACTIVE' || s.status === 'COMPLETED');
+                if (!hasActiveStage && Array.isArray(workOrder.stages)) {
+                    const firstPending = workOrder.stages.find((s) => s.status === 'PENDING');
+                    if (firstPending) {
+                        firstPending.status = 'ACTIVE';
+                        firstPending.startedAt = now;
+                        firstPending.machine = workOrder.assignedMachine || null;
+                    }
+                }
+
+                workOrder.approvalStatus = 'APPROVED';
+                workOrder.approvedBy = approval.decidedBy || null;
+                workOrder.approvedAt = now;
+                workOrder.rejectedBy = null;
+                workOrder.rejectedAt = null;
+                workOrder.rejectionReason = '';
+                if (!workOrder.status || workOrder.status === 'PENDING') {
+                    workOrder.status = 'IN_PROGRESS';
+                }
+
+                await workOrder.save(sessionOption);
+
+                if (ownSession && session) {
+                    await session.commitTransaction();
+                    session.endSession();
+                }
+
+                await notifyRequesterDecision(approval, 'Approved');
+            } catch (err) {
+                if (ownSession && session) {
+                    if (session.inTransaction()) {
+                        await session.abortTransaction();
+                    }
+                    session.endSession();
+                }
+                throw err;
+            }
+        },
+        onReject: async (approval, session = null) => {
+            const WorkOrder = require('../models/workOrder.model');
+            const { recomputeSalesOrderProductionStatus } = require('./soProduction.service');
+
+            const woQuery = WorkOrder.findOne({ _id: approval.referenceId, tenant: approval.tenant });
+            if (session) woQuery.session(session);
+            const workOrder = await woQuery;
+
+            if (!workOrder) {
+                const notFoundErr = new Error('Work Order not found.');
+                notFoundErr.statusCode = 404;
+                throw notFoundErr;
+            }
+
+            const currentApprovalStatus = workOrder.approvalStatus || 'APPROVED';
+            if (currentApprovalStatus !== 'PENDING_APPROVAL') {
+                const invalidErr = new Error(`Only PENDING_APPROVAL Work Orders can be rejected (current: ${currentApprovalStatus}).`);
+                invalidErr.statusCode = 400;
+                throw invalidErr;
+            }
+
+            const now = approval.decidedAt || new Date();
+            workOrder.approvalStatus = 'REJECTED';
+            workOrder.rejectedBy = approval.decidedBy || null;
+            workOrder.rejectedAt = now;
+            workOrder.rejectionReason = approval.remarks || 'Rejected by Tenant Admin';
+
+            await workOrder.save(session ? { session } : {});
+
+            if (workOrder.salesOrder) {
+                await recomputeSalesOrderProductionStatus(workOrder.salesOrder, String(approval.tenant), session ? { session } : {});
+            }
+
+            await notifyRequesterDecision(approval, 'Rejected');
+        }
     }
 };
 
@@ -227,18 +370,26 @@ const notifyRequesterDecision = async (approval, decision = 'Approved') => {
         if (!approval || !approval.tenant) return;
         const isRejected = String(decision).toLowerCase() === 'rejected';
         const refLabel = approval.referenceNo || approval.approvalNo || 'Request';
-        const mod = approval.type === 'NSL' ? 'CRM' : approval.type === 'SO' ? 'SALES' : 'PROCUREMENT';
+        const mod = approval.type === 'NSL'
+            ? 'CRM'
+            : approval.type === 'SO'
+                ? 'SALES'
+                : (approval.type === 'WO' || approval.type === 'CONTINUATION_WO')
+                    ? 'PRODUCTION'
+                    : 'PROCUREMENT';
         const link = approval.type === 'NSL'
             ? `/customer-crm?tab=enquiries&id=${approval.referenceId}`
             : approval.type === 'SO'
                 ? '/sales?tab=sales-orders'
-                : '/approvals';
+                : (approval.type === 'WO' || approval.type === 'CONTINUATION_WO')
+                    ? `/production?tab=work-orders&id=${approval.referenceId}`
+                    : '/approvals';
 
         await Notification.create({
             tenant: new mongoose.Types.ObjectId(approval.tenant),
             type: 'APPROVAL_DECISION',
             module: mod,
-            title: `${approval.type === 'SO' ? 'Sales Order' : approval.type === 'NSL' ? 'Enquiry' : 'Request'} ${isRejected ? 'Rejected' : 'Approved'}: ${refLabel}`,
+            title: `${approval.type === 'SO' ? 'Sales Order' : approval.type === 'NSL' ? 'Enquiry' : approval.type === 'WO' ? 'Work Order' : 'Request'} ${isRejected ? 'Rejected' : 'Approved'}: ${refLabel}`,
             message: isRejected
                 ? `${refLabel} was rejected. Reason: ${approval.remarks || 'No remark provided'}`
                 : `${refLabel} has been approved${approval.remarks ? ` (${approval.remarks})` : ''}.`,
@@ -789,6 +940,118 @@ const syncPendingSalesOrderApprovals = async (tenantId) => {
     }
 };
 
+/**
+ * Create or retrieve an approval request for a new/resubmitted Work Order
+ */
+const createWorkOrderApprovalRequest = async (woDoc, creatorUser) => {
+    try {
+        if (!woDoc || !woDoc.tenant) return null;
+        const tenantId = woDoc.tenant;
+
+        const existing = await Approval.findOne({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            type: 'WO',
+            referenceId: new mongoose.Types.ObjectId(woDoc._id),
+            status: 'Pending'
+        });
+        if (existing) return existing;
+
+        const WorkOrder = require('../models/workOrder.model');
+        const populatedWo = await WorkOrder.findById(woDoc._id)
+            .populate('customer', 'companyName name')
+            .populate('finishedGood', 'name code')
+            .populate('salesOrder', 'soNumber deliveryDue')
+            .lean();
+
+        const custName = populatedWo?.customer?.companyName || populatedWo?.customer?.name || 'Customer';
+        const fgName = populatedWo?.finishedGood?.name || populatedWo?.finishedGood?.code || 'Finished Good';
+        const soNum = populatedWo?.salesOrder?.soNumber || woDoc.salesOrderNumber || '';
+        const targetBags = Number(populatedWo?.targetPcs ?? populatedWo?.targetQuantity ?? woDoc.targetQuantity ?? 0);
+        const targetKg = Number(populatedWo?.targetKg ?? woDoc.targetKg ?? 0);
+        const qtyPart = targetKg > 0
+            ? `${targetBags.toLocaleString('en-IN')} Bags (${targetKg.toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg)`
+            : `${targetBags.toLocaleString('en-IN')} Bags`;
+        const dueDate = populatedWo?.jobOrderDetails?.expectedDeliveryDate || populatedWo?.salesOrder?.deliveryDue;
+        const duePart = dueDate ? `Due ${new Date(dueDate).toLocaleDateString('en-GB')}` : '';
+        const summary = [
+            custName,
+            fgName,
+            soNum ? `SO: ${soNum}` : null,
+            qtyPart,
+            populatedWo?.priority || woDoc.priority || 'MEDIUM',
+            duePart || null
+        ].filter(Boolean).join(' | ');
+
+        const approvalNo = await Approval.generateNextApprovalNo(tenantId);
+        let validRequester = woDoc.createdBy || creatorUser?._id || creatorUser?.id;
+        if (!validRequester) {
+            const adminUser = await User.findOne({ tenant: tenantId, isActive: true }).sort({ createdAt: 1 }).lean();
+            validRequester = adminUser?._id;
+        }
+        if (!validRequester) return null;
+
+        const approval = await Approval.create({
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            approvalNo,
+            type: 'WO',
+            referenceModel: 'WorkOrder',
+            referenceId: woDoc._id,
+            referenceNo: woDoc.workOrderNumber,
+            title: `Work Order Approval: ${woDoc.workOrderNumber}`,
+            summary,
+            requestedBy: validRequester,
+            status: 'Pending',
+            reminderCount: 0,
+            nextReminderAt: new Date(Date.now() + REMINDER_INTERVAL_HOURS * 60 * 60 * 1000)
+        });
+
+        await notifyApprovers(tenantId, approval);
+        return approval;
+    } catch (err) {
+        if (err.code === 11000) {
+            return Approval.findOne({
+                tenant: new mongoose.Types.ObjectId(woDoc.tenant),
+                type: 'WO',
+                referenceId: new mongoose.Types.ObjectId(woDoc._id),
+                status: 'Pending'
+            });
+        }
+        console.error('[Approval Service] Error creating Work Order approval request:', err.message);
+        return null;
+    }
+};
+
+/**
+ * Idempotent function to sync missing Approval records for Work Orders in PENDING_APPROVAL state.
+ */
+const syncPendingWorkOrderApprovals = async (tenantId) => {
+    try {
+        if (!tenantId) return;
+        const tenantObjId = new mongoose.Types.ObjectId(tenantId);
+        const WorkOrder = require('../models/workOrder.model');
+        const pendingWos = await WorkOrder.find({
+            tenant: tenantObjId,
+            isActive: { $ne: false },
+            approvalStatus: 'PENDING_APPROVAL',
+            status: { $ne: 'CANCELLED' }
+        }).lean();
+
+        for (const wo of pendingWos) {
+            const hasPending = await Approval.findOne({
+                tenant: tenantObjId,
+                type: 'WO',
+                referenceId: wo._id,
+                status: 'Pending'
+            }).select('_id').lean();
+            if (!hasPending) {
+                await createWorkOrderApprovalRequest(wo, null);
+            }
+        }
+    } catch (err) {
+        console.error('[Approval Service] Error syncing pending Work Order approvals:', err.message);
+    }
+};
+
 module.exports = {
     REMINDER_INTERVAL_HOURS,
     approvalRegistry,
@@ -797,10 +1060,12 @@ module.exports = {
     createPoApprovalRequest,
     createNslApprovalRequest,
     createSalesOrderApprovalRequest,
+    createWorkOrderApprovalRequest,
     createContinuationWoApprovalRequest,
     syncPendingPurchaseOrderApprovals,
     syncPendingNslApprovals,
     syncPendingSalesOrderApprovals,
+    syncPendingWorkOrderApprovals,
     syncPendingContinuationWoApprovals,
     notifyApprovers,
     notifyRequesterDecision,

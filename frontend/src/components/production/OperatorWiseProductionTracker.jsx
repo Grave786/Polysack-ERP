@@ -19,6 +19,7 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '../../store/authStore';
 import { isTenantAdmin, checkIsSuperAdmin } from '../../utils/permissionUtils';
 import { formatDate } from '../../utils/dateUtils';
+import { resolveBagWeightSpec } from '../../utils/bagWeightHelper';
 
 /**
  * Format IST Date for display (e.g., "30/09/2026")
@@ -95,10 +96,64 @@ export default function OperatorWiseProductionTracker({
         operator: '',
         date: getIstTodayString(),
         quantity: '',
+        producedKg: '',
+        isKgManual: false,
         shift: '',
         netWeight: '',
         remarks: ''
     });
+
+    const bagWeightSpec = useMemo(() => {
+        const spec = resolveBagWeightSpec(workOrder?.finishedGood, workOrder?.bom);
+        if (spec?.weightKg) return spec;
+        if (workOrder?.avgBagWeightKg) {
+            return {
+                weightKg: Number(workOrder.avgBagWeightKg),
+                weightGrams: Number((Number(workOrder.avgBagWeightKg) * 1000).toFixed(2)),
+                source: workOrder?.targetWeightSource || 'Estimated'
+            };
+        }
+        const tBags = Number(workOrder?.targetPcs ?? workOrder?.targetQuantity ?? 0);
+        const tKg = Number(workOrder?.targetKg ?? 0);
+        if (tBags > 0 && tKg > 0) {
+            const wKg = tKg / tBags;
+            return {
+                weightKg: wKg,
+                weightGrams: Number((wKg * 1000).toFixed(2)),
+                source: workOrder?.targetWeightSource || 'Estimated'
+            };
+        }
+        return { weightKg: null, weightGrams: null, source: 'Estimated' };
+    }, [workOrder]);
+
+    const bagWeightKg = bagWeightSpec?.weightKg || 0;
+    const bagWeightGrams = bagWeightSpec?.weightGrams || 0;
+    const isSpecEstimated = !bagWeightKg || bagWeightSpec?.source === 'Estimated';
+
+    const handleBagsChange = (val) => {
+        setFormData((p) => {
+            const n = Number(val);
+            let nextKg = p.producedKg;
+            if (!p.isKgManual && bagWeightKg > 0) {
+                nextKg = val !== '' && !isNaN(n) && n > 0 ? String(Number((n * bagWeightKg).toFixed(2))) : '';
+            }
+            return {
+                ...p,
+                quantity: val,
+                producedKg: nextKg,
+                netWeight: isBalingPackingStage && !p.isKgManual ? nextKg : p.netWeight
+            };
+        });
+    };
+
+    const handleKgChange = (val) => {
+        setFormData((p) => ({
+            ...p,
+            producedKg: val,
+            isKgManual: val !== '',
+            netWeight: isBalingPackingStage ? val : p.netWeight
+        }));
+    };
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const user = useAuthStore((state) => state.user);
@@ -236,6 +291,8 @@ export default function OperatorWiseProductionTracker({
             operator: defaultOp,
             date: getIstTodayString(),
             quantity: '',
+            producedKg: '',
+            isKgManual: false,
             shift: '',
             netWeight: '',
             remarks: ''
@@ -254,12 +311,18 @@ export default function OperatorWiseProductionTracker({
 
         await fetchSummary();
         setEditingLog(log);
+        const existingKg = log.producedKg !== undefined && log.producedKg !== null && Number(log.producedKg) > 0
+            ? String(log.producedKg)
+            : (log.netWeight !== undefined && log.netWeight !== null && Number(log.netWeight) > 0 ? String(log.netWeight) : '');
+        const wasManual = Boolean(Number(log.netWeight || 0) > 0 || log.isEstimatedWeight === false);
         setFormData({
             operator: log.operator?._id || log.operator || '',
             date: log.date ? (typeof log.date === 'string' && log.date.includes('T') ? log.date.split('T')[0] : getIstDateString(log.date)) : getIstTodayString(),
             quantity: log.quantity || '',
+            producedKg: existingKg,
+            isKgManual: wasManual,
             shift: log.shift?._id || log.shift || '',
-            netWeight: log.netWeight !== undefined && log.netWeight !== null ? String(log.netWeight) : '',
+            netWeight: log.netWeight !== undefined && log.netWeight !== null ? String(log.netWeight) : existingKg,
             remarks: log.remarks || log.notes || ''
         });
         setIsLogModalOpen(true);
@@ -291,11 +354,14 @@ export default function OperatorWiseProductionTracker({
                 toast.error('Shift is required for Baling & Packing stage.');
                 return;
             }
-            const numNetWeight = Number(formData.netWeight);
+            const numNetWeight = Number(formData.producedKg || formData.netWeight);
             if (isNaN(numNetWeight) || numNetWeight <= 0) {
                 toast.error('Please enter a valid Net Weight (Kg) greater than 0.');
                 return;
             }
+        } else if (formData.producedKg !== '' && (isNaN(Number(formData.producedKg)) || Number(formData.producedKg) <= 0)) {
+            toast.error('Quantity Produced (Kg) must be greater than 0.');
+            return;
         }
 
         if (numQty > (maxAllowedForForm + 0.0001)) {
@@ -316,12 +382,16 @@ export default function OperatorWiseProductionTracker({
 
         try {
             setIsSubmitting(true);
+            const kgVal = formData.producedKg !== '' ? Number(formData.producedKg) : null;
             const payload = {
                 operator: formData.operator || null,
                 date: formData.date,
                 quantity: numQty,
+                producedKg: kgVal,
                 shift: formData.shift || null,
-                netWeight: isBalingPackingStage && formData.netWeight !== '' ? Number(formData.netWeight) : null,
+                netWeight: isBalingPackingStage
+                    ? Number(formData.producedKg || formData.netWeight)
+                    : (formData.isKgManual && kgVal ? kgVal : null),
                 remarks: formData.remarks
             };
 
@@ -539,11 +609,16 @@ export default function OperatorWiseProductionTracker({
                                 WO: {workOrderOriginalTarget.toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                             </span>
                         </div>
-                        <div className="mt-1 flex items-baseline gap-1.5">
+                        <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
                             <span className="text-xl font-bold font-mono text-text-main">
                                 {stageTargetQty.toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                             </span>
                             <span className="text-xs text-text-muted">Bags</span>
+                            {Number(summaryData?.stageTargetKg || 0) > 0 && (
+                                <span className="text-[11px] font-mono text-text-muted">
+                                    ({Number(summaryData.stageTargetKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg)
+                                </span>
+                            )}
                         </div>
                         <span className="text-[10px] text-text-muted mt-1 block leading-tight">
                             {isFirstActiveStage
@@ -564,11 +639,16 @@ export default function OperatorWiseProductionTracker({
                                 {pct}%
                             </span>
                         </div>
-                        <div className="mt-1 flex items-baseline gap-1.5">
+                        <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
                             <span className="text-xl font-bold font-mono text-primary">
                                 {totalProduced.toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                             </span>
                             <span className="text-xs text-text-muted">Bags</span>
+                            {Number(summaryData?.totalProducedKg || 0) > 0 && (
+                                <span className="text-[11px] font-mono text-text-muted">
+                                    ({Number(summaryData.totalProducedKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg)
+                                </span>
+                            )}
                         </div>
                         {/* Mini Progress Bar */}
                         <div className="w-full bg-gray-200 dark:bg-gray-700 h-1.5 rounded-full overflow-hidden mt-2">
@@ -584,11 +664,16 @@ export default function OperatorWiseProductionTracker({
                         <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted block">
                             Remaining Allowance
                         </span>
-                        <div className="mt-1 flex items-baseline gap-1.5">
+                        <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
                             <span className={`text-xl font-bold font-mono ${remainingQty === 0 && stageTargetQty > 0 ? 'text-emerald-600' : 'text-text-main'}`}>
                                 {remainingQty.toLocaleString('en-IN', { maximumFractionDigits: 3 })}
                             </span>
                             <span className="text-xs text-text-muted">Bags</span>
+                            {Number(summaryData?.remainingKg || 0) > 0 && (
+                                <span className="text-[11px] font-mono text-text-muted">
+                                    ({Number(summaryData.remainingKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg)
+                                </span>
+                            )}
                         </div>
                         <span className="text-[10px] text-text-muted mt-1 block">
                             {hasNoTarget
@@ -653,7 +738,7 @@ export default function OperatorWiseProductionTracker({
                                         </th>
                                     ))}
                                     <th className="px-3.5 py-2.5 text-right font-bold text-primary bg-table-header-bg border-l border-border">
-                                        Total (Bags)
+                                        Total (Bags / Kg)
                                     </th>
                                 </tr>
                             </thead>
@@ -671,19 +756,19 @@ export default function OperatorWiseProductionTracker({
                                                 const key = `${dateStr}_${op.operatorId}`;
                                                 const cellEntry = cellMap[key];
                                                 const qty = typeof cellEntry === 'object' && cellEntry !== null ? cellEntry.quantity : cellEntry;
-                                                const netWt = typeof cellEntry === 'object' && cellEntry !== null ? cellEntry.netWeight : null;
+                                                const prodKg = typeof cellEntry === 'object' && cellEntry !== null ? (cellEntry.producedKg || cellEntry.netWeight) : null;
                                                 return (
                                                     <td
                                                         key={dateStr}
                                                         className="px-3.5 py-2.5 text-center font-mono text-xs"
-                                                        title={isBalingPackingStage && netWt > 0 ? `Net Weight: ${Number(netWt).toLocaleString('en-IN', { maximumFractionDigits: 3 })} Kg` : undefined}
+                                                        title={prodKg > 0 ? `${Number(qty || 0).toLocaleString('en-IN')} Bags (${Number(prodKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg)` : undefined}
                                                     >
                                                         {qty !== undefined && qty !== null ? (
                                                             <span className="font-bold text-text-main bg-primary/10 px-2 py-0.5 rounded inline-flex flex-col items-center">
                                                                 <span>{Number(qty).toLocaleString('en-IN')}</span>
-                                                                {isBalingPackingStage && netWt > 0 && (
+                                                                {prodKg > 0 && (
                                                                     <span className="text-[9px] text-text-muted font-normal">
-                                                                        {Number(netWt).toLocaleString('en-IN', { maximumFractionDigits: 1 })} kg
+                                                                        {Number(prodKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} kg
                                                                     </span>
                                                                 )}
                                                             </span>
@@ -694,7 +779,12 @@ export default function OperatorWiseProductionTracker({
                                                 );
                                             })}
                                             <td className="px-3.5 py-2.5 text-right font-mono font-extrabold text-primary border-l border-border bg-app-bg/30">
-                                                {Number(op.total).toLocaleString('en-IN', { maximumFractionDigits: 3 })}
+                                                <div>{Number(op.total).toLocaleString('en-IN', { maximumFractionDigits: 3 })} Bags</div>
+                                                {Number(op.totalKg || 0) > 0 && (
+                                                    <div className="text-[10px] text-text-muted font-normal">
+                                                        {Number(op.totalKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg
+                                                    </div>
+                                                )}
                                             </td>
                                         </tr>
                                     );
@@ -709,14 +799,25 @@ export default function OperatorWiseProductionTracker({
                                     {distinctDates.map((dateStr) => {
                                         const daySummary = matrix.find((m) => m.date === dateStr);
                                         const dayTotal = daySummary?.total || 0;
+                                        const dayTotalKg = daySummary?.totalKg || 0;
                                         return (
                                             <td key={dateStr} className="px-3.5 py-2.5 text-center font-mono font-bold text-text-main">
-                                                {Number(dayTotal).toLocaleString('en-IN', { maximumFractionDigits: 3 })}
+                                                <div>{Number(dayTotal).toLocaleString('en-IN', { maximumFractionDigits: 3 })}</div>
+                                                {dayTotalKg > 0 && (
+                                                    <div className="text-[9px] text-text-muted font-normal">
+                                                        {Number(dayTotalKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} kg
+                                                    </div>
+                                                )}
                                             </td>
                                         );
                                     })}
-                                    <td className="px-3.5 py-2.5 text-right font-mono font-extrabold text-base text-primary border-l border-border bg-primary/10">
-                                        {totalProduced.toLocaleString('en-IN', { maximumFractionDigits: 3 })}
+                                    <td className="px-3.5 py-2.5 text-right font-mono font-extrabold text-primary border-l border-border bg-primary/10">
+                                        <div className="text-base">{totalProduced.toLocaleString('en-IN', { maximumFractionDigits: 3 })} Bags</div>
+                                        {Number(summaryData?.totalProducedKg || 0) > 0 && (
+                                            <div className="text-[11px] text-text-muted font-semibold">
+                                                {Number(summaryData.totalProducedKg).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Kg
+                                            </div>
+                                        )}
                                     </td>
                                 </tr>
                             </tfoot>
@@ -744,8 +845,8 @@ export default function OperatorWiseProductionTracker({
                                 <tr>
                                     <th className="px-3 py-2">Date (IST)</th>
                                     <th className="px-3 py-2">Operator</th>
-                                    <th className="px-3 py-2 text-right">{isBalingPackingStage ? 'Pcs / Qty' : 'Quantity'}</th>
-                                    {isBalingPackingStage && <th className="px-3 py-2 text-right">Net Wt (Kg)</th>}
+                                    <th className="px-3 py-2 text-right">Produced (Bags)</th>
+                                    <th className="px-3 py-2 text-right">Produced (Kg)</th>
                                     <th className="px-3 py-2">Shift</th>
                                     <th className="px-3 py-2">Notes / Remarks</th>
                                     <th className="px-3 py-2">Logged By</th>
@@ -769,13 +870,13 @@ export default function OperatorWiseProductionTracker({
                                                 {opName}
                                             </td>
                                             <td className="px-3 py-2 text-right font-mono font-bold text-text-main">
-                                                {Number(log.quantity || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 })}
+                                                {Number(log.producedPcs ?? log.quantity ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 3 })} Bags
                                             </td>
-                                            {isBalingPackingStage && (
-                                                <td className="px-3 py-2 text-right font-mono font-semibold text-text-main">
-                                                    {log.netWeight != null ? `${Number(log.netWeight).toLocaleString('en-IN', { maximumFractionDigits: 3 })} Kg` : '-'}
-                                                </td>
-                                            )}
+                                            <td className="px-3 py-2 text-right font-mono font-semibold text-text-main">
+                                                {log.producedKg != null && Number(log.producedKg) > 0
+                                                    ? `${Number(log.producedKg).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Kg${log.isEstimatedWeight ? ' (est.)' : ''}`
+                                                    : (log.netWeight != null ? `${Number(log.netWeight).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Kg` : '-')}
+                                            </td>
                                             <td className="px-3 py-2 text-text-muted">
                                                 {shiftName}
                                             </td>
@@ -819,8 +920,8 @@ export default function OperatorWiseProductionTracker({
             {/* "+ Log Production" Modal */}
             {isLogModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-150">
-                    <div className="bg-card-bg border border-border rounded-xl shadow-2xl p-5 max-w-md w-full font-sans animate-in zoom-in-95 duration-150">
-                        <div className="flex items-center justify-between border-b border-border pb-3 mb-4">
+                    <div className="bg-card-bg border border-border rounded-xl shadow-2xl p-5 max-w-md w-full max-h-[90vh] flex flex-col font-sans animate-in zoom-in-95 duration-150">
+                        <div className="flex items-center justify-between border-b border-border pb-3 mb-4 shrink-0">
                             <div className="flex items-center gap-2">
                                 <div className="p-2 bg-primary/10 text-primary rounded-lg">
                                     <Plus size={16} />
@@ -843,7 +944,8 @@ export default function OperatorWiseProductionTracker({
                             </button>
                         </div>
 
-                        <form onSubmit={handleSubmitLog} className="space-y-3.5">
+                        <form onSubmit={handleSubmitLog} className="flex flex-col flex-1 min-h-0">
+                            <div className="overflow-y-auto space-y-3.5 pr-0.5 flex-1">
                             {/* Operator Dropdown */}
                             <div>
                                 <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-1">
@@ -879,62 +981,138 @@ export default function OperatorWiseProductionTracker({
                                 />
                             </div>
 
-                            {/* Quantity Produced with Live Remaining Indicator & Dynamic Constraint Explanation */}
-                            <div>
-                                <div className="flex items-center justify-between mb-1">
-                                    <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted">
-                                        {isBalingPackingStage ? 'Number of Pcs (Quantity) *' : 'Quantity Produced (Bags) *'}
-                                    </label>
-                                    <span className={`text-[11px] font-mono font-bold ${maxAllowedForForm === 0 ? 'text-rose-500' : 'text-primary'}`}>
-                                        Remaining: {maxAllowedForForm.toLocaleString('en-IN', { maximumFractionDigits: 3 })} {isBalingPackingStage ? 'Pcs' : 'Bags'}
-                                    </span>
-                                </div>
-                                <input
-                                    type="number"
-                                    min="0.001"
-                                    max={maxAllowedForForm}
-                                    step="0.001"
-                                    required
-                                    placeholder={`Max ${maxAllowedForForm.toLocaleString('en-IN', { maximumFractionDigits: 3 })} ${isBalingPackingStage ? 'pcs' : 'bags'}`}
-                                    value={formData.quantity}
-                                    onChange={(e) => setFormData((p) => ({ ...p, quantity: e.target.value }))}
-                                    className={`w-full text-xs font-mono font-bold border rounded-lg p-2 bg-app-bg text-text-main focus:outline-none ${
-                                        isOverRemaining
-                                            ? 'border-rose-500 focus:border-rose-500 text-rose-600'
-                                            : 'border-border focus:border-primary'
-                                    }`}
-                                />
-                                <span className="text-[10px] text-text-muted mt-1 block">
-                                    {isFirstActiveStage
-                                        ? `Cap enforced by Work Order target (${workOrderOriginalTarget.toLocaleString('en-IN', { maximumFractionDigits: 3 })} Bags)`
-                                        : `Cap enforced by ${previousStage?.stageName?.replace(/_/g, ' ') || 'previous stage'} output (${stageTargetQty.toLocaleString('en-IN', { maximumFractionDigits: 3 })} Bags available)`}
-                                </span>
-                                {isOverRemaining && (
-                                    <p className="text-[11px] font-bold text-rose-500 mt-1 flex items-center gap-1">
-                                        <AlertTriangle size={12} />
-                                        <span>Entered quantity exceeds the remaining allowance ({maxAllowedForForm.toLocaleString('en-IN', { maximumFractionDigits: 3 })} {isBalingPackingStage ? 'Pcs' : 'Bags'}).</span>
-                                    </p>
-                                )}
-                            </div>
+                            {/* Grouped Production Quantity Card */}
+                            {(() => {
+                                const remKg = bagWeightKg > 0 ? Number((maxAllowedForForm * bagWeightKg).toFixed(2)) : null;
+                                const numBags = Number(formData.quantity || 0);
+                                const numKg = Number(formData.producedKg || 0);
+                                const hasKgValue = formData.producedKg !== '' && numKg > 0;
+                                const actualGramsPerBag = (numBags > 0 && numKg > 0) ? (numKg * 1000) / numBags : null;
+                                const isKgSanityWarn = actualGramsPerBag !== null && (actualGramsPerBag < 5 || actualGramsPerBag > 2000);
+                                const isKgVarianceWarn = actualGramsPerBag !== null && bagWeightGrams > 0 && formData.isKgManual && (Math.abs(actualGramsPerBag - bagWeightGrams) / bagWeightGrams) > 0.25;
 
-                            {/* Net Weight (Kg) - Required ONLY for Baling & Packing stage */}
-                            {isBalingPackingStage && (
-                                <div>
-                                    <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-1">
-                                        Net Weight (Kg) <span className="text-rose-500">*</span>
-                                    </label>
-                                    <input
-                                        type="number"
-                                        step="0.001"
-                                        min="0.001"
-                                        required
-                                        placeholder="e.g. 250.500"
-                                        value={formData.netWeight}
-                                        onChange={(e) => setFormData((p) => ({ ...p, netWeight: e.target.value }))}
-                                        className="w-full text-xs font-mono font-bold border border-border rounded-lg p-2 bg-app-bg text-text-main focus:outline-none focus:border-primary"
-                                    />
-                                </div>
-                            )}
+                                return (
+                                    <div className="bg-app-bg/60 border border-border rounded-xl p-3 space-y-2.5">
+                                        {/* Top Row: Heading + Remaining Pill */}
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <span className="text-[11px] font-bold uppercase tracking-wider text-text-muted">
+                                                Production Quantity *
+                                            </span>
+                                            <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold border ${
+                                                maxAllowedForForm === 0
+                                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                                            }`}>
+                                                Remaining: {maxAllowedForForm.toLocaleString('en-IN', { maximumFractionDigits: 3 })} {isBalingPackingStage ? 'Pcs' : 'Bags'}
+                                                {remKg !== null && remKg > 0 ? ` (${remKg.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Kg)` : ''}
+                                            </span>
+                                        </div>
+
+                                        {/* Two Equal-Width Columns Aligned on Baseline */}
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                                            <div>
+                                                <div className="h-5 flex items-center mb-1">
+                                                    <label className="text-[10px] font-bold uppercase tracking-wider text-text-muted whitespace-nowrap">
+                                                        {isBalingPackingStage ? 'Pcs *' : 'Bags *'}
+                                                    </label>
+                                                </div>
+                                                <div className="relative">
+                                                    <input
+                                                        type="number"
+                                                        min="0.001"
+                                                        max={maxAllowedForForm}
+                                                        step="0.001"
+                                                        required
+                                                        placeholder={`Max ${maxAllowedForForm.toLocaleString('en-IN', { maximumFractionDigits: 3 })}`}
+                                                        value={formData.quantity}
+                                                        onChange={(e) => handleBagsChange(e.target.value)}
+                                                        className={`w-full h-9 text-xs font-mono font-bold border rounded-lg pl-2.5 pr-11 bg-card-bg text-text-main focus:outline-none ${
+                                                            isOverRemaining
+                                                                ? 'border-rose-500 focus:border-rose-500 text-rose-600'
+                                                                : 'border-border focus:border-primary'
+                                                        }`}
+                                                    />
+                                                    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-text-muted">
+                                                        {isBalingPackingStage ? 'pcs' : 'bags'}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <div className="h-5 flex items-center justify-between gap-1.5 mb-1">
+                                                    <label className="text-[10px] font-bold uppercase tracking-wider text-text-muted whitespace-nowrap">
+                                                        {isBalingPackingStage ? 'Kg *' : 'Kg'}
+                                                    </label>
+                                                    {hasKgValue && (
+                                                        <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border whitespace-nowrap shrink-0 leading-tight ${
+                                                            formData.isKgManual || isBalingPackingStage
+                                                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                                                : isSpecEstimated
+                                                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                                                    : 'bg-sky-50 text-sky-700 border-sky-200'
+                                                        }`}>
+                                                            {formData.isKgManual || isBalingPackingStage
+                                                                ? 'Actual'
+                                                                : (isSpecEstimated ? 'Estimated' : 'BOM / Saved')}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="relative">
+                                                    <input
+                                                        type="number"
+                                                        step="0.01"
+                                                        min="0.01"
+                                                        required={isBalingPackingStage}
+                                                        placeholder="e.g. 80.50"
+                                                        value={formData.producedKg}
+                                                        onChange={(e) => handleKgChange(e.target.value)}
+                                                        className="w-full h-9 text-xs font-mono font-bold border border-border rounded-lg pl-2.5 pr-9 bg-card-bg text-text-main focus:outline-none focus:border-primary"
+                                                    />
+                                                    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-text-muted">
+                                                        kg
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Cap & Approx Bag Weight Lines */}
+                                        <div className="space-y-0.5 text-[10px] text-text-muted">
+                                            <span className="block">
+                                                {isFirstActiveStage
+                                                    ? `Cap enforced by Work Order target (${workOrderOriginalTarget.toLocaleString('en-IN', { maximumFractionDigits: 3 })} Bags)`
+                                                    : `Cap enforced by ${previousStage?.stageName?.replace(/_/g, ' ') || 'previous stage'} output (${stageTargetQty.toLocaleString('en-IN', { maximumFractionDigits: 3 })} Bags available)`}
+                                            </span>
+                                            {actualGramsPerBag !== null && (
+                                                <span className="block font-mono">
+                                                    Approx. {actualGramsPerBag.toFixed(1)} g per bag
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        {/* Validation & Sanity Warnings inside the grouped card */}
+                                        {isOverRemaining && (
+                                            <p className="text-[11px] font-bold text-rose-600 flex items-center gap-1">
+                                                <AlertTriangle size={12} className="shrink-0" />
+                                                <span>Entered quantity exceeds the remaining allowance ({maxAllowedForForm.toLocaleString('en-IN', { maximumFractionDigits: 3 })} {isBalingPackingStage ? 'Pcs' : 'Bags'}).</span>
+                                            </p>
+                                        )}
+
+                                        {isKgSanityWarn && (
+                                            <p className="text-[11px] font-medium text-amber-800 flex items-center gap-1.5">
+                                                <AlertTriangle size={12} className="shrink-0 text-amber-600" />
+                                                <span>Unusual bag weight ({actualGramsPerBag.toFixed(1)} g/bag — outside 5 g to 2,000 g range). Please verify Bags & Kg.</span>
+                                            </p>
+                                        )}
+
+                                        {!isKgSanityWarn && isKgVarianceWarn && (
+                                            <p className="text-[11px] font-medium text-amber-800 flex items-center gap-1.5">
+                                                <AlertTriangle size={12} className="shrink-0 text-amber-600" />
+                                                <span>Actual weight ({actualGramsPerBag.toFixed(1)} g/bag) differs by more than 25% from expected ({bagWeightGrams.toFixed(1)} g/bag).</span>
+                                            </p>
+                                        )}
+                                    </div>
+                                );
+                            })()}
 
                             {/* Shift (Required for Baling & Packing, Optional for other stages) */}
                             <div>
@@ -971,9 +1149,10 @@ export default function OperatorWiseProductionTracker({
                                     className="w-full text-xs border border-border rounded-lg p-2 bg-app-bg text-text-main focus:outline-none focus:border-primary"
                                 />
                             </div>
+                            </div>
 
                             {/* Modal Action Buttons */}
-                            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
+                            <div className="flex items-center justify-end gap-2.5 pt-3 mt-3 border-t border-border shrink-0">
                                 <button
                                     type="button"
                                     onClick={() => { setIsLogModalOpen(false); setEditingLog(null); }}
@@ -989,9 +1168,9 @@ export default function OperatorWiseProductionTracker({
                                         maxAllowedForForm <= 0 ||
                                         !formData.quantity ||
                                         Number(formData.quantity) <= 0 ||
-                                        (isBalingPackingStage && (!formData.shift || !formData.netWeight || Number(formData.netWeight) <= 0))
+                                        (isBalingPackingStage && (!formData.shift || !formData.producedKg || Number(formData.producedKg) <= 0))
                                     }
-                                    className="px-4 py-1.5 text-xs font-bold text-sidebar-bg bg-primary hover:bg-primary-hover rounded-lg transition-all shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                    className="px-4 py-1.5 text-xs font-bold text-sidebar-bg bg-primary hover:bg-primary-hover rounded-lg transition-all shadow-xs cursor-pointer disabled:opacity-60 disabled:bg-primary disabled:hover:bg-primary disabled:cursor-not-allowed"
                                 >
                                     {isSubmitting ? 'Saving...' : editingLog ? 'Update Entry' : 'Save Production Log'}
                                 </button>

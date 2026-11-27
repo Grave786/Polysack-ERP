@@ -154,6 +154,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                         const qty = Number(it.quantity || 0);
                         const rate = Number(it.ratePerUnit || 0);
                         return {
+                            _id: it._id || undefined,
                             finishedGood: fgId || '',
                             quantity: qty > 0 ? String(qty) : '',
                             unit: normalizeSoUnit(it.unit),
@@ -395,6 +396,7 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                 autoRoundOff: charges.autoRoundOff !== false,
                 notes: notes.trim() || undefined,
                 items: items.map((it) => ({
+                    ...(it._id ? { _id: it._id } : {}),
                     finishedGood: it.finishedGood,
                     quantity: Number(it.quantity),
                     unit: normalizeSoUnit(it.unit),
@@ -813,9 +815,17 @@ export default function CreateSalesOrderModal({ isOpen, onClose, onSuccess, init
                                             const isRateInvalid = item.ratePerUnit !== '' && enteredRate <= 0;
                                             const hasWholesaleVariance = wholesale > 0 && enteredRate > 0 && (Math.abs(enteredRate - wholesale) / wholesale) > 0.5;
                                             const applySuggestedRate = (val) => handleItemChange(index, 'ratePerUnit', String(val));
+                                            const otherLineNumbers = items
+                                                .map((other, oIdx) => (oIdx !== index && String(other.finishedGood) === String(item.finishedGood) ? oIdx + 1 : null))
+                                                .filter(Boolean);
 
                                             return (
                                                 <div className="col-span-12 space-y-1.5 pt-0.5">
+                                                    {otherLineNumbers.length > 0 && (
+                                                        <div className="px-1 text-[11px] text-sky-700 font-medium">
+                                                            Same product also on {otherLineNumbers.length === 1 ? `line ${otherLineNumbers[0]}` : `lines ${otherLineNumbers.join(', ')}`}
+                                                        </div>
+                                                    )}
                                                     {!isCancelledOrder && !isDispatchedOrder && (lastRateInfo?.ratePerUnit > 0 || wholesale > 0 || retail > 0) && (
                                                         <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
                                                             <span className="text-text-muted font-semibold">Suggested rates:</span>
