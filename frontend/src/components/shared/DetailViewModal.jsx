@@ -453,8 +453,10 @@ function PoReceiptHistoryViewer({ record }) {
                                 <th className="px-3 py-2.5">Delivery</th>
                                 <th className="px-3 py-2.5">GRN No</th>
                                 <th className="px-3 py-2.5">Receipt Date</th>
+                                <th className="px-3 py-2.5">Payable Due</th>
                                 <th className="px-3 py-2.5">Items Received That Date</th>
                                 <th className="px-3 py-2.5 text-right">Received Qty</th>
+                                <th className="px-3 py-2.5 text-right">Payable Amount (₹)</th>
                                 <th className="px-3 py-2.5 text-right">Running Total Received</th>
                                 <th className="px-3 py-2.5 text-right">Running Remaining</th>
                                 <th className="px-3 py-2.5">Location / Received By</th>
@@ -464,6 +466,8 @@ function PoReceiptHistoryViewer({ record }) {
                             {historyRows.map((row) => {
                                 const receiptDateStr = row.receivedDate || row.createdAt;
                                 const formattedDate = receiptDateStr ? formatDate(receiptDateStr) : '-';
+                                const formattedDueDate = row.dueDate ? formatDate(row.dueDate) : '-';
+                                const grnPayable = row.payableAmount !== undefined && row.payableAmount !== null ? Number(row.payableAmount) : null;
 
                                 const locationDisplay = typeof row.receivingLocation === 'object'
                                     ? (row.receivingLocation?.name || row.receivingLocation?.code || '-')
@@ -483,8 +487,11 @@ function PoReceiptHistoryViewer({ record }) {
                                                 {row.grnNumber}
                                             </span>
                                         </td>
-                                        <td className="px-3 py-2.5 whitespace-nowrap text-text-main font-medium">
+                                        <td className="px-3 py-2.5 whitespace-nowrap text-text-main font-medium font-mono">
                                             {formattedDate}
+                                        </td>
+                                        <td className="px-3 py-2.5 whitespace-nowrap text-text-main font-semibold font-mono">
+                                            {formattedDueDate}
                                         </td>
                                         <td className="px-3 py-2.5">
                                             <div className="space-y-1">
@@ -519,6 +526,9 @@ function PoReceiptHistoryViewer({ record }) {
                                         </td>
                                         <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">
                                             {row.thisGrnQty.toLocaleString('en-IN')} {defaultUnit}
+                                        </td>
+                                        <td className="px-3 py-2.5 text-right font-mono font-bold text-primary">
+                                            {grnPayable !== null ? `₹${grnPayable.toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : '-'}
                                         </td>
                                         <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-800 bg-emerald-50/30">
                                             {row.runningTotalReceived.toLocaleString('en-IN')} {defaultUnit}
@@ -1514,20 +1524,63 @@ const MASTER_SCHEMAS = {
             fields: [
                 { label: 'PO Number', key: 'poNumber', type: 'code' },
                 { label: 'Supplier / Vendor', key: (r) => typeof r.supplier === 'object' ? (r.supplier?.companyName || r.supplier?.name || '-') : (r.supplier || '-'), span: 2 },
-                { label: 'PO Date', key: (r) => r.poDate || r.createdAt, type: 'date' },
-                { label: 'Expected Delivery Date', key: 'expectedDelivery', type: 'date' },
-                { label: 'Due Date', key: (r) => r.dueDate || r.expectedDelivery, type: 'date' },
+                { label: 'PO Date', key: (r) => r.poDate || r.createdAt, type: 'dateOnly' },
+                { label: 'Expected Delivery Date', key: 'expectedDelivery', type: 'dateOnly' },
+                { label: 'Due Date (PO)', key: (r) => r.effectiveDueDate || r.dueDate, type: 'dateOnly' },
+                { label: 'Payable Due (as per GRN)', key: (r) => r.grnDueDate ? formatDate(r.grnDueDate) : (r.hasGrn ? 'Paid' : 'After GRN receipt') },
+                { label: 'Payment Terms', key: (r) => r.paymentTerms || '30 days (default)' },
                 { label: 'Status', key: 'status', type: 'status' }
             ]
         },
         {
             title: 'Financial & Payment Summary',
             fields: [
-                { label: 'Total Value', key: 'totalValue', type: 'currency' },
+                {
+                    label: 'Subtotal',
+                    key: (r) => Number(r.itemsSubtotal || 0) > 0
+                        ? Number(r.itemsSubtotal)
+                        : (Array.isArray(r.items) ? r.items.reduce((s, it) => s + (Number(it.orderedQuantity || 0) * Number(it.ratePerUnit || 0)), 0) : 0),
+                    type: 'currency'
+                },
+                {
+                    label: 'Charges / Discount',
+                    key: (r) => {
+                        const disc = Number(r.discountAmount || 0);
+                        const chg = Number(r.freightAmount ?? r.freightCharges ?? 0)
+                            + Number(r.insuranceAmount ?? r.insuranceCharges ?? 0)
+                            + Number(r.otherChargesAmount ?? r.otherCharges ?? 0);
+                        const parts = [];
+                        if (disc > 0) parts.push(`-₹${disc.toLocaleString('en-IN', { maximumFractionDigits: 2 })} disc`);
+                        if (chg > 0) parts.push(`+₹${chg.toLocaleString('en-IN', { maximumFractionDigits: 2 })} charges`);
+                        if (Number(r.roundOff || 0) !== 0) parts.push(`${Number(r.roundOff) > 0 ? '+' : ''}₹${Number(r.roundOff).toFixed(2)} round-off`);
+                        return parts.length > 0 ? parts.join(', ') : '₹0';
+                    }
+                },
+                {
+                    label: 'GST',
+                    key: (r) => {
+                        const isExempt = String(r.gstTreatment || 'TAXABLE').toUpperCase() === 'EXEMPT';
+                        if (isExempt) return 'Exempt (₹0)';
+                        const rate = r.gstRate !== undefined && r.gstRate !== null ? r.gstRate : 18;
+                        const amt = Number(r.gstAmount ?? r.taxAmount ?? 0);
+                        return `₹${amt.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${rate}%)`;
+                    }
+                },
+                { label: 'Total Value (with GST)', key: (r) => Number(r.grandTotal ?? r.totalValue ?? 0), type: 'currency' },
+                {
+                    label: 'Received Value (as per GRN)',
+                    key: (r) => r.hasGrn
+                        ? `₹${Number(r.receivedValue || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+                        : 'Not yet received'
+                },
                 { label: 'Paid Amount', key: (r) => r.paidAmount || 0, type: 'currency' },
-                { label: 'Balance Outstanding', key: (r) => r.balanceAmount !== undefined ? r.balanceAmount : Math.max(0, (r.totalValue || 0) - (r.paidAmount || 0)), type: 'currency' },
-                { label: 'Payment Status', key: (r) => r.paymentStatus || 'UNPAID', type: 'status' },
-                { label: 'Payment Terms', key: (r) => r.paymentTerms || '-' }
+                {
+                    label: 'Balance Outstanding',
+                    key: (r) => r.hasGrn
+                        ? `₹${Math.max(0, Number(((r.receivedValue || 0) - (r.paidAmount || 0)).toFixed(2))).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+                        : '₹0 (Not yet received)'
+                },
+                { label: 'Payment Status', key: (r) => r.paymentStatus || 'UNPAID', type: 'status' }
             ]
         },
         {

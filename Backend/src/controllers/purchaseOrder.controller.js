@@ -3,11 +3,17 @@ const Supplier = require('../models/supplier.model');
 const Location = require('../models/location.model');
 const RawMaterial = require('../models/rawMaterial.model');
 const PartyAdvance = require('../models/partyAdvance.model');
+const GRN = require('../models/grn.model');
 const { createPoApprovalNotification, resolvePoApprovalNotification } = require('../services/notification.service');
 const { createPoApprovalRequest } = require('../services/approval.service');
 const { isTenantAdmin } = require('../middlewares/rbac.middleware');
 const { computeDocumentTotals } = require('../utils/gstHelper');
-const { computeOverdueInfo, computePoPayableValues } = require('../utils/overdueHelper');
+const {
+    computeOverdueInfo,
+    computePoPayableValues,
+    resolveSupplierPaymentTerms,
+    allocatePaymentsToGrns
+} = require('../utils/overdueHelper');
 
 /**
  * Safely parses any date representation (Date obj, timestamp, ISO string, DD/MM/YYYY, DD-MM-YYYY)
@@ -312,6 +318,83 @@ const createPurchaseOrder = async (req, res) => {
  * @route   GET /api/purchase-orders
  * @access  Private (PROCUREMENT:READ permission)
  */
+const enrichPoWithPayables = (poDoc, poGrns = [], now = new Date()) => {
+    const poObj = poDoc.toObject ? poDoc.toObject() : { ...poDoc };
+    const termsInfo = resolveSupplierPaymentTerms(poObj.supplier?.paymentTerms);
+    const grandTotal = resolvePoGrandTotal(poObj);
+    const itemsSub = Number(poObj.itemsSubtotal || 0) > 0
+        ? Number(poObj.itemsSubtotal)
+        : (poObj.items || []).reduce((s, it) => s + (Number(it.orderedQuantity || 0) * Number(it.ratePerUnit || 0)), 0);
+    const totalPaid = Math.min(grandTotal, Number(poObj.paidAmount || poObj.amountPaid || 0));
+    const poDue = computeOverdueInfo({
+        totalAmount: grandTotal,
+        paidAmount: totalPaid,
+        docDate: poObj.poDate || poObj.createdAt,
+        docDueDate: poObj.dueDate || null,
+        paymentTerms: termsInfo.days,
+        now
+    });
+
+    const grnAlloc = allocatePaymentsToGrns(
+        poGrns || [],
+        { ...poObj, paidAmount: totalPaid },
+        poObj.supplier?.paymentTerms,
+        now
+    );
+    const hasGrn = grnAlloc.grnRows.length > 0;
+    const earliestUnpaidGrn = grnAlloc.grnRows.find((g) => g.balanceAmount > 0.01);
+    const lastGrn = hasGrn ? grnAlloc.grnRows[grnAlloc.grnRows.length - 1] : null;
+    const overdueGrn = grnAlloc.grnRows.find((g) => g.isOverdue);
+
+    const receivedValue = hasGrn ? grnAlloc.totalReceivedValue : 0;
+    const balanceAmount = hasGrn ? Math.max(0, Number((receivedValue - totalPaid).toFixed(2))) : 0;
+    const hasUnknownPayable = hasGrn && (grnAlloc.hasUnknownPayable || receivedValue <= 0);
+
+    let grnPayableStatus = 'NOT_RECEIVED';
+    if (hasGrn) {
+        if (hasUnknownPayable) {
+            grnPayableStatus = 'CHECK_DATA';
+        } else if (receivedValue > 0 && balanceAmount <= 0.01) {
+            grnPayableStatus = 'PAID';
+        } else if (overdueGrn) {
+            grnPayableStatus = 'OVERDUE';
+        } else if (totalPaid > 0.01) {
+            grnPayableStatus = 'PARTIAL';
+        } else {
+            grnPayableStatus = 'UNPAID';
+        }
+    }
+
+    const paymentStatus = grnPayableStatus;
+
+    poObj.itemsSubtotal = itemsSub;
+    poObj.grandTotal = grandTotal;
+    poObj.totalAmount = grandTotal;
+    poObj.totalValue = grandTotal;
+    poObj.poValue = grandTotal;
+    poObj.paymentTerms = termsInfo.label;
+    poObj.paymentTermsDays = termsInfo.days;
+    poObj.effectiveDueDate = poDue.effectiveDueDate;
+    poObj.dueDate = poDue.effectiveDueDate;
+    poObj.hasGrn = hasGrn;
+    poObj.grnCount = grnAlloc.grnRows.length;
+    poObj.grnPayableDueDate = earliestUnpaidGrn?.dueDate || null;
+    poObj.grnDueDate = earliestUnpaidGrn?.dueDate || null;
+    poObj.earliestUnpaidGrnDueDate = earliestUnpaidGrn?.dueDate || null;
+    poObj.lastGrnDueDate = lastGrn?.dueDate || null;
+    poObj.grnPayableStatus = grnPayableStatus;
+    poObj.receivedValue = receivedValue;
+    poObj.paidAmount = totalPaid;
+    poObj.balanceAmount = balanceAmount;
+    poObj.balanceDue = balanceAmount;
+    poObj.payableBalance = balanceAmount;
+    poObj.paymentStatus = paymentStatus;
+    poObj.isOverdue = hasGrn ? Boolean(overdueGrn) : false;
+    poObj.daysOverdue = hasGrn ? (overdueGrn?.daysOverdue || 0) : 0;
+
+    return { poObj, grnAlloc };
+};
+
 const getPurchaseOrders = async (req, res) => {
     try {
         const tenantId = req.user?.tenant;
@@ -328,15 +411,6 @@ const getPurchaseOrders = async (req, res) => {
 
         if (status) {
             filter.status = status;
-        }
-
-        if (req.query.paymentStatus) {
-            const ps = req.query.paymentStatus;
-            if (ps === 'OUTSTANDING' || ps === 'UNPAID') {
-                filter.paymentStatus = { $in: ['UNPAID', 'PARTIALLY_PAID', 'OVERDUE'] };
-            } else {
-                filter.paymentStatus = ps;
-            }
         }
 
         if (supplier) {
@@ -360,66 +434,58 @@ const getPurchaseOrders = async (req, res) => {
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
         const limitNum = Math.max(1, parseInt(limit, 10) || 20);
         const skip = (pageNum - 1) * limitNum;
+        const requestedPaymentStatus = req.query.paymentStatus;
 
-        const [purchaseOrders, total] = await Promise.all([
-            PurchaseOrder.find(filter)
-                .populate('supplier', 'name code contactPerson phone email address city gstin paymentTerms advanceBalance')
-                .populate('deliveryLocation', 'name code type')
-                .populate({
-                    path: 'items.rawMaterial',
-                    select: 'name code uom materialGrade materialQualityFabric materialQualityBags fabricGrammage fabricAverage fabricSize hsnCode'
-                })
-                .sort({ poDate: -1, createdAt: -1 })
-                .skip(skip)
-                .limit(limitNum),
-            PurchaseOrder.countDocuments(filter)
+        let purchaseOrdersQuery = PurchaseOrder.find(filter)
+            .populate('supplier', 'name code contactPerson phone email address city gstin paymentTerms advanceBalance')
+            .populate('deliveryLocation', 'name code type')
+            .populate({
+                path: 'items.rawMaterial',
+                select: 'name code uom materialGrade materialQualityFabric materialQualityBags fabricGrammage fabricAverage fabricSize hsnCode'
+            })
+            .sort({ poDate: -1, createdAt: -1 });
+
+        if (!requestedPaymentStatus) {
+            purchaseOrdersQuery = purchaseOrdersQuery.skip(skip).limit(limitNum);
+        }
+
+        const [purchaseOrders, dbTotal] = await Promise.all([
+            purchaseOrdersQuery,
+            requestedPaymentStatus ? Promise.resolve(0) : PurchaseOrder.countDocuments(filter)
         ]);
 
-        const now = new Date();
-        const enrichedPOs = purchaseOrders.map((po) => {
-            const poObj = po.toObject ? po.toObject() : { ...po };
-            const payable = computePoPayableValues(poObj);
-            const grandTotal = resolvePoGrandTotal(poObj);
-            const totalPaid = Math.min(grandTotal, Number(poObj.paidAmount || poObj.amountPaid || 0));
-            const balanceDue = Math.max(0, Number((grandTotal - totalPaid).toFixed(2)));
-            const overdue = computeOverdueInfo({
-                totalAmount: grandTotal,
-                paidAmount: totalPaid,
-                docDate: poObj.poDate || poObj.createdAt,
-                docDueDate: poObj.dueDate || null,
-                paymentTerms: poObj.supplier?.paymentTerms,
-                now
-            });
-
-            let computedPaymentStatus = overdue.paymentStatus;
-            if (grandTotal > 0) {
-                if (balanceDue <= 0.01) {
-                    computedPaymentStatus = 'PAID';
-                } else if (overdue.isOverdue) {
-                    computedPaymentStatus = 'OVERDUE';
-                } else if (totalPaid > 0) {
-                    computedPaymentStatus = 'PARTIALLY_PAID';
-                } else {
-                    computedPaymentStatus = 'UNPAID';
-                }
-            }
-
-            poObj.grandTotal = grandTotal;
-            poObj.totalAmount = grandTotal;
-            poObj.poValue = grandTotal;
-            poObj.receivedValue = payable.receivedValue;
-            poObj.payableBalance = payable.payableBalance;
-            poObj.paidAmount = totalPaid;
-            poObj.balanceAmount = balanceDue;
-            poObj.balanceDue = balanceDue;
-            poObj.effectiveDueDate = overdue.effectiveDueDate;
-            poObj.dueDate = overdue.effectiveDueDate;
-            poObj.isOverdue = balanceDue > 0.01 ? overdue.isOverdue : false;
-            poObj.daysOverdue = balanceDue > 0.01 ? overdue.daysOverdue : 0;
-            poObj.paymentStatus = computedPaymentStatus;
-
-            return poObj;
+        const poIds = purchaseOrders.map((p) => p._id);
+        const grnsForPage = poIds.length > 0
+            ? await GRN.find({ tenant: tenantId, purchaseOrder: { $in: poIds } }).lean()
+            : [];
+        const grnsByPoId = new Map();
+        grnsForPage.forEach((g) => {
+            const k = String(g.purchaseOrder);
+            if (!grnsByPoId.has(k)) grnsByPoId.set(k, []);
+            grnsByPoId.get(k).push(g);
         });
+
+        const now = new Date();
+        let enrichedPOs = purchaseOrders.map((po) => {
+            const poGrns = grnsByPoId.get(String(po._id)) || [];
+            return enrichPoWithPayables(po, poGrns, now).poObj;
+        });
+
+        let total = dbTotal;
+        if (requestedPaymentStatus) {
+            const normReq = String(requestedPaymentStatus).toUpperCase();
+            enrichedPOs = enrichedPOs.filter((poObj) => {
+                if (normReq === 'OUTSTANDING') {
+                    return ['UNPAID', 'PARTIAL', 'OVERDUE'].includes(poObj.paymentStatus);
+                }
+                if (normReq === 'PARTIALLY_PAID') {
+                    return poObj.paymentStatus === 'PARTIAL';
+                }
+                return poObj.paymentStatus === normReq || poObj.grnPayableStatus === normReq;
+            });
+            total = enrichedPOs.length;
+            enrichedPOs = enrichedPOs.slice(skip, skip + limitNum);
+        }
 
         return res.status(200).json({
             success: true,
@@ -458,7 +524,7 @@ const getPurchaseOrderById = async (req, res) => {
         }
 
         const purchaseOrder = await PurchaseOrder.findOne({ _id: req.params.id, tenant: tenantId })
-            .populate('supplier', 'name contactPerson phone email address city gstin')
+            .populate('supplier', 'name code contactPerson phone email address city gstin paymentTerms')
             .populate('deliveryLocation', 'name code type')
             .populate({
                 path: 'items.rawMaterial',
@@ -474,7 +540,6 @@ const getPurchaseOrderById = async (req, res) => {
         }
 
         // Fetch date-wise receipt history (all GRNs created against this PO)
-        const GRN = require('../models/grn.model');
         const grns = await GRN.find({ purchaseOrder: purchaseOrder._id, tenant: tenantId })
             .populate({
                 path: 'items.rawMaterial',
@@ -486,8 +551,25 @@ const getPurchaseOrderById = async (req, res) => {
             .sort({ receivedDate: 1, createdAt: 1 })
             .lean();
 
-        const poObj = purchaseOrder.toObject ? purchaseOrder.toObject() : { ...purchaseOrder };
-        poObj.receiptHistory = grns || [];
+        const { poObj, grnAlloc } = enrichPoWithPayables(purchaseOrder, grns || [], new Date());
+
+        // Merge enriched GRN payable fields onto chronological receiptHistory
+        const grnAllocMap = new Map(grnAlloc.grnRows.map((g) => [String(g._id), g]));
+        poObj.receiptHistory = (grns || []).map((g) => {
+            const alloc = grnAllocMap.get(String(g._id));
+            return alloc
+                ? {
+                    ...g,
+                    dueDate: alloc.dueDate,
+                    payableAmount: alloc.payableAmount,
+                    paidAmount: alloc.paidAmount,
+                    balanceAmount: alloc.balanceAmount,
+                    paymentStatus: alloc.paymentStatus,
+                    paymentTermsDays: alloc.paymentTermsDays,
+                    paymentTermsLabel: alloc.paymentTermsLabel
+                }
+                : g;
+        });
 
         return res.status(200).json({
             success: true,
@@ -1430,12 +1512,23 @@ const getPayablesSummary = async (req, res) => {
                 status: { $nin: ['CANCELLED', 'REJECTED'] }
             })
                 .populate('supplier', 'paymentTerms advanceBalance')
-                .select('status items itemsSubtotal discountType discountValue discountAmount freightAmount insuranceAmount otherChargesAmount gstTreatment gstRate autoRoundOff roundOff totalValue grandTotal paidAmount balanceAmount dueDate poDate createdAt paymentStatus supplier')
+                .select('poNumber status items itemsSubtotal discountType discountValue discountAmount freightAmount insuranceAmount otherChargesAmount gstTreatment gstRate autoRoundOff roundOff totalValue grandTotal paidAmount balanceAmount dueDate poDate createdAt paymentStatus supplier')
                 .lean(),
             Supplier.find({ tenant: tenantId, isActive: true, advanceBalance: { $gt: 0 } })
                 .select('advanceBalance')
                 .lean()
         ]);
+
+        const poIds = pos.map((p) => p._id);
+        const allGrns = poIds.length > 0
+            ? await GRN.find({ tenant: tenantId, purchaseOrder: { $in: poIds } }).lean()
+            : [];
+        const grnsByPoId = new Map();
+        allGrns.forEach((g) => {
+            const k = String(g.purchaseOrder);
+            if (!grnsByPoId.has(k)) grnsByPoId.set(k, []);
+            grnsByPoId.get(k).push(g);
+        });
 
         let totalPayable = 0;
         let overdueAmount = 0;
@@ -1443,27 +1536,21 @@ const getPayablesSummary = async (req, res) => {
         const now = new Date();
 
         pos.forEach((po) => {
-            const grandTotal = resolvePoGrandTotal(po);
-            const paidAmount = Math.min(grandTotal, Number(po.paidAmount || 0));
-            const balanceDue = Math.max(0, Number((grandTotal - paidAmount).toFixed(2)));
-            const overdue = computeOverdueInfo({
-                totalAmount: grandTotal,
-                paidAmount,
-                docDate: po.poDate || po.createdAt,
-                docDueDate: po.dueDate || null,
-                paymentTerms: po.supplier?.paymentTerms,
-                now
-            });
+            const poGrns = grnsByPoId.get(String(po._id)) || [];
+            if (poGrns.length === 0) return;
 
-            if (balanceDue > 0.01) {
-                totalPayable += balanceDue;
-                if (po.supplier) {
-                    suppliersWithDues.add(String(po.supplier._id || po.supplier));
+            const alloc = allocatePaymentsToGrns(poGrns, po, po.supplier?.paymentTerms, now);
+            alloc.grnRows.forEach((g) => {
+                if (g.balanceAmount > 0.01) {
+                    totalPayable += g.balanceAmount;
+                    if (po.supplier) {
+                        suppliersWithDues.add(String(po.supplier._id || po.supplier));
+                    }
+                    if (g.isOverdue) {
+                        overdueAmount += g.balanceAmount;
+                    }
                 }
-                if (overdue.isOverdue) {
-                    overdueAmount += balanceDue;
-                }
-            }
+            });
         });
 
         const totalAdvance = suppliersWithAdv.reduce((s, sup) => s + Number(sup.advanceBalance || 0), 0);
@@ -1485,7 +1572,7 @@ const getPayablesSummary = async (req, res) => {
 };
 
 /**
- * @desc    Get Supplier-Wise Outstanding Accounts Payable
+ * @desc    Get GRN-wise Supplier Outstanding Accounts Payable (one row per GRN + supplier summary)
  * @route   GET /api/purchase-orders/supplier-outstanding
  * @access  Private (PROCUREMENT:READ permission)
  */
@@ -1510,7 +1597,21 @@ const getSupplierOutstanding = async (req, res) => {
                 .lean()
         ]);
 
+        const poIds = pos.map((p) => p._id);
+        const allGrns = poIds.length > 0
+            ? await GRN.find({ tenant: tenantId, purchaseOrder: { $in: poIds } })
+                .sort({ receivedDate: -1, createdAt: -1 })
+                .lean()
+            : [];
+        const grnsByPoId = new Map();
+        allGrns.forEach((g) => {
+            const k = String(g.purchaseOrder);
+            if (!grnsByPoId.has(k)) grnsByPoId.set(k, []);
+            grnsByPoId.get(k).push(g);
+        });
+
         const supplierMap = {};
+        const grnLedgerRows = [];
         const now = new Date();
 
         const ensureSuppEntry = (suppId, suppObj) => {
@@ -1520,15 +1621,15 @@ const getSupplierOutstanding = async (req, res) => {
                     supplierName: suppObj?.name || suppObj?.companyName || 'Unknown Supplier',
                     supplierCode: suppObj?.code || '-',
                     phone: suppObj?.phone || '-',
-                    paymentTerms: suppObj?.paymentTerms || '',
+                    paymentTerms: resolveSupplierPaymentTerms(suppObj?.paymentTerms).label,
                     advanceBalance: Number(suppObj?.advanceBalance || 0),
                     totalPurchased: 0,
                     totalReceived: 0,
                     totalPaid: 0,
                     balance: 0,
                     overdueAmount: 0,
-                    poCount: 0,
-                    unpaidPoCount: 0
+                    grnCount: 0,
+                    unpaidGrnCount: 0
                 };
             }
         };
@@ -1539,34 +1640,87 @@ const getSupplierOutstanding = async (req, res) => {
             const suppId = po.supplier ? String(po.supplier._id || po.supplier) : 'Unknown';
             ensureSuppEntry(suppId, po.supplier);
 
-            const payable = computePoPayableValues(po);
             const grandTotal = resolvePoGrandTotal(po);
-            const paidAmount = Math.min(grandTotal, Number(po.paidAmount || 0));
-            const balanceDue = Math.max(0, Number((grandTotal - paidAmount).toFixed(2)));
-            const overdue = computeOverdueInfo({
-                totalAmount: grandTotal,
-                paidAmount,
-                docDate: po.poDate || po.createdAt,
-                docDueDate: po.dueDate || null,
-                paymentTerms: po.supplier?.paymentTerms,
-                now
-            });
+            const poGrns = grnsByPoId.get(String(po._id)) || [];
+            const alloc = allocatePaymentsToGrns(poGrns, po, po.supplier?.paymentTerms, now);
 
             supplierMap[suppId].totalPurchased += grandTotal;
-            supplierMap[suppId].totalReceived += payable.receivedValue;
-            supplierMap[suppId].totalPaid += paidAmount;
-            supplierMap[suppId].balance += balanceDue;
-            supplierMap[suppId].poCount += 1;
+            supplierMap[suppId].totalReceived += alloc.totalReceivedValue;
+            supplierMap[suppId].totalPaid += alloc.totalPaidAllocated;
+            supplierMap[suppId].balance += alloc.totalBalance;
 
-            if (balanceDue > 0.01) {
-                supplierMap[suppId].unpaidPoCount += 1;
-                if (overdue.isOverdue) {
-                    supplierMap[suppId].overdueAmount += balanceDue;
+            alloc.grnRows.forEach((g) => {
+                supplierMap[suppId].grnCount += 1;
+                if (g.balanceAmount > 0.01) {
+                    supplierMap[suppId].unpaidGrnCount += 1;
+                    if (g.isOverdue) {
+                        supplierMap[suppId].overdueAmount += g.balanceAmount;
+                    }
                 }
-            }
+
+                grnLedgerRows.push({
+                    _id: g._id,
+                    grnId: g._id,
+                    grnNumber: g.grnNumber,
+                    poId: po._id,
+                    poNumber: po.poNumber,
+                    poStatus: po.status,
+                    supplierId: po.supplier?._id || suppId,
+                    supplierName: po.supplier?.name || po.supplier?.companyName || 'Unknown Supplier',
+                    supplierCode: po.supplier?.code || '-',
+                    phone: po.supplier?.phone || '-',
+                    advanceBalance: Number(po.supplier?.advanceBalance || 0),
+                    receivedDate: g.receivedDate || g.createdAt,
+                    paymentTermsDays: g.paymentTermsDays,
+                    isDefaultPaymentTerms: g.isDefaultPaymentTerms,
+                    paymentTermsLabel: g.paymentTermsLabel,
+                    dueDate: g.dueDate,
+                    grnAmount: g.payableAmount,
+                    paidAmount: g.paidAmount,
+                    balanceAmount: g.balanceAmount,
+                    paymentStatus: g.paymentStatus,
+                    isOverdue: g.isOverdue,
+                    daysOverdue: g.daysOverdue
+                });
+            });
         });
 
-        let list = Object.values(supplierMap).map((s) => ({
+        // Sort GRN rows: unpaid/overdue first, earliest due date first
+        grnLedgerRows.sort((a, b) => {
+            const aPaid = a.balanceAmount <= 0.01 ? 1 : 0;
+            const bPaid = b.balanceAmount <= 0.01 ? 1 : 0;
+            if (aPaid !== bPaid) return aPaid - bPaid;
+            const da = a.dueDate ? new Date(a.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
+            const db = b.dueDate ? new Date(b.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
+            return da - db;
+        });
+
+        let list = grnLedgerRows;
+
+        const searchQ = (req.query.search || '').trim().toLowerCase();
+        if (searchQ) {
+            list = list.filter((item) =>
+                (item.grnNumber && item.grnNumber.toLowerCase().includes(searchQ)) ||
+                (item.poNumber && item.poNumber.toLowerCase().includes(searchQ)) ||
+                (item.supplierName && item.supplierName.toLowerCase().includes(searchQ)) ||
+                (item.supplierCode && item.supplierCode.toLowerCase().includes(searchQ))
+            );
+        }
+
+        const statusQ = (req.query.status || '').trim().toUpperCase();
+        if (statusQ && statusQ !== 'ALL' && statusQ !== 'ALL STATUSES') {
+            if (statusQ === 'OVERDUE') {
+                list = list.filter((item) => item.isOverdue && item.balanceAmount > 0.01);
+            } else if (statusQ === 'OUTSTANDING' || statusQ === 'UNPAID') {
+                list = list.filter((item) => item.balanceAmount > 0.01);
+            } else if (statusQ === 'PARTIAL' || statusQ === 'PARTIALLY_PAID') {
+                list = list.filter((item) => item.paymentStatus === 'PARTIAL' || item.paymentStatus === 'PARTIALLY_PAID');
+            } else if (statusQ === 'PAID') {
+                list = list.filter((item) => item.paymentStatus === 'PAID');
+            }
+        }
+
+        const supplierSummary = Object.values(supplierMap).map((s) => ({
             ...s,
             advanceBalance: Math.round(s.advanceBalance * 100) / 100,
             totalPurchased: Math.round(s.totalPurchased * 100) / 100,
@@ -1575,26 +1729,6 @@ const getSupplierOutstanding = async (req, res) => {
             balance: Math.round(s.balance * 100) / 100,
             overdueAmount: Math.round(s.overdueAmount * 100) / 100
         })).sort((a, b) => (b.balance - a.balance) || (b.advanceBalance - a.advanceBalance));
-
-        const searchQ = (req.query.search || '').trim().toLowerCase();
-        if (searchQ) {
-            list = list.filter((item) =>
-                (item.supplierName && item.supplierName.toLowerCase().includes(searchQ)) ||
-                (item.supplierCode && item.supplierCode.toLowerCase().includes(searchQ)) ||
-                (item.phone && item.phone.toLowerCase().includes(searchQ))
-            );
-        }
-
-        const statusQ = (req.query.status || '').trim().toUpperCase();
-        if (statusQ && statusQ !== 'ALL' && statusQ !== 'ALL STATUSES') {
-            if (statusQ === 'OVERDUE') {
-                list = list.filter((item) => (item.overdueAmount || 0) > 0);
-            } else if (statusQ === 'OUTSTANDING' || statusQ === 'UNPAID') {
-                list = list.filter((item) => (item.balance || 0) > 0.0001);
-            } else if (statusQ === 'PAID') {
-                list = list.filter((item) => (item.balance || 0) <= 0.0001);
-            }
-        }
 
         return res.status(200).json({
             success: true,
@@ -1605,7 +1739,8 @@ const getSupplierOutstanding = async (req, res) => {
                 limit: Math.max(list.length, 10),
                 pages: 1
             },
-            data: list
+            data: list,
+            supplierSummary
         });
     } catch (error) {
         console.error('Error in getSupplierOutstanding:', error);

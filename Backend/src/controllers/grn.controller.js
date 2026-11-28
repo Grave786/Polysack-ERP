@@ -4,7 +4,9 @@ const PurchaseOrder = require('../models/purchaseOrder.model');
 const Location = require('../models/location.model');
 const RawMaterial = require('../models/rawMaterial.model');
 const QCInspection = require('../models/qcInspection.model');
+const Supplier = require('../models/supplier.model');
 const { executeStockTransactionCore } = require('./stockTransaction.controller');
+const { resolveSupplierPaymentTerms, computeGrnDueDate, computeGrnPayableAmount } = require('../utils/overdueHelper');
 
 /**
  * Helper function to auto-generate unique GRN number per tenant & year
@@ -202,13 +204,24 @@ const createGRN = async (req, res) => {
         }
 
         const grnNumber = await generateGrnNumber(tenantId);
+        const effectiveReceivedDate = receivedDate ? new Date(receivedDate) : new Date();
+        const suppQuery = Supplier.findById(poDoc.supplier).select('paymentTerms').lean();
+        if (useTransaction && session) suppQuery.session(session);
+        const supplierDoc = await suppQuery;
+        const termsInfo = resolveSupplierPaymentTerms(supplierDoc?.paymentTerms);
+        const grnDueDate = computeGrnDueDate(effectiveReceivedDate, termsInfo.days);
+        const grnPayableAmount = computeGrnPayableAmount({ items: cleanedItems }, poDoc);
 
         const grnDocs = await GRN.create([{
             tenant: tenantId,
             grnNumber,
             purchaseOrder: poDoc._id,
             supplier: poDoc.supplier,
-            receivedDate: receivedDate || new Date(),
+            receivedDate: effectiveReceivedDate,
+            paymentTermsDays: termsInfo.days,
+            isDefaultPaymentTerms: termsInfo.isDefault,
+            dueDate: grnDueDate,
+            payableAmount: grnPayableAmount,
             items: cleanedItems,
             rolls: cleanedRolls,
             receivingLocation,
@@ -402,6 +415,9 @@ const getGRNById = async (req, res) => {
  * @access  Private (Tenant Admin only)
  */
 const updateGRN = async (req, res) => {
+    let session = null;
+    let useTransaction = true;
+
     try {
         const tenantId = req.user?.tenant;
         if (!tenantId) {
@@ -419,6 +435,14 @@ const updateGRN = async (req, res) => {
                 message: 'Goods Receipt Note (GRN) not found.'
             });
         }
+
+        const previousItemsMap = new Map();
+        (grn.items || []).forEach((it) => {
+            const rmIdStr = String(it.rawMaterial?._id || it.rawMaterial || '');
+            if (rmIdStr) {
+                previousItemsMap.set(rmIdStr, (previousItemsMap.get(rmIdStr) || 0) + Number(it.receivedQuantity || 0));
+            }
+        });
 
         const {
             receivedDate,
@@ -591,8 +615,19 @@ const updateGRN = async (req, res) => {
             }
         }
 
+        try {
+            session = await mongoose.startSession();
+            session.startTransaction();
+        } catch (sessionErr) {
+            useTransaction = false;
+        }
+        const sessionOption = useTransaction ? { session } : {};
+
+        const targetLocationId = receivingLocation || grn.receivingLocation;
         if (receivingLocation) {
-            const loc = await Location.findOne({ _id: receivingLocation, tenant: tenantId });
+            const locQuery = Location.findOne({ _id: receivingLocation, tenant: tenantId });
+            if (useTransaction && session) locQuery.session(session);
+            const loc = await locQuery;
             if (loc) {
                 grn.receivingLocation = receivingLocation;
             }
@@ -606,48 +641,132 @@ const updateGRN = async (req, res) => {
             grn.notes = notes;
         }
 
+        // Validate against linked PO items if PO exists
+        let poDoc = null;
+        if (grn.purchaseOrder) {
+            const poQuery = PurchaseOrder.findOne({ _id: grn.purchaseOrder, tenant: tenantId });
+            if (useTransaction && session) poQuery.session(session);
+            poDoc = await poQuery;
+
+            if (poDoc) {
+                for (const ci of cleanedItems) {
+                    const poItem = poDoc.items.find(i => String(i.rawMaterial?._id || i.rawMaterial) === String(ci.rawMaterial));
+                    if (!poItem) {
+                        if (useTransaction && session) {
+                            if (session.inTransaction()) await session.abortTransaction();
+                            session.endSession();
+                        }
+                        return res.status(400).json({
+                            success: false,
+                            message: `Raw Material '${ci.rawMaterial}' is not part of Purchase Order ${poDoc.poNumber}.`
+                        });
+                    }
+                }
+            }
+        }
+
+        // Atomically adjust direct GRN stock transactions if any were posted directly for this GRN
+        const StockTransaction = require('../models/stockTransaction.model');
+        const directGrnTxnsQuery = StockTransaction.find({
+            tenant: tenantId,
+            referenceNumber: grn.grnNumber,
+            itemType: 'RAW_MATERIAL'
+        }).select('item transactionType quantity');
+        if (useTransaction && session) directGrnTxnsQuery.session(session);
+        const directGrnTxns = await directGrnTxnsQuery;
+
+        if (directGrnTxns.length > 0) {
+            const newItemsMap = new Map();
+            cleanedItems.forEach((ci) => {
+                const rmIdStr = String(ci.rawMaterial);
+                newItemsMap.set(rmIdStr, (newItemsMap.get(rmIdStr) || 0) + Number(ci.receivedQuantity || 0));
+            });
+
+            const allRmIds = new Set([...previousItemsMap.keys(), ...newItemsMap.keys()]);
+            for (const rmIdStr of allRmIds) {
+                const oldQty = Number(previousItemsMap.get(rmIdStr) || 0);
+                const newQty = Number(newItemsMap.get(rmIdStr) || 0);
+                const delta = Number((newQty - oldQty).toFixed(3));
+                if (Math.abs(delta) > 0.0001) {
+                    await executeStockTransactionCore({
+                        tenantId,
+                        referenceNumber: grn.grnNumber,
+                        itemType: 'RAW_MATERIAL',
+                        item: rmIdStr,
+                        transactionType: delta > 0 ? 'STOCK_IN' : 'STOCK_OUT',
+                        quantity: Math.abs(delta),
+                        toLocation: delta > 0 ? targetLocationId : undefined,
+                        fromLocation: delta < 0 ? targetLocationId : undefined,
+                        notes: `GRN ${grn.grnNumber} edited (${delta > 0 ? '+' : ''}${delta.toFixed(3)})`,
+                        performedBy: req.user._id || req.user.id
+                    }, sessionOption);
+                }
+            }
+        }
+
         grn.items = cleanedItems;
         if (cleanedRolls.length > 0) {
             grn.rolls = cleanedRolls;
         }
 
+        if (poDoc) {
+            let termDays = grn.paymentTermsDays;
+            let isDefaultTerms = grn.isDefaultPaymentTerms;
+            if (termDays === undefined || termDays === null) {
+                const suppQuery = Supplier.findById(poDoc.supplier).select('paymentTerms').lean();
+                if (useTransaction && session) suppQuery.session(session);
+                const supplierDoc = await suppQuery;
+                const termsInfo = resolveSupplierPaymentTerms(supplierDoc?.paymentTerms);
+                termDays = termsInfo.days;
+                isDefaultTerms = termsInfo.isDefault;
+            }
+            grn.paymentTermsDays = termDays;
+            grn.isDefaultPaymentTerms = Boolean(isDefaultTerms);
+            grn.dueDate = computeGrnDueDate(grn.receivedDate || grn.createdAt, termDays);
+            grn.payableAmount = computeGrnPayableAmount({ items: cleanedItems }, poDoc);
+        }
+
         grn.lastEditedBy = req.user._id || req.user.id;
         grn.lastEditedAt = new Date();
 
-        await grn.save();
+        await grn.save(sessionOption);
 
-        // Recalculate linked Purchase Order received quantities & status
-        if (grn.purchaseOrder) {
-            const poDoc = await PurchaseOrder.findOne({ _id: grn.purchaseOrder, tenant: tenantId });
-            if (poDoc) {
-                const allGrnsForPo = await GRN.find({ purchaseOrder: poDoc._id, tenant: tenantId });
+        // Recalculate linked Purchase Order received quantities from ALL GRNs for the PO (never from req.body)
+        if (poDoc) {
+            const allGrnsQuery = GRN.find({ purchaseOrder: poDoc._id, tenant: tenantId });
+            if (useTransaction && session) allGrnsQuery.session(session);
+            const allGrnsForPo = await allGrnsQuery;
 
-                poDoc.items.forEach((poItem) => {
-                    const rmIdStr = String(poItem.rawMaterial?._id || poItem.rawMaterial);
-                    let totalRecvForRm = 0;
-                    allGrnsForPo.forEach((g) => {
-                        (g.items || []).forEach((gi) => {
-                            if (String(gi.rawMaterial?._id || gi.rawMaterial) === rmIdStr) {
-                                totalRecvForRm += Number(gi.receivedQuantity || 0);
-                            }
-                        });
+            poDoc.items.forEach((poItem) => {
+                const rmIdStr = String(poItem.rawMaterial?._id || poItem.rawMaterial);
+                let totalRecvForRm = 0;
+                allGrnsForPo.forEach((g) => {
+                    (g.items || []).forEach((gi) => {
+                        if (String(gi.rawMaterial?._id || gi.rawMaterial) === rmIdStr) {
+                            totalRecvForRm += Number(gi.receivedQuantity || 0);
+                        }
                     });
-                    poItem.receivedQuantity = Number(totalRecvForRm.toFixed(3));
                 });
+                poItem.receivedQuantity = Number(totalRecvForRm.toFixed(3));
+            });
 
-                const allFullyReceived = poDoc.items.every(i => (i.receivedQuantity || 0) >= (i.orderedQuantity || 0));
-                const anyReceived = poDoc.items.some(i => (i.receivedQuantity || 0) > 0);
+            const allFullyReceived = poDoc.items.every(i => Number(i.receivedQuantity || 0) >= Number(i.orderedQuantity || 0) - 0.0001);
+            const anyReceived = poDoc.items.some(i => Number(i.receivedQuantity || 0) > 0);
 
-                if (allFullyReceived) {
-                    poDoc.status = 'FULLY_RECEIVED';
-                } else if (anyReceived) {
-                    poDoc.status = 'PARTIALLY_RECEIVED';
-                } else {
-                    poDoc.status = 'SENT_TO_SUPPLIER';
-                }
-
-                await poDoc.save();
+            if (allFullyReceived) {
+                poDoc.status = 'FULLY_RECEIVED';
+            } else if (anyReceived) {
+                poDoc.status = 'PARTIALLY_RECEIVED';
+            } else {
+                poDoc.status = 'SENT_TO_SUPPLIER';
             }
+
+            await poDoc.save(sessionOption);
+        }
+
+        if (useTransaction && session) {
+            await session.commitTransaction();
+            session.endSession();
         }
 
         const populatedGrn = await GRN.findById(grn._id)
@@ -664,6 +783,12 @@ const updateGRN = async (req, res) => {
             data: populatedGrn
         });
     } catch (error) {
+        if (useTransaction && session) {
+            if (session.inTransaction()) {
+                await session.abortTransaction();
+            }
+            session.endSession();
+        }
         console.error('Error in updateGRN:', error);
         return res.status(500).json({
             success: false,

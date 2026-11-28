@@ -994,7 +994,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div
-                    onClick={() => navigate('/procurement?tab=purchase-orders&filter=outstanding')}
+                    onClick={() => navigate('/procurement?tab=supplier-outstanding&filter=outstanding')}
                     className="bg-card-bg border border-border hover:border-primary/60 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer p-3.5 rounded-xl shadow-2xs space-y-1"
                 >
                     <div className="flex items-center justify-between">

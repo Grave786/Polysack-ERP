@@ -97,6 +97,24 @@ const GrnSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
+    paymentTermsDays: {
+        type: Number,
+        default: null,
+        min: 0
+    },
+    isDefaultPaymentTerms: {
+        type: Boolean,
+        default: false
+    },
+    dueDate: {
+        type: Date,
+        default: null
+    },
+    payableAmount: {
+        type: Number,
+        default: null,
+        min: 0
+    },
     items: {
         type: [GrnItemSchema],
         validate: {

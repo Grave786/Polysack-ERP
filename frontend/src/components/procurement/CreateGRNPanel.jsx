@@ -127,14 +127,18 @@ export default function CreateGRNPanel({ isOpen, onClose, po, editGrn = null, on
                                 ? (i.rawMaterial?.category?.name || i.rawMaterial?.category || i.rawMaterial?.materialCategory || '')
                                 : (i.category || i.materialCategory || '');
 
-                            const ordered = i.orderedQuantity || 0;
-                            const alreadyRecv = i.receivedQuantity || 0;
-                            const remaining = Math.max(0, ordered - alreadyRecv);
-
+                            const ordered = Number(i.orderedQuantity || 0);
+                            const poTotalRecv = Number(i.receivedQuantity || 0);
                             const existingGrnItem = editGrn?.items?.find(gi => String(gi.rawMaterial?._id || gi.rawMaterial) === String(rmId));
+                            const ownOriginalQty = editGrn ? Number(existingGrnItem?.receivedQuantity || 0) : 0;
+                            const alreadyRecv = editGrn
+                                ? Math.max(0, Number((poTotalRecv - ownOriginalQty).toFixed(3)))
+                                : Number(poTotalRecv.toFixed(3));
+                            const remaining = Math.max(0, Number((ordered - alreadyRecv).toFixed(3)));
+
                             const initialRecvVal = existingGrnItem
                                 ? Number(Number(existingGrnItem.receivedQuantity || 0).toFixed(3))
-                                : (editGrn ? Number(Number(alreadyRecv).toFixed(3)) : Number(Number(remaining).toFixed(3)));
+                                : (editGrn ? 0 : Number(remaining.toFixed(3)));
 
                             return {
                                 _id: i._id || rmId || `item-${index}`,
@@ -448,10 +452,10 @@ export default function CreateGRNPanel({ isOpen, onClose, po, editGrn = null, on
                             const ordered = Number(item.orderedQuantity) || 0;
                             const alreadyRecv = Number(item.alreadyReceivedQuantity) || 0;
                             const enteredQty = Number(item.receivedQuantity !== undefined && item.receivedQuantity !== '' ? item.receivedQuantity : (item.receivedQty || 0));
-                            const totalRecv = alreadyRecv + enteredQty;
-                            const isOverReceived = totalRecv > ordered;
-                            const overQty = isOverReceived ? (totalRecv - ordered) : 0;
-                            const remainingQty = isOverReceived ? 0 : Math.max(0, ordered - totalRecv);
+                            const totalRecv = Number((alreadyRecv + enteredQty).toFixed(3));
+                            const isOverReceived = totalRecv > ordered + 0.0001;
+                            const overQty = isOverReceived ? Number((totalRecv - ordered).toFixed(3)) : 0;
+                            const remainingQty = isOverReceived ? 0 : Math.max(0, Number((ordered - totalRecv).toFixed(3)));
 
                             return (
                                 <div key={item._id || idx} className="bg-app-bg border border-border rounded-lg p-3 space-y-2">
@@ -462,7 +466,7 @@ export default function CreateGRNPanel({ isOpen, onClose, po, editGrn = null, on
                                         </div>
                                         <div className="text-right text-[10px]">
                                             <span className="text-text-muted block">
-                                                Ordered: <strong>{ordered.toFixed(3)} {item.unit || ''}</strong> | Recv: <strong>{alreadyRecv.toFixed(3)} {item.unit || ''}</strong>
+                                                Ordered: <strong>{ordered.toFixed(3)} {item.unit || ''}</strong> | {editGrn ? 'Recv (others):' : 'Recv:'} <strong>{alreadyRecv.toFixed(3)} {item.unit || ''}</strong>
                                             </span>
                                             {isOverReceived ? (
                                                 <span className="text-amber-600 font-bold block">
